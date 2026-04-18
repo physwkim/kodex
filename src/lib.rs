@@ -18,6 +18,7 @@ pub mod watch;
 pub mod hooks;
 pub mod install;
 pub mod knowledge;
+pub mod learn;
 pub mod transcribe;
 pub mod vault;
 pub mod workspace;

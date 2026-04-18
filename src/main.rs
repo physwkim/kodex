@@ -697,6 +697,56 @@ fn handle_jsonrpc(input: &str, graph: &graphify::graph::GraphifyGraph) -> String
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
+        "learn" => {
+            let knowledge_type = params.get("type").and_then(|v| v.as_str()).unwrap_or("pattern");
+            let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let related: Vec<String> = params.get("related_nodes")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let tags: Vec<String> = params.get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let kt = match knowledge_type {
+                "decision" => graphify::learn::KnowledgeType::Decision,
+                "convention" => graphify::learn::KnowledgeType::Convention,
+                "coupling" => graphify::learn::KnowledgeType::Coupling,
+                "preference" => graphify::learn::KnowledgeType::Preference,
+                "bug_pattern" => graphify::learn::KnowledgeType::BugPattern,
+                "domain" => graphify::learn::KnowledgeType::Domain,
+                _ => graphify::learn::KnowledgeType::Pattern,
+            };
+            let vault = std::path::Path::new("graphify-out");
+            let graph_path = std::path::Path::new("graphify-out/graph.json");
+            match graphify::learn::learn(vault, Some(graph_path), kt, title, description, &related, &tags) {
+                Ok(_) => serde_json::json!({"status": "learned", "title": title}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "recall" => {
+            let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let type_filter = params.get("type").and_then(|v| v.as_str());
+            let vault = std::path::Path::new("graphify-out");
+            let results = graphify::learn::query_knowledge(vault, query, type_filter);
+            let items: Vec<serde_json::Value> = results.iter().map(|k| {
+                serde_json::json!({
+                    "title": k.title,
+                    "type": k.knowledge_type.to_string(),
+                    "description": k.description.lines().next().unwrap_or(""),
+                    "confidence": (k.confidence * 100.0) as u32,
+                    "observations": k.observations,
+                    "related_nodes": k.related_nodes,
+                })
+            }).collect();
+            serde_json::json!(items)
+        }
+        "knowledge_context" => {
+            let vault = std::path::Path::new("graphify-out");
+            let max = params.get("max_items").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            serde_json::json!(graphify::learn::knowledge_context(vault, max))
+        }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 
