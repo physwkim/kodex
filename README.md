@@ -54,6 +54,8 @@ Output is saved to `my-project/graphify-out/`:
 | `graphify install [platform]` | Install skill to AI editor |
 | `graphify benchmark` | Measure token reduction ratio |
 | `graphify hook [install\|uninstall\|status]` | Manage git hooks |
+| `graphify workspace init` | Create workspace config for multi-project setup |
+| `graphify workspace run` | Build + merge all projects in workspace |
 
 ## Supported Languages
 
@@ -110,27 +112,45 @@ graphify run ./my-project
 # Open graphify-out/ as an Obsidian vault
 ```
 
-### Multi-Project Setup
+### Multi-Project Workspace
 
-Export multiple projects into one Obsidian vault for cross-project navigation:
-
-```bash
-# Build graphs per project
-graphify run ~/codes/project-a
-graphify run ~/codes/project-b
-graphify run ~/codes/project-c
-```
-
-Then symlink or copy each project's vault into a shared Obsidian vault:
+Use the workspace feature to automatically build, merge, and export multiple projects into a unified graph and Obsidian vault:
 
 ```bash
-mkdir -p ~/vault
-ln -s ~/codes/project-a/graphify-out ~/vault/project-a
-ln -s ~/codes/project-b/graphify-out ~/vault/project-b
-ln -s ~/codes/project-c/graphify-out ~/vault/project-c
+cd ~/codes
+
+# Auto-detect git projects and create config
+graphify workspace init
+
+# Edit the generated config
+cat graphify-workspace.yaml
 ```
 
-Open `~/vault` as an Obsidian vault. Nodes across projects are connected automatically via `[[wikilinks]]` when they share names.
+```yaml
+# graphify-workspace.yaml
+projects:
+  - ./frontend
+  - ./backend
+  - ./shared-lib
+
+output: ./graphify-workspace
+vault: ~/obsidian-vault/dev-knowledge
+```
+
+```bash
+# Build all projects, merge into unified graph + vault
+graphify workspace run
+
+# Override vault path from CLI
+graphify workspace run --vault ~/my-vault
+```
+
+This produces:
+- `graphify-workspace/graph.json` — unified graph across all projects
+- `graphify-workspace/graph.html` — unified visualization
+- `~/obsidian-vault/dev-knowledge/` — unified Obsidian vault
+
+Cross-project connections are automatically detected: if `frontend` and `backend` both define a `Logger` class, they get linked with `shared_across_projects` edges.
 
 ### AI Editor + Obsidian Workflow
 

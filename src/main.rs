@@ -116,6 +116,15 @@ enum Commands {
         platform: String,
     },
 
+    /// Manage multi-project workspace
+    Workspace {
+        /// Action: init, run, or watch
+        action: String,
+        /// Override vault output path
+        #[arg(long)]
+        vault: Option<PathBuf>,
+    },
+
     /// Start MCP stdio server for graph queries
     Serve {
         /// Path to graph.json
@@ -160,6 +169,9 @@ fn main() {
                 _ => graphify::hooks::status(&path),
             };
             println!("{result}");
+        }
+        Some(Commands::Workspace { action, vault }) => {
+            cmd_workspace(&action, vault.as_deref());
         }
         Some(Commands::Install { platform }) => {
             let home = dirs_or_cwd();
@@ -651,4 +663,39 @@ fn handle_jsonrpc(input: &str, graph: &graphify::graph::GraphifyGraph) -> String
         serde_json::to_string(&result).unwrap_or_default(),
         serde_json::to_string(&id).unwrap_or_default(),
     )
+}
+
+fn cmd_workspace(action: &str, vault_override: Option<&std::path::Path>) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    match action {
+        "init" => {
+            match graphify::workspace::init(&cwd) {
+                Ok(path) => println!("Created {}", path.display()),
+                Err(e) => eprintln!("Error: {e}"),
+            }
+        }
+        "run" => {
+            let config_path = match graphify::workspace::find_config(&cwd) {
+                Some(p) => p,
+                None => {
+                    eprintln!("No graphify-workspace.yaml found. Run `graphify workspace init` first.");
+                    return;
+                }
+            };
+            let config = match graphify::workspace::load_config(&config_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Config error: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = graphify::workspace::run(&config, vault_override) {
+                eprintln!("Workspace error: {e}");
+            }
+        }
+        _ => {
+            println!("Usage: graphify workspace <init|run> [--vault <path>]");
+        }
+    }
 }
