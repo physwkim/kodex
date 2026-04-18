@@ -4,58 +4,58 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-interface GraphifySettings {
-    graphifyPath: string;
+interface EngramSettings {
+    engramPath: string;
     graphJsonPath: string;
 }
 
-const DEFAULT_SETTINGS: GraphifySettings = {
-    graphifyPath: 'graphify',
+const DEFAULT_SETTINGS: EngramSettings = {
+    engramPath: 'engram',
     graphJsonPath: 'graph.json',
 };
 
-export default class GraphifyPlugin extends Plugin {
-    settings: GraphifySettings;
+export default class EngramPlugin extends Plugin {
+    settings: EngramSettings;
 
     async onload() {
         await this.loadSettings();
 
         // Command: Query graph
         this.addCommand({
-            id: 'graphify-query',
+            id: 'engram-query',
             name: 'Query knowledge graph',
             callback: () => new QueryModal(this.app, this).open(),
         });
 
         // Command: Find path
         this.addCommand({
-            id: 'graphify-path',
+            id: 'engram-path',
             name: 'Find path between nodes',
             callback: () => new PathModal(this.app, this).open(),
         });
 
         // Command: Explain node
         this.addCommand({
-            id: 'graphify-explain',
+            id: 'engram-explain',
             name: 'Explain current note',
             callback: () => this.explainCurrentNote(),
         });
 
         // Command: God nodes
         this.addCommand({
-            id: 'graphify-god-nodes',
+            id: 'engram-god-nodes',
             name: 'Show god nodes (most connected)',
             callback: () => this.showGodNodes(),
         });
 
         // Command: Rebuild graph
         this.addCommand({
-            id: 'graphify-rebuild',
+            id: 'engram-rebuild',
             name: 'Rebuild knowledge graph',
             callback: () => this.rebuild(),
         });
 
-        this.addSettingTab(new GraphifySettingTab(this.app, this));
+        this.addSettingTab(new EngramSettingTab(this.app, this));
     }
 
     async loadSettings() {
@@ -66,17 +66,17 @@ export default class GraphifyPlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    async runGraphify(args: string): Promise<string> {
-        const cmd = `${this.settings.graphifyPath} ${args}`;
+    async runEngram(args: string): Promise<string> {
+        const cmd = `${this.settings.engramPath} ${args}`;
         try {
             const { stdout, stderr } = await execAsync(cmd, {
                 cwd: this.getVaultPath(),
                 timeout: 30000,
             });
-            if (stderr) console.warn('graphify stderr:', stderr);
+            if (stderr) console.warn('engram stderr:', stderr);
             return stdout.trim();
         } catch (e: any) {
-            new Notice(`graphify error: ${e.message}`);
+            new Notice(`engram error: ${e.message}`);
             throw e;
         }
     }
@@ -97,7 +97,7 @@ export default class GraphifyPlugin extends Plugin {
         }
         const name = file.basename;
         try {
-            const result = await this.runGraphify(
+            const result = await this.runEngram(
                 `explain "${name}" --graph "${this.getGraphPath()}"`
             );
             new ResultModal(this.app, `Explain: ${name}`, result).open();
@@ -108,7 +108,7 @@ export default class GraphifyPlugin extends Plugin {
 
     async showGodNodes() {
         try {
-            const result = await this.runGraphify(
+            const result = await this.runEngram(
                 `query "god nodes" --graph "${this.getGraphPath()}"`
             );
             new ResultModal(this.app, 'God Nodes', result).open();
@@ -120,7 +120,7 @@ export default class GraphifyPlugin extends Plugin {
     async rebuild() {
         new Notice('Rebuilding graph...');
         try {
-            await this.runGraphify(`update "${this.getVaultPath()}"`);
+            await this.runEngram(`update "${this.getVaultPath()}"`);
             new Notice('Graph rebuilt successfully');
         } catch {
             // Error already shown
@@ -130,9 +130,9 @@ export default class GraphifyPlugin extends Plugin {
 
 // --- Query Modal ---
 class QueryModal extends Modal {
-    plugin: GraphifyPlugin;
+    plugin: EngramPlugin;
 
-    constructor(app: App, plugin: GraphifyPlugin) {
+    constructor(app: App, plugin: EngramPlugin) {
         super(app);
         this.plugin = plugin;
     }
@@ -162,7 +162,7 @@ class QueryModal extends Modal {
                 if (!question) return;
                 resultDiv.setText('Searching...');
                 try {
-                    const result = await this.plugin.runGraphify(
+                    const result = await this.plugin.runEngram(
                         `query "${question}" --graph "${this.plugin.getGraphPath()}"`
                     );
                     resultDiv.setText(result || 'No results found');
@@ -182,9 +182,9 @@ class QueryModal extends Modal {
 
 // --- Path Modal ---
 class PathModal extends Modal {
-    plugin: GraphifyPlugin;
+    plugin: EngramPlugin;
 
-    constructor(app: App, plugin: GraphifyPlugin) {
+    constructor(app: App, plugin: EngramPlugin) {
         super(app);
         this.plugin = plugin;
     }
@@ -221,7 +221,7 @@ class PathModal extends Modal {
                 if (!src || !tgt) return;
                 resultDiv.setText('Searching...');
                 try {
-                    const result = await this.plugin.runGraphify(
+                    const result = await this.plugin.runEngram(
                         `path "${src}" "${tgt}" --graph "${this.plugin.getGraphPath()}"`
                     );
                     resultDiv.setText(result || 'No path found');
@@ -267,10 +267,10 @@ class ResultModal extends Modal {
 }
 
 // --- Settings ---
-class GraphifySettingTab extends PluginSettingTab {
-    plugin: GraphifyPlugin;
+class EngramSettingTab extends PluginSettingTab {
+    plugin: EngramPlugin;
 
-    constructor(app: App, plugin: GraphifyPlugin) {
+    constructor(app: App, plugin: EngramPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
@@ -278,17 +278,17 @@ class GraphifySettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        containerEl.createEl('h2', { text: 'Graphify Settings' });
+        containerEl.createEl('h2', { text: 'Engram Settings' });
 
         new Setting(containerEl)
-            .setName('graphify binary path')
-            .setDesc('Path to the graphify executable')
+            .setName('engram binary path')
+            .setDesc('Path to the engram executable')
             .addText((text) =>
                 text
-                    .setPlaceholder('graphify')
-                    .setValue(this.plugin.settings.graphifyPath)
+                    .setPlaceholder('engram')
+                    .setValue(this.plugin.settings.engramPath)
                     .onChange(async (value) => {
-                        this.plugin.settings.graphifyPath = value;
+                        this.plugin.settings.engramPath = value;
                         await this.plugin.saveSettings();
                     })
             );

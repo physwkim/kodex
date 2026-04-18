@@ -48,9 +48,9 @@ pub fn watch(
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Ok(event)) => {
                 for path in &event.paths {
-                    // Skip graphify-out changes to avoid rebuild loops
+                    // Skip engram-out changes to avoid rebuild loops
                     let path_str = path.to_string_lossy();
-                    if path_str.contains("graphify-out") {
+                    if path_str.contains("engram-out") {
                         continue;
                     }
 
@@ -128,7 +128,7 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
             })
             .collect();
 
-        let out_dir = watch_path.join("graphify-out");
+        let out_dir = watch_path.join("engram-out");
         let _ = std::fs::create_dir_all(&out_dir);
         let _ = crate::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
         let _ = crate::export::to_html(
@@ -175,7 +175,7 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
 fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
     println!("Vault changed, syncing back to graph...");
 
-    let graph_path = watch_path.join("graphify-out/graph.json");
+    let graph_path = watch_path.join("engram-out/graph.json");
     let graph = match crate::serve::load_graph(&graph_path) {
         Ok(g) => g,
         Err(e) => {

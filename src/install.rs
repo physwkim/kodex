@@ -2,39 +2,39 @@ use std::path::Path;
 
 /// Supported platforms for skill installation.
 const PLATFORMS: &[(&str, &str)] = &[
-    ("claude", ".claude/commands/graphify.md"),
-    ("cursor", ".cursor/rules/graphify.md"),
+    ("claude", ".claude/commands/engram.md"),
+    ("cursor", ".cursor/rules/engram.md"),
     ("vscode", ".github/copilot-instructions.md"),
-    ("codex", ".codex/skills/graphify.md"),
-    ("opencode", ".config/opencode/skills/graphify.md"),
-    ("aider", ".aider/skills/graphify.md"),
-    ("kiro", ".kiro/steering/graphify.md"),
+    ("codex", ".codex/skills/engram.md"),
+    ("opencode", ".config/opencode/skills/engram.md"),
+    ("aider", ".aider/skills/engram.md"),
+    ("kiro", ".kiro/steering/engram.md"),
 ];
 
 /// Default skill content embedded at compile time.
-const SKILL_CONTENT: &str = r#"# graphify
+const SKILL_CONTENT: &str = r#"# engram
 
 Knowledge graph builder for code and documents.
 
 ## Usage
 
-- `graphify .` — Build knowledge graph for current directory
-- `graphify query "how does auth work"` — Search graph
-- `graphify path "Client" "Database"` — Find shortest connection
-- `graphify explain "ClassName"` — Show node details and neighbors
-- `graphify update .` — Re-extract code (AST only, no LLM)
-- `graphify watch .` — Auto-rebuild on file changes
-- `graphify benchmark` — Measure token reduction
+- `engram .` — Build knowledge graph for current directory
+- `engram query "how does auth work"` — Search graph
+- `engram path "Client" "Database"` — Find shortest connection
+- `engram explain "ClassName"` — Show node details and neighbors
+- `engram update .` — Re-extract code (AST only, no LLM)
+- `engram watch .` — Auto-rebuild on file changes
+- `engram benchmark` — Measure token reduction
 
 ## Output
 
-Results are saved to `graphify-out/`:
+Results are saved to `engram-out/`:
 - `graph.json` — Queryable knowledge graph
 - `graph.html` — Interactive visualization (vis.js)
 - `GRAPH_REPORT.md` — Analysis report
 "#;
 
-/// Install graphify skill to a platform's configuration directory.
+/// Install engram skill to a platform's configuration directory.
 pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
 
@@ -60,7 +60,7 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     // Don't overwrite if already exists
     if skill_path.exists() {
         let existing = std::fs::read_to_string(&skill_path).unwrap_or_default();
-        if existing.contains("graphify") {
+        if existing.contains("engram") {
             return format!("Already installed at {}", skill_path.display());
         }
         // Append to existing file
@@ -79,7 +79,7 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     }
 }
 
-/// Uninstall graphify skill from a platform.
+/// Uninstall engram skill from a platform.
 pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
 

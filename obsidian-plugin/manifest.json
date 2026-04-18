@@ -1,9 +1,9 @@
 {
-    "id": "graphify",
-    "name": "Graphify",
+    "id": "engram",
+    "name": "Engram",
     "version": "0.1.0",
     "minAppVersion": "1.0.0",
-    "description": "Query and explore graphify knowledge graphs inside Obsidian",
-    "author": "graphify",
+    "description": "Query and explore engram knowledge graphs inside Obsidian",
+    "author": "engram",
     "isDesktopOnly": true
 }

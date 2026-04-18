@@ -1,12 +1,12 @@
 [package]
-name = "graphify"
+name = "engram"
 version = "0.1.0"
 edition = "2021"
-description = "A knowledge graph builder for code and documents"
+description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
 
 [[bin]]
-name = "graphify"
+name = "engram"
 path = "src/main.rs"
 
 [dependencies]

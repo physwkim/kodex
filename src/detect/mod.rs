@@ -24,7 +24,7 @@ const NOISE_DIRS: &[&str] = &[
     "node_modules", "__pycache__", ".git", ".hg", ".svn",
     "target", "dist", "build", ".tox", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", "venv", ".venv",
-    "graphify-out", ".graphify-out",
+    "engram-out", ".engram-out",
 ];
 
 /// Find all extractable files in `root` directory.
@@ -60,7 +60,7 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
         let path = entry.path();
         let path_str = path.to_string_lossy().to_string();
 
-        // Check .graphifyignore patterns
+        // Check .engramignore patterns
         if let Ok(rel) = path.strip_prefix(root) {
             let rel_str = rel.to_string_lossy();
             if ignore_patterns.iter().any(|pat| {
@@ -124,7 +124,7 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
         ))
     } else if total_files > FILE_COUNT_UPPER {
         Some(format!(
-            "Large file count: {total_files} files. Consider using .graphifyignore."
+            "Large file count: {total_files} files. Consider using .engramignore."
         ))
     } else {
         None

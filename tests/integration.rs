@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 /// Helper: run the full pipeline on a directory and return node/edge counts.
 fn run_pipeline(dir: &std::path::Path) -> (usize, usize) {
-    let detection = graphify::detect::detect(dir, false);
+    let detection = engram::detect::detect(dir, false);
     let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
 
     #[cfg(feature = "extract")]
     {
-        let extraction = graphify::extract::extract(&code_paths, Some(dir));
-        let graph = graphify::graph::build_from_extraction(&extraction);
+        let extraction = engram::extract::extract(&code_paths, Some(dir));
+        let graph = engram::graph::build_from_extraction(&extraction);
         (graph.node_count(), graph.edge_count())
     }
     #[cfg(not(feature = "extract"))]
@@ -20,7 +20,7 @@ fn run_pipeline(dir: &std::path::Path) -> (usize, usize) {
 #[test]
 fn test_detect_fixtures() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let result = graphify::detect::detect(&dir, false);
+    let result = engram::detect::detect(&dir, false);
     assert!(result.files.code.len() >= 3, "Should find at least 3 code files, found {}", result.files.code.len());
     assert!(result.total_files >= 3);
 }
@@ -29,9 +29,9 @@ fn test_detect_fixtures() {
 #[cfg(feature = "lang-python")]
 fn test_extract_python() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.py");
-    let result = graphify::extract::generic::extract_generic(
+    let result = engram::extract::generic::extract_generic(
         &path,
-        &graphify::extract::languages::python::PYTHON_CONFIG,
+        &engram::extract::languages::python::PYTHON_CONFIG,
     );
 
     assert!(result.error.is_none(), "Extract error: {:?}", result.error);
@@ -64,9 +64,9 @@ fn test_extract_python() {
 #[cfg(feature = "lang-javascript")]
 fn test_extract_javascript() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.js");
-    let result = graphify::extract::generic::extract_generic(
+    let result = engram::extract::generic::extract_generic(
         &path,
-        &graphify::extract::languages::javascript::JS_CONFIG,
+        &engram::extract::languages::javascript::JS_CONFIG,
     );
 
     assert!(result.error.is_none(), "Extract error: {:?}", result.error);
@@ -88,9 +88,9 @@ fn test_extract_javascript() {
 #[cfg(feature = "lang-go")]
 fn test_extract_go() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.go");
-    let result = graphify::extract::generic::extract_generic(
+    let result = engram::extract::generic::extract_generic(
         &path,
-        &graphify::extract::languages::go::GO_CONFIG,
+        &engram::extract::languages::go::GO_CONFIG,
     );
 
     assert!(result.error.is_none(), "Extract error: {:?}", result.error);
@@ -121,31 +121,31 @@ fn test_graph_export_round_trip() {
     let json_path = dir.path().join("graph.json");
 
     // Build a test graph
-    let extraction = graphify::types::ExtractionResult {
+    let extraction = engram::types::ExtractionResult {
         nodes: vec![
-            graphify::types::Node {
+            engram::types::Node {
                 id: "a".to_string(), label: "Alpha".to_string(),
-                file_type: graphify::types::FileType::Code,
+                file_type: engram::types::FileType::Code,
                 source_file: "a.py".to_string(),
                 source_location: Some("L1".to_string()),
-                confidence: Some(graphify::types::Confidence::EXTRACTED),
+                confidence: Some(engram::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
                 community: None, norm_label: None, degree: None,
             },
-            graphify::types::Node {
+            engram::types::Node {
                 id: "b".to_string(), label: "Beta".to_string(),
-                file_type: graphify::types::FileType::Code,
+                file_type: engram::types::FileType::Code,
                 source_file: "b.py".to_string(),
                 source_location: Some("L1".to_string()),
-                confidence: Some(graphify::types::Confidence::EXTRACTED),
+                confidence: Some(engram::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
                 community: None, norm_label: None, degree: None,
             },
         ],
-        edges: vec![graphify::types::Edge {
+        edges: vec![engram::types::Edge {
             source: "a".to_string(), target: "b".to_string(),
             relation: "imports".to_string(),
-            confidence: graphify::types::Confidence::EXTRACTED,
+            confidence: engram::types::Confidence::EXTRACTED,
             source_file: "a.py".to_string(),
             source_location: Some("L2".to_string()),
             confidence_score: Some(1.0), weight: 1.0,
@@ -154,35 +154,35 @@ fn test_graph_export_round_trip() {
         ..Default::default()
     };
 
-    let graph = graphify::graph::build_from_extraction(&extraction);
-    let communities = graphify::cluster::cluster(&graph);
+    let graph = engram::graph::build_from_extraction(&extraction);
+    let communities = engram::cluster::cluster(&graph);
 
     // Export JSON
-    graphify::export::to_json(&graph, &communities, &json_path).unwrap();
+    engram::export::to_json(&graph, &communities, &json_path).unwrap();
     assert!(json_path.exists());
 
     // Load back
-    let loaded = graphify::serve::load_graph(&json_path).unwrap();
+    let loaded = engram::serve::load_graph(&json_path).unwrap();
     assert_eq!(loaded.node_count(), 2);
     assert_eq!(loaded.edge_count(), 1);
 
     // Export HTML
     let html_path = dir.path().join("graph.html");
-    graphify::export::to_html(&graph, &communities, &html_path, None).unwrap();
+    engram::export::to_html(&graph, &communities, &html_path, None).unwrap();
     assert!(html_path.exists());
     let html = std::fs::read_to_string(&html_path).unwrap();
     assert!(html.contains("vis-network") || html.contains("vis.js"));
 
     // Export GraphML
     let graphml_path = dir.path().join("graph.graphml");
-    graphify::export::to_graphml(&graph, &communities, &graphml_path).unwrap();
+    engram::export::to_graphml(&graph, &communities, &graphml_path).unwrap();
     assert!(graphml_path.exists());
     let graphml = std::fs::read_to_string(&graphml_path).unwrap();
     assert!(graphml.contains("<graphml"));
 
     // Export Cypher
     let cypher_path = dir.path().join("import.cypher");
-    graphify::export::to_cypher(&graph, &cypher_path).unwrap();
+    engram::export::to_cypher(&graph, &cypher_path).unwrap();
     assert!(cypher_path.exists());
     let cypher = std::fs::read_to_string(&cypher_path).unwrap();
     assert!(cypher.contains("MERGE"));
@@ -190,13 +190,13 @@ fn test_graph_export_round_trip() {
 
 #[test]
 fn test_cluster_and_analyze() {
-    let extraction = graphify::types::ExtractionResult {
-        nodes: (0..10).map(|i| graphify::types::Node {
+    let extraction = engram::types::ExtractionResult {
+        nodes: (0..10).map(|i| engram::types::Node {
             id: format!("n{i}"), label: format!("Node{i}"),
-            file_type: graphify::types::FileType::Code,
+            file_type: engram::types::FileType::Code,
             source_file: format!("file{}.py", i % 3),
             source_location: Some(format!("L{}", i + 1)),
-            confidence: Some(graphify::types::Confidence::EXTRACTED),
+            confidence: Some(engram::types::Confidence::EXTRACTED),
             confidence_score: Some(1.0),
             community: None, norm_label: None, degree: None,
         }).collect(),
@@ -205,10 +205,10 @@ fn test_cluster_and_analyze() {
             ("n3", "n4"), ("n4", "n5"), ("n3", "n5"),  // cluster 2
             ("n6", "n7"), ("n7", "n8"), ("n8", "n9"),  // cluster 3
             ("n2", "n3"),  // bridge
-        ].iter().map(|(s, t)| graphify::types::Edge {
+        ].iter().map(|(s, t)| engram::types::Edge {
             source: s.to_string(), target: t.to_string(),
             relation: "calls".to_string(),
-            confidence: graphify::types::Confidence::EXTRACTED,
+            confidence: engram::types::Confidence::EXTRACTED,
             source_file: "test.py".to_string(),
             source_location: None, confidence_score: Some(1.0),
             weight: 1.0, original_src: None, original_tgt: None,
@@ -216,31 +216,31 @@ fn test_cluster_and_analyze() {
         ..Default::default()
     };
 
-    let graph = graphify::graph::build_from_extraction(&extraction);
-    let communities = graphify::cluster::cluster(&graph);
+    let graph = engram::graph::build_from_extraction(&extraction);
+    let communities = engram::cluster::cluster(&graph);
 
     // Should detect at least 2 communities
     assert!(communities.len() >= 2, "Should detect at least 2 communities, got {}", communities.len());
 
     // God nodes
-    let gods = graphify::analyze::god_nodes(&graph, 5);
+    let gods = engram::analyze::god_nodes(&graph, 5);
     assert!(!gods.is_empty(), "Should find god nodes");
 
     // Surprising connections
-    let surprises = graphify::analyze::surprising_connections(&graph, Some(&communities), 5);
+    let surprises = engram::analyze::surprising_connections(&graph, Some(&communities), 5);
     // Bridge edge n2→n3 should be surprising (cross-community)
 
     // Questions
-    let questions = graphify::analyze::suggest_questions(&graph, Some(&communities), 5);
+    let questions = engram::analyze::suggest_questions(&graph, Some(&communities), 5);
 
     // Report
-    let cohesion = graphify::cluster::score_all(&graph, &communities);
+    let cohesion = engram::cluster::score_all(&graph, &communities);
     let labels: std::collections::HashMap<usize, String> = communities.keys()
         .map(|&c| (c, format!("Community {c}"))).collect();
-    let report = graphify::report::generate(
+    let report = engram::report::generate(
         &graph, &communities, &cohesion, &labels,
         &gods, &surprises,
-        &graphify::types::DetectionResult::default(),
+        &engram::types::DetectionResult::default(),
         0, 0, "test", Some(&questions),
     );
     assert!(report.contains("# Graph Report"));

@@ -1,4 +1,4 @@
-# rust-graphify
+# engram
 
 Rust port of [graphify](https://github.com/safishamsi/graphify) — a knowledge graph builder for code and documents.
 
@@ -15,13 +15,13 @@ cargo build --release --features "lang-python,lang-go"  # specific languages
 ## Quick Start
 
 ```bash
-graphify run ./my-project
-graphify query "how does authentication work"
-graphify path "Client" "Database"
-graphify explain "AuthService"
+engram run ./my-project
+engram query "how does authentication work"
+engram path "Client" "Database"
+engram explain "AuthService"
 ```
 
-Output in `my-project/graphify-out/`:
+Output in `my-project/engram-out/`:
 - `graph.json` — queryable knowledge graph
 - `graph.html` — interactive visualization (vis.js)
 - `GRAPH_REPORT.md` — analysis report
@@ -30,31 +30,31 @@ Output in `my-project/graphify-out/`:
 
 | Command | Description |
 |---------|-------------|
-| `graphify run <path>` | Full pipeline: detect → extract → build → cluster → analyze → export |
-| `graphify query "<question>"` | BFS/DFS search over the graph |
-| `graphify path "<source>" "<target>"` | Shortest path between two nodes |
-| `graphify explain "<node>"` | Show node details and neighbors |
-| `graphify update <path>` | Re-extract code only (AST, no LLM cost) |
-| `graphify cluster-only <path>` | Rerun clustering on existing graph |
-| `graphify watch <path> [--vault <path>]` | Auto-rebuild on code changes, optionally sync vault |
-| `graphify add <url>` | Fetch URL and add to corpus |
-| `graphify serve` | Start MCP stdio server |
-| `graphify install [platform]` | Install skill to AI editor |
-| `graphify benchmark` | Measure token reduction ratio |
-| `graphify hook [install\|uninstall\|status]` | Manage git hooks |
-| `graphify workspace init` | Create multi-project workspace config |
-| `graphify workspace run [--vault <path>]` | Build + merge all workspace projects |
+| `engram run <path>` | Full pipeline: detect → extract → build → cluster → analyze → export |
+| `engram query "<question>"` | BFS/DFS search over the graph |
+| `engram path "<source>" "<target>"` | Shortest path between two nodes |
+| `engram explain "<node>"` | Show node details and neighbors |
+| `engram update <path>` | Re-extract code only (AST, no LLM cost) |
+| `engram cluster-only <path>` | Rerun clustering on existing graph |
+| `engram watch <path> [--vault <path>]` | Auto-rebuild on code changes, optionally sync vault |
+| `engram add <url>` | Fetch URL and add to corpus |
+| `engram serve` | Start MCP stdio server |
+| `engram install [platform]` | Install skill to AI editor |
+| `engram benchmark` | Measure token reduction ratio |
+| `engram hook [install\|uninstall\|status]` | Manage git hooks |
+| `engram workspace init` | Create multi-project workspace config |
+| `engram workspace run [--vault <path>]` | Build + merge all workspace projects |
 
 ## AI Knowledge Accumulation
 
-graphify enables AI agents (Claude, Cursor, etc.) to **accumulate knowledge across sessions** using the Obsidian vault as persistent storage.
+engram enables AI agents (Claude, Cursor, etc.) to **accumulate knowledge across sessions** using the Obsidian vault as persistent storage.
 
 ### How It Works
 
 ```
 Session 1: Claude analyzes code
   → discovers "Repository pattern used for DB access"
-  → writes graphify-out/_KNOWLEDGE_Repository_Pattern.md (confidence: 60%)
+  → writes engram-out/_KNOWLEDGE_Repository_Pattern.md (confidence: 60%)
 
 Session 2: Claude reads _KNOWLEDGE_*.md files at session start
   → knows about Repository pattern from session 1
@@ -71,15 +71,15 @@ Session 10: pattern observed repeatedly
 Add this to your project's `CLAUDE.md` (or copy `CLAUDE.md.example`):
 
 ```markdown
-## Graphify Knowledge System
+## Engram Knowledge System
 
 ### Session start
-1. Read `graphify-out/_KNOWLEDGE_*.md` — accumulated knowledge from previous sessions
-2. Read `graphify-out/GRAPH_REPORT.md` — project structure overview
+1. Read `engram-out/_KNOWLEDGE_*.md` — accumulated knowledge from previous sessions
+2. Read `engram-out/GRAPH_REPORT.md` — project structure overview
 
 ### During work
 When you discover patterns, decisions, conventions, or domain concepts,
-save them immediately as `graphify-out/_KNOWLEDGE_<title>.md`.
+save them immediately as `engram-out/_KNOWLEDGE_<title>.md`.
 If the same knowledge file already exists, update observations and confidence.
 
 See KNOWLEDGE_SYSTEM.md for detailed rules.
@@ -140,7 +140,7 @@ Formula: `new_confidence = 1.0 - (1.0 - current) * 0.8`
 
 ### MCP Tools for Knowledge
 
-When using `graphify serve`, these tools are available:
+When using `engram serve`, these tools are available:
 
 | Tool | Description |
 |------|-------------|
@@ -153,10 +153,10 @@ When using `graphify serve`, these tools are available:
 
 ### Vault as Source of Truth
 
-Knowledge files live in `graphify-out/` as plain `.md` files:
+Knowledge files live in `engram-out/` as plain `.md` files:
 
 ```
-graphify-out/
+engram-out/
 ├── _KNOWLEDGE_Repository_Pattern.md    ← AI-accumulated knowledge
 ├── _KNOWLEDGE_JWT_Auth_Decision.md
 ├── _KNOWLEDGE_Error_Convention.md
@@ -176,7 +176,7 @@ graphify-out/
 
 ## Obsidian Integration
 
-graphify exports Obsidian-compatible markdown vaults with:
+engram exports Obsidian-compatible markdown vaults with:
 
 - YAML frontmatter (source_file, type, community, tags)
 - `[[wikilinks]]` between connected nodes
@@ -187,15 +187,15 @@ graphify exports Obsidian-compatible markdown vaults with:
 ### Single Project
 
 ```bash
-graphify run ./my-project
-# Open ./my-project/graphify-out/ as an Obsidian vault
+engram run ./my-project
+# Open ./my-project/engram-out/ as an Obsidian vault
 ```
 
 ### Live Sync
 
 ```bash
 # Code changes → auto-rebuild graph + vault
-graphify watch ./my-project --vault ./my-project/graphify-out
+engram watch ./my-project --vault ./my-project/engram-out
 
 # Edits in Obsidian (add/remove [[wikilinks]]) sync back to graph.json
 ```
@@ -204,23 +204,23 @@ graphify watch ./my-project --vault ./my-project/graphify-out
 
 ```bash
 cd ~/codes
-graphify workspace init        # auto-detect git projects, create config
+engram workspace init        # auto-detect git projects, create config
 ```
 
 ```yaml
-# graphify-workspace.yaml
+# engram-workspace.yaml
 projects:
   - ./frontend
   - ./backend
   - ./shared-lib
 
-output: ./graphify-workspace
+output: ./engram-workspace
 vault: ~/obsidian-vault/dev-knowledge
 ```
 
 ```bash
-graphify workspace run                     # build + merge all projects
-graphify workspace run --vault ~/my-vault  # override vault path
+engram workspace run                     # build + merge all projects
+engram workspace run --vault ~/my-vault  # override vault path
 ```
 
 Cross-project connections are automatically detected. Community detection runs on the merged graph, so clusters can span project boundaries.
@@ -228,11 +228,11 @@ Cross-project connections are automatically detected. Community detection runs o
 ### Workflow
 
 ```
-Code → graphify run → Obsidian Vault (browse, explore, edit)
+Code → engram run → Obsidian Vault (browse, explore, edit)
                   ↓
            graph.json (cache)
                   ↓
-     AI Editor → graphify serve (MCP) → query, explain, learn
+     AI Editor → engram serve (MCP) → query, explain, learn
                   ↓
          _KNOWLEDGE_*.md (accumulated knowledge)
                   ↓
@@ -242,7 +242,7 @@ Code → graphify run → Obsidian Vault (browse, explore, edit)
 ## MCP Server
 
 ```bash
-graphify serve --graph graphify-out/graph.json
+engram serve --graph engram-out/graph.json
 ```
 
 | Tool | Description |
@@ -261,11 +261,11 @@ graphify serve --graph graphify-out/graph.json
 ### AI Editor Setup
 
 ```bash
-graphify install claude    # Claude Code
-graphify install cursor    # Cursor
-graphify install vscode    # VS Code Copilot
-graphify install codex     # Codex
-graphify install kiro      # Kiro
+engram install claude    # Claude Code
+engram install cursor    # Cursor
+engram install vscode    # VS Code Copilot
+engram install codex     # Codex
+engram install kiro      # Kiro
 ```
 
 ## Supported Languages
@@ -322,7 +322,7 @@ curl -L -o ~/.cache/whisper/ggml-base.bin \
 
 ```
 CLI (main.rs, clap)
-  ├─ detect/      File discovery, classification, .graphifyignore
+  ├─ detect/      File discovery, classification, .engramignore
   ├─ extract/     AST extraction via tree-sitter (14 languages)
   ├─ graph/       petgraph wrapper, build, merge, diff
   ├─ cluster/     Louvain community detection

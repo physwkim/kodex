@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 /// Resolve a path and verify it stays inside the base directory.
 ///
-/// Base defaults to the `graphify-out` directory relative to CWD.
+/// Base defaults to the `engram-out` directory relative to CWD.
 /// Raises error if path escapes base, or base does not exist.
 pub fn validate_graph_path(
     path: &str,
@@ -11,13 +11,13 @@ pub fn validate_graph_path(
     let base = match base {
         Some(b) => b.to_path_buf(),
         None => {
-            // Try to find graphify-out in the resolved path's ancestors
+            // Try to find engram-out in the resolved path's ancestors
             let resolved = PathBuf::from(path)
                 .canonicalize()
                 .unwrap_or_else(|_| PathBuf::from(path));
             let mut found = None;
             for ancestor in resolved.ancestors() {
-                if ancestor.file_name().map(|n| n == "graphify-out").unwrap_or(false) {
+                if ancestor.file_name().map(|n| n == "engram-out").unwrap_or(false) {
                     found = Some(ancestor.to_path_buf());
                     break;
                 }
@@ -25,7 +25,7 @@ pub fn validate_graph_path(
             found.unwrap_or_else(|| {
                 std::env::current_dir()
                     .unwrap_or_else(|_| PathBuf::from("."))
-                    .join("graphify-out")
+                    .join("engram-out")
             })
         }
     };
@@ -47,7 +47,7 @@ pub fn validate_graph_path(
         .strip_prefix(&base)
         .map_err(|_| crate::error::GraphifyError::PathEscape(format!(
             "Path {path:?} escapes the allowed directory {}. \
-             Only paths inside graphify-out/ are permitted.",
+             Only paths inside engram-out/ are permitted.",
             base.display()
         )))?;
 
@@ -62,7 +62,7 @@ mod tests {
     #[test]
     fn test_valid_path() {
         let dir = TempDir::new().unwrap();
-        let base = dir.path().join("graphify-out");
+        let base = dir.path().join("engram-out");
         std::fs::create_dir_all(&base).unwrap();
         let file = base.join("graph.json");
         std::fs::write(&file, "{}").unwrap();
@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn test_path_escape() {
         let dir = TempDir::new().unwrap();
-        let base = dir.path().join("graphify-out");
+        let base = dir.path().join("engram-out");
         std::fs::create_dir_all(&base).unwrap();
 
         // Create a file outside base

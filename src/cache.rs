@@ -16,9 +16,9 @@ fn body_content(content: &[u8]) -> &[u8] {
     content
 }
 
-/// Return the `graphify-out/cache/` directory, creating it if necessary.
+/// Return the `engram-out/cache/` directory, creating it if necessary.
 pub fn cache_dir(root: &Path) -> PathBuf {
-    let dir = root.join("graphify-out").join("cache");
+    let dir = root.join("engram-out").join("cache");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

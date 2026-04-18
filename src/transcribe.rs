@@ -93,7 +93,7 @@ pub fn transcribe(
 ) -> crate::error::Result<PathBuf> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-    let out_dir = output_dir.unwrap_or_else(|| Path::new("graphify-out/transcripts"));
+    let out_dir = output_dir.unwrap_or_else(|| Path::new("engram-out/transcripts"));
     std::fs::create_dir_all(out_dir)?;
 
     let stem = audio_path
@@ -160,7 +160,7 @@ pub fn transcribe_all(
     output_dir: Option<&Path>,
     initial_prompt: Option<&str>,
 ) -> Vec<Result<PathBuf, String>> {
-    let out_dir = output_dir.unwrap_or_else(|| Path::new("graphify-out/transcripts"));
+    let out_dir = output_dir.unwrap_or_else(|| Path::new("engram-out/transcripts"));
 
     files
         .iter()

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{GraphifyError, Result};
 use crate::types::{Edge, ExtractionResult};
 
-const CONFIG_FILE: &str = "graphify-workspace.yaml";
+const CONFIG_FILE: &str = "engram-workspace.yaml";
 
 /// Workspace configuration.
 #[derive(Debug, Clone)]
@@ -61,7 +61,7 @@ pub fn load_config(path: &Path) -> Result<WorkspaceConfig> {
 
     Ok(WorkspaceConfig {
         projects,
-        output: output.unwrap_or_else(|| PathBuf::from("graphify-workspace")),
+        output: output.unwrap_or_else(|| PathBuf::from("engram-workspace")),
         vault,
     })
 }
@@ -101,13 +101,13 @@ pub fn init(dir: &Path) -> Result<PathBuf> {
     };
 
     let content = format!(
-        "# graphify workspace configuration\n\
+        "# engram workspace configuration\n\
          \n\
          projects:\n\
          {projects_yaml}\n\
          \n\
          # Where to write merged graph.json, graph.html, report\n\
-         output: ./graphify-workspace\n\
+         output: ./engram-workspace\n\
          \n\
          # Where to write the unified Obsidian vault (optional)\n\
          # vault: ~/obsidian-vault/dev-knowledge\n"
@@ -340,7 +340,7 @@ pub fn run(
     Ok(())
 }
 
-/// Collect _KNOWLEDGE_*.md from each project's graphify-out/ into the unified vault.
+/// Collect _KNOWLEDGE_*.md from each project's engram-out/ into the unified vault.
 /// Files are prefixed with project name to avoid collisions.
 fn collect_knowledge(projects: &[PathBuf], unified_vault: &Path) -> Result<usize> {
     let mut count = 0;
@@ -351,7 +351,7 @@ fn collect_knowledge(projects: &[PathBuf], unified_vault: &Path) -> Result<usize
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        let source_dir = project_path.join("graphify-out");
+        let source_dir = project_path.join("engram-out");
         if !source_dir.is_dir() {
             continue;
         }
@@ -473,7 +473,7 @@ fn distribute_knowledge(unified_vault: &Path, projects: &[PathBuf]) -> Result<us
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        let dest_dir = project_path.join("graphify-out");
+        let dest_dir = project_path.join("engram-out");
         if !dest_dir.is_dir() {
             let _ = std::fs::create_dir_all(&dest_dir);
         }

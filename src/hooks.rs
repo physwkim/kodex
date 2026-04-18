@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-const HOOK_MARKER: &str = "# >>> graphify >>>";
-const HOOK_MARKER_END: &str = "# <<< graphify <<<";
+const HOOK_MARKER: &str = "# >>> engram >>>";
+const HOOK_MARKER_END: &str = "# <<< engram <<<";
 
 const HOOK_SCRIPT: &str = r#"
 # Auto-rebuild graph for code-only changes (no LLM cost)
-if command -v graphify >/dev/null 2>&1; then
-    graphify update . &
+if command -v engram >/dev/null 2>&1; then
+    engram update . &
 fi
 "#;
 
@@ -43,7 +43,7 @@ fn hooks_dir(root: &Path) -> PathBuf {
     root.join(".git").join("hooks")
 }
 
-/// Install graphify post-commit and post-checkout hooks.
+/// Install engram post-commit and post-checkout hooks.
 pub fn install(path: &Path) -> String {
     let root = match git_root(path) {
         Some(r) => r,
@@ -62,7 +62,7 @@ pub fn install(path: &Path) -> String {
     results.join("\n")
 }
 
-/// Uninstall graphify hooks.
+/// Uninstall engram hooks.
 pub fn uninstall(path: &Path) -> String {
     let root = match git_root(path) {
         Some(r) => r,
@@ -79,7 +79,7 @@ pub fn uninstall(path: &Path) -> String {
     results.join("\n")
 }
 
-/// Check if graphify hooks are installed.
+/// Check if engram hooks are installed.
 pub fn status(path: &Path) -> String {
     let root = match git_root(path) {
         Some(r) => r,
