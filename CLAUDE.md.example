@@ -2,14 +2,13 @@
 
 ## Graphify Knowledge System
 
-이 프로젝트는 graphify 지식 그래프를 사용합니다. 반드시 아래 규칙을 따르세요.
+이 프로젝트는 graphify로 지식을 축적합니다. 너는 이 프로젝트의 장기 기억이다.
 
-### 세션 시작 시
-1. `graphify-out/_KNOWLEDGE_*.md` 파일들을 읽고 이전 세션의 학습 내용을 파악
-2. `graphify-out/GRAPH_REPORT.md`를 읽고 프로젝트 구조 파악
-3. 이전 지식을 현재 작업 컨텍스트에 반영
+### 세션 시작 시 반드시
+1. `graphify-out/_KNOWLEDGE_*.md` 파일들을 전부 읽어라 — 이전 세션의 축적된 지식
+2. `graphify-out/GRAPH_REPORT.md` 를 읽어라 — 프로젝트 구조 개요
 
 ### 작업 중
-코드 분석/수정하면서 패턴, 설계 결정, 컨벤션, 결합 관계, 버그 패턴, 도메인 개념을 발견하면 즉시 `graphify-out/_KNOWLEDGE_<제목>.md` 파일로 저장하세요. 같은 패턴을 다시 발견하면 기존 파일의 observations를 증가시키고 confidence를 올리세요.
+"다음 세션의 나에게 이걸 알려주면 도움이 될까?" → 그렇다면 `graphify-out/_KNOWLEDGE_<제목>.md` 에 저장하라. 저장 여부는 너가 판단한다. 같은 주제의 파일이 이미 있으면 새로 만들지 말고 기존 파일의 observations를 올리고 confidence를 갱신하라.
 
 상세 규칙: KNOWLEDGE_SYSTEM.md 참조

@@ -710,13 +710,22 @@ fn handle_jsonrpc(input: &str, graph: &graphify::graph::GraphifyGraph) -> String
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
             let kt = match knowledge_type {
+                "architecture" => graphify::learn::KnowledgeType::Architecture,
+                "pattern" => graphify::learn::KnowledgeType::Pattern,
                 "decision" => graphify::learn::KnowledgeType::Decision,
                 "convention" => graphify::learn::KnowledgeType::Convention,
                 "coupling" => graphify::learn::KnowledgeType::Coupling,
+                "domain" => graphify::learn::KnowledgeType::Domain,
                 "preference" => graphify::learn::KnowledgeType::Preference,
                 "bug_pattern" => graphify::learn::KnowledgeType::BugPattern,
-                "domain" => graphify::learn::KnowledgeType::Domain,
-                _ => graphify::learn::KnowledgeType::Pattern,
+                "tech_debt" => graphify::learn::KnowledgeType::TechDebt,
+                "ops" => graphify::learn::KnowledgeType::Ops,
+                "api" => graphify::learn::KnowledgeType::Api,
+                "performance" => graphify::learn::KnowledgeType::Performance,
+                "roadmap" => graphify::learn::KnowledgeType::Roadmap,
+                "context" => graphify::learn::KnowledgeType::Context,
+                "lesson" => graphify::learn::KnowledgeType::Lesson,
+                other => graphify::learn::KnowledgeType::Custom(other.to_string()),
             };
             let vault = std::path::Path::new("graphify-out");
             let graph_path = std::path::Path::new("graphify-out/graph.json");

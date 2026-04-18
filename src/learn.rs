@@ -11,32 +11,45 @@ use crate::id::make_id;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KnowledgeType {
-    /// Architectural pattern: "Repository pattern for data access"
+    Architecture,
     Pattern,
-    /// Design decision: "Chose JWT over sessions because of microservices"
     Decision,
-    /// Code convention: "All errors wrapped in AppError"
     Convention,
-    /// Coupling: "Module A always changes with Module B"
     Coupling,
-    /// User preference: "Prefers functional style, avoids deep inheritance"
-    Preference,
-    /// Bug pattern: "Off-by-one errors common in pagination code"
-    BugPattern,
-    /// Domain concept: "A 'trade' can be in states: pending, filled, cancelled"
     Domain,
+    Preference,
+    BugPattern,
+    TechDebt,
+    Ops,
+    Api,
+    Performance,
+    Roadmap,
+    Context,
+    Lesson,
+    /// Any type not in the enum — stored as-is
+    #[serde(untagged)]
+    Custom(String),
 }
 
 impl std::fmt::Display for KnowledgeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Architecture => write!(f, "architecture"),
             Self::Pattern => write!(f, "pattern"),
             Self::Decision => write!(f, "decision"),
             Self::Convention => write!(f, "convention"),
             Self::Coupling => write!(f, "coupling"),
+            Self::Domain => write!(f, "domain"),
             Self::Preference => write!(f, "preference"),
             Self::BugPattern => write!(f, "bug_pattern"),
-            Self::Domain => write!(f, "domain"),
+            Self::TechDebt => write!(f, "tech_debt"),
+            Self::Ops => write!(f, "ops"),
+            Self::Api => write!(f, "api"),
+            Self::Performance => write!(f, "performance"),
+            Self::Roadmap => write!(f, "roadmap"),
+            Self::Context => write!(f, "context"),
+            Self::Lesson => write!(f, "lesson"),
+            Self::Custom(s) => write!(f, "{s}"),
         }
     }
 }
@@ -283,14 +296,23 @@ fn write_knowledge_note(path: &Path, k: &Knowledge) -> crate::error::Result<()> 
 fn parse_knowledge_note(content: &str) -> Option<Knowledge> {
     let fm = parse_frontmatter(content);
     let knowledge_type = match fm.get("knowledge_type").map(|s| s.as_str()) {
+        Some("architecture") => KnowledgeType::Architecture,
         Some("pattern") => KnowledgeType::Pattern,
         Some("decision") => KnowledgeType::Decision,
         Some("convention") => KnowledgeType::Convention,
         Some("coupling") => KnowledgeType::Coupling,
+        Some("domain") => KnowledgeType::Domain,
         Some("preference") => KnowledgeType::Preference,
         Some("bug_pattern") => KnowledgeType::BugPattern,
-        Some("domain") => KnowledgeType::Domain,
-        _ => return None,
+        Some("tech_debt") => KnowledgeType::TechDebt,
+        Some("ops") => KnowledgeType::Ops,
+        Some("api") => KnowledgeType::Api,
+        Some("performance") => KnowledgeType::Performance,
+        Some("roadmap") => KnowledgeType::Roadmap,
+        Some("context") => KnowledgeType::Context,
+        Some("lesson") => KnowledgeType::Lesson,
+        Some(other) => KnowledgeType::Custom(other.to_string()),
+        None => return None,
     };
 
     let title = extract_title(content)?;
