@@ -2,7 +2,7 @@
 
 Rust port of [graphify](https://github.com/safishamsi/graphify) — a knowledge graph builder for code and documents.
 
-Deterministic AST extraction via tree-sitter, community detection, interactive visualization, and MCP server for AI editor integration.
+Deterministic AST extraction via tree-sitter, community detection, interactive visualization, and MCP server for AI editor integration. Single binary, no Python runtime required.
 
 ## Install
 
@@ -31,12 +31,16 @@ graphify path "Client" "Database"
 
 # Explain a node
 graphify explain "AuthService"
+
+# Auto-rebuild on file changes
+graphify watch ./my-project
 ```
 
 Output is saved to `my-project/graphify-out/`:
+
 - `graph.json` — queryable knowledge graph
 - `graph.html` — interactive visualization (vis.js)
-- `GRAPH_REPORT.md` — analysis report
+- `GRAPH_REPORT.md` — analysis report with god nodes, communities, knowledge gaps
 
 ## Commands
 
@@ -46,16 +50,16 @@ Output is saved to `my-project/graphify-out/`:
 | `graphify query "<question>"` | BFS/DFS search over the graph |
 | `graphify path "<source>" "<target>"` | Shortest path between two nodes |
 | `graphify explain "<node>"` | Show node details and neighbors |
-| `graphify update <path>` | Re-extract code only (AST, no LLM) |
+| `graphify update <path>` | Re-extract code only (AST, no LLM cost) |
 | `graphify cluster-only <path>` | Rerun clustering on existing graph |
-| `graphify watch <path>` | Auto-rebuild on file changes |
+| `graphify watch <path>` | Auto-rebuild on code file changes |
 | `graphify add <url>` | Fetch URL and add to corpus |
 | `graphify serve` | Start MCP stdio server for AI editors |
 | `graphify install [platform]` | Install skill to AI editor |
 | `graphify benchmark` | Measure token reduction ratio |
 | `graphify hook [install\|uninstall\|status]` | Manage git hooks |
 | `graphify workspace init` | Create workspace config for multi-project setup |
-| `graphify workspace run` | Build + merge all projects in workspace |
+| `graphify workspace run [--vault <path>]` | Build + merge all projects in workspace |
 
 ## Supported Languages
 
@@ -81,50 +85,58 @@ Each language is feature-gated. Use `--features all-languages` for all, or pick 
 graphify includes an MCP (Model Context Protocol) stdio server for AI editor integration.
 
 ```bash
-# Start the server
 graphify serve --graph graphify-out/graph.json
 ```
 
-Available tools: `query_graph`, `get_node`, `god_nodes`, `graph_stats`
+Available tools:
 
-### Claude Code integration
+| Tool | Description |
+|------|-------------|
+| `query_graph` | BFS/DFS traversal from keyword-matching nodes |
+| `get_node` | Fetch node details by label |
+| `god_nodes` | List most-connected entities |
+| `graph_stats` | Node/edge/community counts |
+
+### AI Editor Setup
 
 ```bash
-graphify install claude
-```
-
-### Cursor / VS Code
-
-```bash
-graphify install cursor
-graphify install vscode
+graphify install claude    # Claude Code
+graphify install cursor    # Cursor
+graphify install vscode    # VS Code Copilot
+graphify install codex     # Codex
+graphify install kiro      # Kiro
 ```
 
 ## Obsidian Integration
 
-graphify exports Obsidian-compatible markdown vaults with wikilinks, YAML frontmatter, community overviews, Dataview queries, and bridge node detection.
+graphify exports Obsidian-compatible markdown vaults with:
+
+- YAML frontmatter (source_file, type, community, tags)
+- `[[wikilinks]]` between connected nodes
+- `_COMMUNITY_*.md` overview notes with cohesion scores
+- Dataview queries (`TABLE source_file FROM #community/...`)
+- Bridge node detection (nodes connecting multiple communities)
+- `.obsidian/graph.json` with community color groups
 
 ### Single Project
 
 ```bash
 graphify run ./my-project
-# Vault is generated at ./my-project/graphify-out/
-# Open graphify-out/ as an Obsidian vault
+# Open ./my-project/graphify-out/ as an Obsidian vault
 ```
 
 ### Multi-Project Workspace
 
-Use the workspace feature to automatically build, merge, and export multiple projects into a unified graph and Obsidian vault:
+Automatically build, merge, and export multiple projects into a unified graph and Obsidian vault:
 
 ```bash
 cd ~/codes
 
 # Auto-detect git projects and create config
 graphify workspace init
-
-# Edit the generated config
-cat graphify-workspace.yaml
 ```
+
+Edit the generated config:
 
 ```yaml
 # graphify-workspace.yaml
@@ -133,7 +145,10 @@ projects:
   - ./backend
   - ./shared-lib
 
+# Where to write merged graph.json, graph.html, report
 output: ./graphify-workspace
+
+# Where to write the unified Obsidian vault
 vault: ~/obsidian-vault/dev-knowledge
 ```
 
@@ -146,25 +161,27 @@ graphify workspace run --vault ~/my-vault
 ```
 
 This produces:
-- `graphify-workspace/graph.json` — unified graph across all projects
-- `graphify-workspace/graph.html` — unified visualization
-- `~/obsidian-vault/dev-knowledge/` — unified Obsidian vault
 
-Cross-project connections are automatically detected: if `frontend` and `backend` both define a `Logger` class, they get linked with `shared_across_projects` edges.
+- `graphify-workspace/graph.json` — unified graph across all projects
+- `graphify-workspace/graph.html` — unified interactive visualization
+- `graphify-workspace/GRAPH_REPORT.md` — unified analysis report
+- `~/obsidian-vault/dev-knowledge/` — unified Obsidian vault with cross-project links
+
+Cross-project connections are automatically detected: if `frontend` and `backend` both define a `Logger` class, they are linked with `shared_across_projects` edges. Community detection runs on the merged graph, so clusters can span project boundaries.
 
 ### AI Editor + Obsidian Workflow
 
 ```
-Obsidian Vault (browse/explore)
-  ← graphify run (generates static .md files with wikilinks)
+Obsidian Vault (browse & explore)
+  ← graphify run / graphify workspace run
+  Generates static .md files with wikilinks, Dataview queries, community maps
 
 AI Editor (Claude Code, Cursor, etc.)
-  ← graphify serve (MCP stdio, interactive queries over graph.json)
+  ← graphify serve (MCP stdio server)
+  Interactive queries: "how does auth work?", "path from Client to Database"
 ```
 
-- **Obsidian** — visual exploration, community maps, Dataview queries
-- **MCP server** — AI-assisted conversational queries from your editor
-- Both read from the same `graphify-out/` directory. No separate setup needed.
+Both read from the same `graphify-out/` directory. No separate setup needed.
 
 ## Transcription
 
@@ -180,23 +197,24 @@ curl -L -o ~/.cache/whisper/ggml-base.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 ```
 
-Supports WAV directly, other formats via ffmpeg. YouTube download via yt-dlp.
+Supports WAV directly, other formats via ffmpeg. YouTube/URL audio download via yt-dlp.
 
-Environment variables:
-- `GRAPHIFY_WHISPER_MODEL` — model size: `tiny`, `base`, `small`, `medium`, `large` (default: `base`)
-- `GRAPHIFY_WHISPER_MODEL_PATH` — explicit path to `.bin` file
-- `GRAPHIFY_WHISPER_PROMPT` — override domain prompt
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `GRAPHIFY_WHISPER_MODEL` | Model size: `tiny`, `base`, `small`, `medium`, `large` | `base` |
+| `GRAPHIFY_WHISPER_MODEL_PATH` | Explicit path to `.bin` model file | auto-detect |
+| `GRAPHIFY_WHISPER_PROMPT` | Override domain-aware prompt | from god nodes |
 
 ## Feature Flags
 
 | Feature | Description | Dependency |
 |---------|-------------|------------|
-| `extract` | AST extraction (default) | tree-sitter |
-| `lang-*` | Per-language parsers | tree-sitter-{lang} |
+| `extract` | AST extraction (default on) | tree-sitter |
+| `lang-*` | Per-language tree-sitter parsers | tree-sitter-{lang} |
 | `all-languages` | All 14 languages | |
 | `fetch` | URL fetching for `add` command | reqwest |
-| `watch` | File system monitoring | notify |
-| `mcp` | Async MCP server | tokio |
+| `watch` | File system monitoring for `watch` command | notify |
+| `mcp` | Async runtime for MCP server | tokio |
 | `svg` | SVG graph export | plotters |
 | `video` | Audio/video transcription | whisper-rs, hound |
 | `parallel` | Parallel file extraction | rayon |
@@ -205,23 +223,43 @@ Environment variables:
 ## Architecture
 
 ```
-CLI (main.rs)
-  ├─ detect/     File discovery, classification, .graphifyignore
-  ├─ extract/    AST extraction via tree-sitter (14 languages)
-  ├─ graph/      petgraph wrapper, build, diff
-  ├─ cluster/    Louvain community detection
-  ├─ analyze/    God nodes, surprising connections, questions
-  ├─ export/     JSON, HTML, Obsidian, GraphML, Canvas, Cypher, Wiki
-  ├─ report      GRAPH_REPORT.md generation
-  ├─ serve/      MCP stdio server, BFS/DFS traversal
-  ├─ cache       SHA256 per-file extraction cache
-  ├─ security/   URL validation, SSRF prevention, label sanitization
-  ├─ ingest/     URL fetching, content normalization
-  ├─ watch       File system monitoring, auto-rebuild
-  ├─ hooks       Git post-commit/post-checkout hooks
-  ├─ transcribe  whisper.cpp audio transcription
-  └─ benchmark   Token reduction measurement
+CLI (main.rs, clap)
+  ├─ detect/      File discovery, classification, .graphifyignore, sensitive file filtering
+  ├─ extract/     AST extraction via tree-sitter (14 languages)
+  │   └─ languages/   Per-language configs and import handlers
+  ├─ graph/       petgraph wrapper (GraphifyGraph), build, merge, diff
+  ├─ cluster/     Louvain community detection with modularity optimization
+  ├─ analyze/     God nodes, surprising connections, suggested questions
+  ├─ export/      JSON, HTML (vis.js), Obsidian, GraphML, Canvas, Cypher, Wiki
+  ├─ report       GRAPH_REPORT.md generation
+  ├─ serve/       MCP stdio server (JSON-RPC 2.0), BFS/DFS traversal
+  ├─ workspace    Multi-project build, merge, unified vault export
+  ├─ cache        SHA256 per-file extraction cache
+  ├─ security/    URL validation, SSRF prevention, label sanitization
+  ├─ ingest/      URL fetching, HTML→text, content normalization
+  ├─ watch        File system monitoring, auto-rebuild on code changes
+  ├─ hooks        Git post-commit / post-checkout hooks
+  ├─ transcribe   whisper.cpp audio/video transcription
+  ├─ install      AI editor skill installation (Claude, Cursor, VS Code, etc.)
+  └─ benchmark    Token reduction measurement
 ```
+
+## Pipeline
+
+```
+detect → extract → build → cluster → analyze → export
+                                                  ├─ graph.json
+                                                  ├─ graph.html
+                                                  ├─ GRAPH_REPORT.md
+                                                  └─ Obsidian vault
+```
+
+1. **Detect** — find code/doc/paper/image files, skip sensitive files, apply .graphifyignore
+2. **Extract** — parse AST with tree-sitter, extract classes/functions/imports/calls, build call graph
+3. **Build** — assemble nodes and edges into a petgraph directed graph
+4. **Cluster** — Louvain community detection with modularity-based optimization
+5. **Analyze** — identify god nodes, surprising cross-file connections, suggest questions
+6. **Export** — write JSON, HTML visualization, Obsidian vault, report
 
 ## License
 
