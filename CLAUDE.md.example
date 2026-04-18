@@ -1,0 +1,15 @@
+# Project Rules
+
+## Graphify Knowledge System
+
+이 프로젝트는 graphify 지식 그래프를 사용합니다. 반드시 아래 규칙을 따르세요.
+
+### 세션 시작 시
+1. `graphify-out/_KNOWLEDGE_*.md` 파일들을 읽고 이전 세션의 학습 내용을 파악
+2. `graphify-out/GRAPH_REPORT.md`를 읽고 프로젝트 구조 파악
+3. 이전 지식을 현재 작업 컨텍스트에 반영
+
+### 작업 중
+코드 분석/수정하면서 패턴, 설계 결정, 컨벤션, 결합 관계, 버그 패턴, 도메인 개념을 발견하면 즉시 `graphify-out/_KNOWLEDGE_<제목>.md` 파일로 저장하세요. 같은 패턴을 다시 발견하면 기존 파일의 observations를 증가시키고 confidence를 올리세요.
+
+상세 규칙: KNOWLEDGE_SYSTEM.md 참조
