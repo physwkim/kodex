@@ -66,6 +66,9 @@ enum Commands {
         /// Debounce interval in seconds
         #[arg(long, default_value_t = 3.0)]
         debounce: f64,
+        /// Obsidian vault path to auto-update on changes
+        #[arg(long)]
+        vault: Option<PathBuf>,
     },
 
     /// Measure token reduction benchmark
@@ -153,8 +156,8 @@ fn main() {
         Some(Commands::Explain { node, graph }) => {
             cmd_explain(&node, &graph);
         }
-        Some(Commands::Watch { path, debounce }) => {
-            if let Err(e) = graphify::watch::watch(&path, debounce) {
+        Some(Commands::Watch { path, debounce, vault }) => {
+            if let Err(e) = graphify::watch::watch(&path, debounce, vault.as_deref()) {
                 eprintln!("Watch error: {e}");
             }
         }

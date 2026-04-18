@@ -1,0 +1,9 @@
+{
+    "id": "graphify",
+    "name": "Graphify",
+    "version": "0.1.0",
+    "minAppVersion": "1.0.0",
+    "description": "Query and explore graphify knowledge graphs inside Obsidian",
+    "author": "graphify",
+    "isDesktopOnly": true
+}
