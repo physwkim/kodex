@@ -9,6 +9,43 @@ use crate::graph::GraphifyGraph;
 use crate::graph::build_from_extraction;
 use crate::types::ExtractionResult;
 
+/// Smart graph loading: try vault first, fall back to graph.json.
+///
+/// If `path` is a directory containing .md files, loads from vault (source of truth).
+/// If `path` is a .json file, loads from JSON (cache).
+/// If graph.json exists but is stale relative to vault, reloads from vault.
+pub fn load_graph_smart(path: &Path) -> crate::error::Result<GraphifyGraph> {
+    // If path is a directory, treat as vault
+    if path.is_dir() {
+        return crate::vault::load_graph_from_vault(path);
+    }
+
+    // If it's a JSON file, check if a vault directory exists alongside it
+    if path.extension().map(|e| e == "json").unwrap_or(false) {
+        if let Some(parent) = path.parent() {
+            // Check if parent is a vault (has .md files)
+            let has_md = std::fs::read_dir(parent)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .any(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+                })
+                .unwrap_or(false);
+
+            if has_md && crate::vault::is_cache_stale(parent, path) {
+                // Vault is newer than cache — reload from vault and update cache
+                let graph = crate::vault::load_graph_from_vault(parent)?;
+                let communities = crate::cluster::cluster(&graph);
+                let _ = crate::export::to_json(&graph, &communities, path);
+                return Ok(graph);
+            }
+        }
+    }
+
+    // Default: load from JSON
+    load_graph(path)
+}
+
 /// Load a graph from a JSON file (networkx node-link format).
 pub fn load_graph(graph_path: &Path) -> crate::error::Result<GraphifyGraph> {
     let text = std::fs::read_to_string(graph_path)?;

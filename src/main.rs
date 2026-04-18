@@ -330,7 +330,7 @@ fn run_pipeline(path: &std::path::Path) {
 }
 
 fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::path::Path) {
-    let graph = match graphify::serve::load_graph(graph_path) {
+    let graph = match graphify::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -363,7 +363,7 @@ fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::pat
 }
 
 fn cmd_path(source: &str, target: &str, graph_path: &std::path::Path) {
-    let graph = match graphify::serve::load_graph(graph_path) {
+    let graph = match graphify::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -405,7 +405,7 @@ fn cmd_path(source: &str, target: &str, graph_path: &std::path::Path) {
 }
 
 fn cmd_explain(node_label: &str, graph_path: &std::path::Path) {
-    let graph = match graphify::serve::load_graph(graph_path) {
+    let graph = match graphify::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -447,7 +447,7 @@ fn cmd_explain(node_label: &str, graph_path: &std::path::Path) {
 }
 
 fn cmd_benchmark(graph_path: &std::path::Path) {
-    let graph = match graphify::serve::load_graph(graph_path) {
+    let graph = match graphify::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -502,7 +502,7 @@ fn cmd_update(path: &std::path::Path) {
 
 fn cmd_cluster_only(path: &std::path::Path) {
     let graph_path = path.join("graphify-out/graph.json");
-    let graph = match graphify::serve::load_graph(&graph_path) {
+    let graph = match graphify::serve::load_graph_smart(&graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -577,7 +577,7 @@ fn cmd_add(url: &str, author: Option<&str>, contributor: Option<&str>, dir: &std
 }
 
 fn cmd_serve(graph_path: &std::path::Path) {
-    let graph = match graphify::serve::load_graph(graph_path) {
+    let graph = match graphify::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
