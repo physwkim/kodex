@@ -323,8 +323,208 @@ pub fn run(
         println!("  vault: {} ({count} notes)", vault_dir.display());
     }
 
+    // Step 6: Collect knowledge from all projects into unified vault
+    let unified_vault = vault_path.as_deref().unwrap_or(&config.output);
+    let collected = collect_knowledge(&config.projects, unified_vault)?;
+    if collected > 0 {
+        println!("  knowledge: collected {collected} items from projects into unified vault");
+    }
+
+    // Step 7: Distribute unified knowledge back to each project
+    let distributed = distribute_knowledge(unified_vault, &config.projects)?;
+    if distributed > 0 {
+        println!("  knowledge: distributed {distributed} items back to projects");
+    }
+
     println!("  done!");
     Ok(())
+}
+
+/// Collect _KNOWLEDGE_*.md from each project's graphify-out/ into the unified vault.
+/// Files are prefixed with project name to avoid collisions.
+fn collect_knowledge(projects: &[PathBuf], unified_vault: &Path) -> Result<usize> {
+    let mut count = 0;
+
+    for project_path in projects {
+        let project_name = project_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let source_dir = project_path.join("graphify-out");
+        if !source_dir.is_dir() {
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(&source_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let filename = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            // Collect _KNOWLEDGE_*, _INSIGHT_*, _NOTE_* files
+            if !filename.starts_with("_KNOWLEDGE_")
+                && !filename.starts_with("_INSIGHT_")
+                && !filename.starts_with("_NOTE_")
+            {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Add project origin tag to frontmatter if not present
+            let tagged_content = if content.contains(&format!("origin: {project_name}")) {
+                content
+            } else {
+                inject_frontmatter_field(&content, "origin", project_name)
+            };
+
+            // Write to unified vault (project-prefixed to avoid collision)
+            let dest_filename = if filename.contains(project_name) {
+                filename
+            } else {
+                // Insert project name: _KNOWLEDGE_Foo.md → _KNOWLEDGE_project_Foo.md
+                let prefix_end = filename.find('_').unwrap_or(0);
+                let second_underscore = filename[prefix_end + 1..].find('_').map(|p| p + prefix_end + 1);
+                match second_underscore {
+                    Some(pos) => format!("{}{}_{}", &filename[..pos + 1], project_name, &filename[pos..]),
+                    None => format!("{project_name}_{filename}"),
+                }
+            };
+
+            let dest = unified_vault.join(&dest_filename);
+
+            // Only copy if source is newer or dest doesn't exist
+            let should_copy = if dest.exists() {
+                let src_mtime = std::fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let dst_mtime = std::fs::metadata(&dest)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                src_mtime > dst_mtime
+            } else {
+                true
+            };
+
+            if should_copy {
+                std::fs::write(&dest, tagged_content)?;
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+/// Distribute knowledge from the unified vault back to each project.
+/// Only distributes knowledge that originated from OTHER projects,
+/// so each project gains cross-project knowledge.
+fn distribute_knowledge(unified_vault: &Path, projects: &[PathBuf]) -> Result<usize> {
+    let mut count = 0;
+
+    // Read all knowledge files from unified vault
+    let entries = match std::fs::read_dir(unified_vault) {
+        Ok(e) => e,
+        Err(_) => return Ok(0),
+    };
+
+    let mut knowledge_files: Vec<(String, String, String)> = Vec::new(); // (filename, content, origin)
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let filename = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        if !filename.starts_with("_KNOWLEDGE_")
+            && !filename.starts_with("_INSIGHT_")
+            && !filename.starts_with("_NOTE_")
+        {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // Extract origin from frontmatter
+        let origin = extract_frontmatter_field(&content, "origin")
+            .unwrap_or_default();
+
+        knowledge_files.push((filename, content, origin));
+    }
+
+    // Distribute to each project
+    for project_path in projects {
+        let project_name = project_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let dest_dir = project_path.join("graphify-out");
+        if !dest_dir.is_dir() {
+            let _ = std::fs::create_dir_all(&dest_dir);
+        }
+
+        for (filename, content, origin) in &knowledge_files {
+            // Don't distribute knowledge back to its own project
+            if origin == project_name {
+                continue;
+            }
+
+            let dest = dest_dir.join(filename);
+            if !dest.exists() {
+                std::fs::write(&dest, content)?;
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+fn inject_frontmatter_field(content: &str, key: &str, value: &str) -> String {
+    if !content.starts_with("---") {
+        return format!("---\n{key}: {value}\n---\n\n{content}");
+    }
+    // Insert field before closing ---
+    if let Some(end) = content[3..].find("\n---") {
+        let insert_pos = 3 + end;
+        let mut result = String::new();
+        result.push_str(&content[..insert_pos]);
+        result.push_str(&format!("\n{key}: {value}"));
+        result.push_str(&content[insert_pos..]);
+        return result;
+    }
+    content.to_string()
+}
+
+fn extract_frontmatter_field(content: &str, key: &str) -> Option<String> {
+    if !content.starts_with("---") {
+        return None;
+    }
+    let end = content[3..].find("\n---")?;
+    let fm = &content[4..3 + end];
+    for line in fm.lines() {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim() == key {
+                return Some(v.trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Expand ~ to home directory.
