@@ -659,6 +659,44 @@ fn handle_jsonrpc(input: &str, graph: &graphify::graph::GraphifyGraph) -> String
                 "communities": communities.len(),
             })
         }
+        "save_insight" => {
+            let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
+            let node_ids: Vec<String> = params.get("nodes")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let pattern = params.get("pattern").and_then(|v| v.as_str());
+            let graph_path = std::path::Path::new("graphify-out/graph.json");
+            match graphify::knowledge::save_insight(graph_path, None, label, description, &node_ids, pattern) {
+                Ok(()) => serde_json::json!({"status": "saved", "label": label, "nodes": node_ids.len()}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "save_note" => {
+            let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let related: Vec<String> = params.get("related_nodes")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let graph_path = std::path::Path::new("graphify-out/graph.json");
+            match graphify::knowledge::save_note(graph_path, None, title, content, &related) {
+                Ok(()) => serde_json::json!({"status": "saved", "title": title}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "add_edge" => {
+            let source = params.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
+            let relation = params.get("relation").and_then(|v| v.as_str()).unwrap_or("related_to");
+            let description = params.get("description").and_then(|v| v.as_str());
+            let graph_path = std::path::Path::new("graphify-out/graph.json");
+            match graphify::knowledge::add_edge(graph_path, source, target, relation, description) {
+                Ok(()) => serde_json::json!({"status": "saved", "source": source, "target": target}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 
