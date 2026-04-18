@@ -182,6 +182,9 @@ pub fn learn(
     // Write vault note
     write_knowledge_note(&path, &knowledge)?;
 
+    // Rebuild compact index
+    rebuild_index(vault_dir)?;
+
     // Also add to graph.json if provided
     if let Some(gp) = graph_path {
         let _ = add_knowledge_to_graph(gp, &knowledge);
@@ -223,29 +226,77 @@ pub fn query_knowledge(
 /// Returns a compact text that Claude can read at the start of a session
 /// to recall previously accumulated knowledge.
 pub fn knowledge_context(vault_dir: &Path, max_items: usize) -> String {
-    let items = load_knowledge(vault_dir);
-    if items.is_empty() {
-        return String::new();
+    // Try reading pre-built index first (fast path)
+    let index_path = vault_dir.join("_KNOWLEDGE_INDEX.md");
+    if let Ok(content) = std::fs::read_to_string(&index_path) {
+        return content;
     }
 
-    let mut ctx = format!("## Accumulated Knowledge ({} items)\n\n", items.len());
-    for k in items.iter().take(max_items) {
-        let type_str = k.knowledge_type.to_string();
-        let conf = (k.confidence * 100.0) as u32;
-        ctx.push_str(&format!(
-            "- **[{type_str}]** {} ({}% confidence, {} observations)\n",
-            k.title, conf, k.observations
-        ));
-        // First line of description only
-        if let Some(first_line) = k.description.lines().next() {
-            if first_line.len() > 100 {
-                ctx.push_str(&format!("  {:.100}...\n", first_line));
-            } else {
-                ctx.push_str(&format!("  {first_line}\n"));
-            }
-        }
+    // Fallback: build from individual files
+    let items = load_knowledge(vault_dir);
+    build_index_content(&items, max_items)
+}
+
+/// Rebuild the compact index file that Claude reads at session start.
+///
+/// This is one small file (~50 lines) instead of reading dozens of
+/// individual _KNOWLEDGE_*.md files. Saves tokens and latency.
+pub fn rebuild_index(vault_dir: &Path) -> crate::error::Result<()> {
+    let items = load_knowledge(vault_dir);
+    let content = build_index_content(&items, 50);
+    std::fs::write(vault_dir.join("_KNOWLEDGE_INDEX.md"), content)?;
+    Ok(())
+}
+
+fn build_index_content(items: &[Knowledge], max_items: usize) -> String {
+    if items.is_empty() {
+        return "# Knowledge Index\n\nNo knowledge accumulated yet.\n".to_string();
     }
+
+    let mut ctx = format!("# Knowledge Index ({} items)\n\n", items.len());
+    ctx.push_str("> Auto-generated. Read this file at session start. Details in individual _KNOWLEDGE_*.md files.\n\n");
+
+    // Group by type
+    let mut by_type: HashMap<String, Vec<&Knowledge>> = HashMap::new();
+    for k in items.iter().take(max_items) {
+        by_type.entry(k.knowledge_type.to_string()).or_default().push(k);
+    }
+
+    let mut types: Vec<_> = by_type.into_iter().collect();
+    types.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    for (type_name, items) in types {
+        ctx.push_str(&format!("## {type_name}\n\n"));
+        for k in items {
+            let conf = (k.confidence * 100.0) as u32;
+            // One line per item: title + first sentence of description
+            let summary = k.description.lines().next().unwrap_or("");
+            let summary = if summary.len() > 80 {
+                let end = floor_char_boundary(summary, 80);
+                format!("{}...", &summary[..end])
+            } else {
+                summary.to_string()
+            };
+            ctx.push_str(&format!(
+                "- **{}** ({conf}%, {}x) — {summary}\n",
+                k.title, k.observations
+            ));
+        }
+        ctx.push('\n');
+    }
+
     ctx
+}
+
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 // ---------------------------------------------------------------------------
@@ -550,6 +601,6 @@ mod tests {
         let ctx = knowledge_context(dir.path(), 10);
         assert!(ctx.contains("Observer"));
         assert!(ctx.contains("Functional Style"));
-        assert!(ctx.contains("Accumulated Knowledge"));
+        assert!(ctx.contains("Knowledge Index"));
     }
 }

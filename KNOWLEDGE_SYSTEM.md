@@ -11,9 +11,11 @@
 
 ## 세션 시작 시
 
-1. `graphify-out/_KNOWLEDGE_*.md` 를 전부 읽어라. 이것이 축적된 지식이다.
-2. `graphify-out/GRAPH_REPORT.md` 를 읽어라. 프로젝트 구조 개요다.
-3. 이전 지식을 바탕으로 현재 작업에 접근하라.
+1. `graphify-out/_KNOWLEDGE_INDEX.md` **한 파일만** 읽어라. 축적된 지식의 요약이다.
+2. 특정 항목의 상세가 필요할 때만 개별 `_KNOWLEDGE_*.md` 를 읽어라.
+3. `graphify-out/GRAPH_REPORT.md` 를 읽어라. 프로젝트 구조 개요다.
+
+> **토큰 절약**: 개별 파일을 전부 읽지 마라. INDEX가 전체 요약이다.
 
 ## 저장 기준
 
