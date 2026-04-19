@@ -4,17 +4,17 @@
 //! ```text
 //! kodex.h5
 //! ├── /nodes/
-//! │   ├── id          [u8 2D, padded strings]
-//! │   ├── label       [u8 2D]
-//! │   ├── file_type   [u8 2D]
-//! │   ├── source_file [u8 2D]
-//! │   ├── confidence  [u8 2D]
+//! │   ├── id          [vlen string]
+//! │   ├── label       [vlen string]
+//! │   ├── file_type   [vlen string]
+//! │   ├── source_file [vlen string]
+//! │   ├── confidence  [vlen string]
 //! │   └── community   [u32 1D]
 //! ├── /edges/
-//! │   ├── source      [u8 2D]
-//! │   ├── target      [u8 2D]
-//! │   ├── relation    [u8 2D]
-//! │   ├── confidence  [u8 2D]
+//! │   ├── source      [vlen string]
+//! │   ├── target      [vlen string]
+//! │   ├── relation    [vlen string]
+//! │   ├── confidence  [vlen string]
 //! │   └── weight      [f64 1D]
 //! └── metadata (attrs: node_count, edge_count, version)
 //! ```
@@ -27,7 +27,7 @@ use rust_hdf5::file::H5File;
 use crate::graph::KodexGraph;
 use crate::types::{Confidence, ExtractionResult, FileType};
 
-/// Save a graph to HDF5 format.
+/// Save a graph to HDF5 format with vlen strings.
 pub fn save_hdf5(
     graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
@@ -48,7 +48,7 @@ pub fn save_hdf5(
 
     let comm_map = crate::export::node_community_map(communities);
 
-    // --- Nodes ---
+    // --- Collect node data ---
     let mut ids = Vec::new();
     let mut labels = Vec::new();
     let mut file_types = Vec::new();
@@ -71,15 +71,16 @@ pub fn save_hdf5(
         }
     }
 
+    // --- Write nodes ---
     let nodes_grp = file
         .create_group("nodes")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
-    write_string_dataset(&nodes_grp, "id", &ids)?;
-    write_string_dataset(&nodes_grp, "label", &labels)?;
-    write_string_dataset(&nodes_grp, "file_type", &file_types)?;
-    write_string_dataset(&nodes_grp, "source_file", &source_files)?;
-    write_string_dataset(&nodes_grp, "confidence", &confidences)?;
+    write_vlen(&nodes_grp, "id", &ids)?;
+    write_vlen(&nodes_grp, "label", &labels)?;
+    write_vlen(&nodes_grp, "file_type", &file_types)?;
+    write_vlen(&nodes_grp, "source_file", &source_files)?;
+    write_vlen(&nodes_grp, "confidence", &confidences)?;
 
     if !community_ids.is_empty() {
         nodes_grp
@@ -90,7 +91,7 @@ pub fn save_hdf5(
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     }
 
-    // --- Edges ---
+    // --- Collect edge data ---
     let mut e_src = Vec::new();
     let mut e_tgt = Vec::new();
     let mut e_rel = Vec::new();
@@ -105,14 +106,15 @@ pub fn save_hdf5(
         e_weight.push(edge.weight);
     }
 
+    // --- Write edges ---
     let edges_grp = file
         .create_group("edges")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
-    write_string_dataset(&edges_grp, "source", &e_src)?;
-    write_string_dataset(&edges_grp, "target", &e_tgt)?;
-    write_string_dataset(&edges_grp, "relation", &e_rel)?;
-    write_string_dataset(&edges_grp, "confidence", &e_conf)?;
+    write_vlen(&edges_grp, "source", &e_src)?;
+    write_vlen(&edges_grp, "target", &e_tgt)?;
+    write_vlen(&edges_grp, "relation", &e_rel)?;
+    write_vlen(&edges_grp, "confidence", &e_conf)?;
 
     if !e_weight.is_empty() {
         edges_grp
@@ -133,11 +135,11 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
     let file = H5File::open(path)
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
 
-    let ids = read_string_dataset(&file, "nodes/id")?;
-    let labels = read_string_dataset(&file, "nodes/label")?;
-    let file_types = read_string_dataset(&file, "nodes/file_type")?;
-    let source_files = read_string_dataset(&file, "nodes/source_file")?;
-    let confidences = read_string_dataset(&file, "nodes/confidence")?;
+    let ids = read_vlen(&file, "nodes/id")?;
+    let labels = read_vlen(&file, "nodes/label")?;
+    let file_types = read_vlen(&file, "nodes/file_type")?;
+    let source_files = read_vlen(&file, "nodes/source_file")?;
+    let confidences = read_vlen(&file, "nodes/confidence")?;
 
     let community_ids: Vec<u32> = file
         .dataset("nodes/community")
@@ -169,10 +171,10 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
         });
     }
 
-    let e_src = read_string_dataset(&file, "edges/source")?;
-    let e_tgt = read_string_dataset(&file, "edges/target")?;
-    let e_rel = read_string_dataset(&file, "edges/relation")?;
-    let e_conf = read_string_dataset(&file, "edges/confidence")?;
+    let e_src = read_vlen(&file, "edges/source")?;
+    let e_tgt = read_vlen(&file, "edges/target")?;
+    let e_rel = read_vlen(&file, "edges/relation")?;
+    let e_conf = read_vlen(&file, "edges/confidence")?;
     let e_weight: Vec<f64> = file
         .dataset("edges/weight")
         .and_then(|ds| ds.read_raw())
@@ -202,7 +204,8 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
 
 // --- Helpers ---
 
-fn write_string_dataset(
+/// Write vlen strings via H5Group (not H5File — that doesn't resolve group paths).
+fn write_vlen(
     group: &rust_hdf5::group::H5Group,
     name: &str,
     strings: &[String],
@@ -210,57 +213,20 @@ fn write_string_dataset(
     if strings.is_empty() {
         return Ok(());
     }
-    let max_len = strings.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
-    let padded: Vec<u8> = strings
-        .iter()
-        .flat_map(|s| {
-            let mut buf = s.as_bytes().to_vec();
-            buf.resize(max_len, 0);
-            buf
-        })
-        .collect();
-
+    let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
     group
-        .new_dataset::<u8>()
-        .shape([strings.len(), max_len])
-        .create(name)
-        .and_then(|ds| ds.write_raw(&padded))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))?;
-
-    Ok(())
+        .write_vlen_strings(name, &refs)
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))
 }
 
-fn read_string_dataset(file: &H5File, path: &str) -> crate::error::Result<Vec<String>> {
+/// Read vlen strings from a dataset path.
+fn read_vlen(file: &H5File, path: &str) -> crate::error::Result<Vec<String>> {
     let ds = match file.dataset(path) {
         Ok(ds) => ds,
         Err(_) => return Ok(Vec::new()),
     };
-
-    let shape = ds.shape();
-    if shape.len() != 2 || shape[0] == 0 {
-        return Ok(Vec::new());
-    }
-
-    let n = shape[0];
-    let max_len = shape[1];
-
-    let raw: Vec<u8> = ds
-        .read_raw()
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}")))?;
-
-    let mut strings = Vec::with_capacity(n);
-    for i in 0..n {
-        let start = i * max_len;
-        let end = (start + max_len).min(raw.len());
-        let slice = &raw[start..end];
-        let trimmed = match slice.iter().position(|&b| b == 0) {
-            Some(pos) => &slice[..pos],
-            None => slice,
-        };
-        strings.push(String::from_utf8_lossy(trimmed).to_string());
-    }
-
-    Ok(strings)
+    ds.read_vlen_strings()
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}")))
 }
 
 #[cfg(test)]
@@ -318,11 +284,9 @@ mod tests {
         let graph = crate::graph::build_from_extraction(&extraction);
         let communities = crate::cluster::cluster(&graph);
 
-        // Save
         save_hdf5(&graph, &communities, &h5_path).unwrap();
         assert!(h5_path.exists());
 
-        // Load
         let loaded = load_hdf5(&h5_path).unwrap();
         assert_eq!(loaded.node_count(), 2);
         assert_eq!(loaded.edge_count(), 1);
