@@ -35,7 +35,7 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         budget: usize,
         /// Path to graph.json
-        #[arg(long, default_value = "engram-out/graph.json")]
+        #[arg(long, default_value = "engram-out/engram.h5")]
         graph: PathBuf,
     },
 
@@ -46,7 +46,7 @@ enum Commands {
         /// Target node label
         target: String,
         /// Path to graph.json
-        #[arg(long, default_value = "engram-out/graph.json")]
+        #[arg(long, default_value = "engram-out/engram.h5")]
         graph: PathBuf,
     },
 
@@ -55,7 +55,7 @@ enum Commands {
         /// Node label to explain
         node: String,
         /// Path to graph.json
-        #[arg(long, default_value = "engram-out/graph.json")]
+        #[arg(long, default_value = "engram-out/engram.h5")]
         graph: PathBuf,
     },
 
@@ -74,7 +74,7 @@ enum Commands {
     /// Measure token reduction benchmark
     Benchmark {
         /// Path to graph.json
-        #[arg(default_value = "engram-out/graph.json")]
+        #[arg(default_value = "engram-out/engram.h5")]
         graph: PathBuf,
     },
 
@@ -131,7 +131,7 @@ enum Commands {
     /// Start MCP stdio server for graph queries
     Serve {
         /// Path to graph.json
-        #[arg(default_value = "engram-out/graph.json")]
+        #[arg(default_value = "engram-out/engram.h5")]
         graph: PathBuf,
     },
 }
@@ -285,20 +285,22 @@ fn run_pipeline(path: &std::path::Path) {
 
     // Step 6: Export
     let out_dir = path.join("engram-out");
+    let vault_dir = out_dir.join("vault");
     let _ = std::fs::create_dir_all(&out_dir);
-
-    // JSON
-    if let Err(e) = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json")) {
-        eprintln!("  JSON export error: {e}");
-    } else {
-        println!("  exported graph.json");
-    }
+    let _ = std::fs::create_dir_all(&vault_dir);
 
     // HDF5 (primary storage)
     if let Err(e) = engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5")) {
-        eprintln!("  HDF5 export error: {e}");
+        eprintln!("  HDF5 error: {e}");
     } else {
         println!("  exported engram.h5");
+    }
+
+    // JSON (compat)
+    if let Err(e) = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json")) {
+        eprintln!("  JSON error: {e}");
+    } else {
+        println!("  exported graph.json");
     }
 
     // HTML
@@ -309,7 +311,7 @@ fn run_pipeline(path: &std::path::Path) {
         Some(&community_labels),
     ) {
         Ok(()) => println!("  exported graph.html"),
-        Err(e) => eprintln!("  HTML export error: {e}"),
+        Err(e) => eprintln!("  HTML error: {e}"),
     }
 
     // Step 7: Report
@@ -326,14 +328,23 @@ fn run_pipeline(path: &std::path::Path) {
         &path.display().to_string(),
         Some(&questions),
     );
-    let report_path = out_dir.join("GRAPH_REPORT.md");
-    if let Err(e) = std::fs::write(&report_path, &report) {
-        eprintln!("  Report error: {e}");
-    } else {
-        println!("  exported GRAPH_REPORT.md");
+    // Report goes to both out_dir and vault
+    let _ = std::fs::write(out_dir.join("GRAPH_REPORT.md"), &report);
+    let _ = std::fs::write(vault_dir.join("GRAPH_REPORT.md"), &report);
+
+    // Step 8: Obsidian vault (clean — no binary files)
+    match engram::export::to_obsidian(
+        &graph,
+        &communities,
+        &vault_dir,
+        Some(&community_labels),
+        Some(&cohesion),
+    ) {
+        Ok(count) => println!("  vault: {count} notes in {}", vault_dir.display()),
+        Err(e) => eprintln!("  vault error: {e}"),
     }
 
-    println!("  done! Output in {}", out_dir.display());
+    println!("  done! Data: {} | Vault: {}", out_dir.display(), vault_dir.display());
 }
 
 fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::path::Path) {
@@ -497,6 +508,7 @@ fn cmd_update(path: &std::path::Path) {
 
         let out_dir = path.join("engram-out");
         let _ = std::fs::create_dir_all(&out_dir);
+        let _ = engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5"));
         let _ = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
         let _ = engram::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
 
@@ -508,7 +520,7 @@ fn cmd_update(path: &std::path::Path) {
 }
 
 fn cmd_cluster_only(path: &std::path::Path) {
-    let graph_path = path.join("engram-out/graph.json");
+    let graph_path = path.join("engram-out/engram.h5");
     let graph = match engram::serve::load_graph_smart(&graph_path) {
         Ok(g) => g,
         Err(e) => {
@@ -539,9 +551,10 @@ fn cmd_cluster_only(path: &std::path::Path) {
         .collect();
 
     let out_dir = path.join("engram-out");
+    let _ = engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5"));
     let _ = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
     let _ = engram::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
-    println!("  re-exported graph.json and graph.html");
+    println!("  re-exported engram.h5, graph.json, graph.html");
 }
 
 #[allow(unused_variables)]
@@ -674,7 +687,7 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
             let pattern = params.get("pattern").and_then(|v| v.as_str());
-            let graph_path = std::path::Path::new("engram-out/graph.json");
+            let graph_path = std::path::Path::new("engram-out/engram.h5");
             match engram::knowledge::save_insight(graph_path, None, label, description, &node_ids, pattern) {
                 Ok(()) => serde_json::json!({"status": "saved", "label": label, "nodes": node_ids.len()}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
@@ -687,7 +700,7 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
-            let graph_path = std::path::Path::new("engram-out/graph.json");
+            let graph_path = std::path::Path::new("engram-out/engram.h5");
             match engram::knowledge::save_note(graph_path, None, title, content, &related) {
                 Ok(()) => serde_json::json!({"status": "saved", "title": title}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
@@ -698,7 +711,7 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
             let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
             let relation = params.get("relation").and_then(|v| v.as_str()).unwrap_or("related_to");
             let description = params.get("description").and_then(|v| v.as_str());
-            let graph_path = std::path::Path::new("engram-out/graph.json");
+            let graph_path = std::path::Path::new("engram-out/engram.h5");
             match engram::knowledge::add_edge(graph_path, source, target, relation, description) {
                 Ok(()) => serde_json::json!({"status": "saved", "source": source, "target": target}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
@@ -734,8 +747,8 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
                 "lesson" => engram::learn::KnowledgeType::Lesson,
                 other => engram::learn::KnowledgeType::Custom(other.to_string()),
             };
-            let vault = std::path::Path::new("engram-out");
-            let graph_path = std::path::Path::new("engram-out/graph.json");
+            let vault = std::path::Path::new("engram-out/vault");
+            let graph_path = std::path::Path::new("engram-out/engram.h5");
             match engram::learn::learn(vault, Some(graph_path), kt, title, description, &related, &tags) {
                 Ok(_) => serde_json::json!({"status": "learned", "title": title}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
@@ -744,7 +757,7 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
         "recall" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
-            let vault = std::path::Path::new("engram-out");
+            let vault = std::path::Path::new("engram-out/vault");
             let results = engram::learn::query_knowledge(vault, query, type_filter);
             let items: Vec<serde_json::Value> = results.iter().map(|k| {
                 serde_json::json!({
@@ -759,7 +772,7 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
             serde_json::json!(items)
         }
         "knowledge_context" => {
-            let vault = std::path::Path::new("engram-out");
+            let vault = std::path::Path::new("engram-out/vault");
             let max = params.get("max_items").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
             serde_json::json!(engram::learn::knowledge_context(vault, max))
         }

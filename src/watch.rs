@@ -129,7 +129,13 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
             .collect();
 
         let out_dir = watch_path.join("engram-out");
+        let vault_dir = vault_path
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| out_dir.join("vault"));
         let _ = std::fs::create_dir_all(&out_dir);
+        let _ = std::fs::create_dir_all(&vault_dir);
+
+        let _ = crate::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5"));
         let _ = crate::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
         let _ = crate::export::to_html(
             &graph,
@@ -138,13 +144,12 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
             Some(&community_labels),
         );
 
-        // Regenerate vault if configured
-        if let Some(vp) = vault_path {
-            let _ = std::fs::create_dir_all(vp);
+        // Regenerate vault
+        {
             match crate::export::to_obsidian(
                 &graph,
                 &communities,
-                vp,
+                &vault_dir,
                 Some(&community_labels),
                 Some(&cohesion),
             ) {
