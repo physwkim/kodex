@@ -11,9 +11,7 @@ const BLOCKED_HOSTS: &[&str] = &["metadata.google.internal", "metadata.google.co
 pub fn validate_url(url: &str) -> crate::error::Result<String> {
     // Parse scheme
     let scheme_end = url.find("://").ok_or_else(|| {
-        crate::error::KodexError::UrlValidation(format!(
-            "Invalid URL (no scheme): {url:?}"
-        ))
+        crate::error::KodexError::UrlValidation(format!("Invalid URL (no scheme): {url:?}"))
     })?;
     let scheme = &url[..scheme_end].to_lowercase();
 
@@ -30,13 +28,17 @@ pub fn validate_url(url: &str) -> crate::error::Result<String> {
         .next()
         .unwrap_or(after_scheme)
         .split('@')
-        .last()
+        .next_back()
         .unwrap_or(after_scheme);
 
     // Strip port if present
     let hostname = if host_part.starts_with('[') {
         // IPv6
-        host_part.split(']').next().unwrap_or(host_part).trim_start_matches('[')
+        host_part
+            .split(']')
+            .next()
+            .unwrap_or(host_part)
+            .trim_start_matches('[')
     } else {
         host_part.split(':').next().unwrap_or(host_part)
     };
@@ -85,7 +87,7 @@ fn is_blocked_ip(ip: &IpAddr) -> bool {
                 || v6.is_unspecified()
                 || (v6.segments()[0] & 0xffc0) == 0xfe80   // fe80::/10 link-local
                 || (v6.segments()[0] & 0xfe00) == 0xfc00   // fc00::/7 unique local
-                || (v6.segments()[0] & 0xff00) == 0xff00   // ff00::/8 multicast
+                || (v6.segments()[0] & 0xff00) == 0xff00 // ff00::/8 multicast
         }
     }
 }

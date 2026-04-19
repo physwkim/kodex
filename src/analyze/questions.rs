@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use super::god_nodes;
 use crate::graph::KodexGraph;
 use crate::types::Confidence;
-use super::god_nodes;
 
 /// A suggested question the graph is positioned to answer.
 #[derive(Debug, Clone)]
@@ -45,8 +45,7 @@ pub fn suggest_questions(
         let inferred_count = graph
             .edges()
             .filter(|(s, t, e)| {
-                e.confidence == Confidence::INFERRED
-                    && (*s == god.id || *t == god.id)
+                e.confidence == Confidence::INFERRED && (*s == god.id || *t == god.id)
             })
             .count();
         if inferred_count >= 3 {
@@ -66,10 +65,7 @@ pub fn suggest_questions(
         if graph.degree(node_id) <= 1 {
             if let Some(node) = graph.get_node(node_id) {
                 questions.push(SuggestedQuestion {
-                    question: format!(
-                        "Why is {} isolated? Is it missing connections?",
-                        node.label
-                    ),
+                    question: format!("Why is {} isolated? Is it missing connections?", node.label),
                     question_type: "isolated_nodes".to_string(),
                     node_id: Some(node_id.clone()),
                 });

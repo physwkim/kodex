@@ -69,8 +69,8 @@ pub fn run_benchmark(
         };
     }
 
-    let avg_query_tokens = per_question.iter().map(|p| p.query_tokens).sum::<usize>()
-        / per_question.len();
+    let avg_query_tokens =
+        per_question.iter().map(|p| p.query_tokens).sum::<usize>() / per_question.len();
     let reduction_ratio = if avg_query_tokens > 0 {
         (corpus_tokens as f64 / avg_query_tokens as f64 * 10.0).round() / 10.0
     } else {
@@ -98,10 +98,19 @@ pub fn print_benchmark(result: &BenchmarkResult) {
 
     println!("\nkodex token reduction benchmark");
     println!("{}", "\u{2500}".repeat(50));
-    println!("  Corpus:          {} words \u{2192} ~{} tokens (naive)", result.corpus_words, result.corpus_tokens);
-    println!("  Graph:           {} nodes, {} edges", result.nodes, result.edges);
+    println!(
+        "  Corpus:          {} words \u{2192} ~{} tokens (naive)",
+        result.corpus_words, result.corpus_tokens
+    );
+    println!(
+        "  Graph:           {} nodes, {} edges",
+        result.nodes, result.edges
+    );
     println!("  Avg query cost:  ~{} tokens", result.avg_query_tokens);
-    println!("  Reduction:       {}x fewer tokens per query", result.reduction_ratio);
+    println!(
+        "  Reduction:       {}x fewer tokens per query",
+        result.reduction_ratio
+    );
     println!("\n  Per question:");
     for p in &result.per_question {
         let display = if p.question.len() > 55 {
@@ -143,7 +152,11 @@ fn query_subgraph_tokens(graph: &KodexGraph, question: &str, depth: usize) -> us
         .collect();
 
     scored.sort_by(|a, b| b.0.cmp(&a.0));
-    let start_nodes: Vec<String> = scored.iter().take(3).map(|(_, id)| id.to_string()).collect();
+    let start_nodes: Vec<String> = scored
+        .iter()
+        .take(3)
+        .map(|(_, id)| id.to_string())
+        .collect();
 
     if start_nodes.is_empty() {
         return 0;
@@ -181,15 +194,9 @@ fn query_subgraph_tokens(graph: &KodexGraph, question: &str, depth: usize) -> us
     }
 
     for (src, tgt, edge) in graph.edges() {
-        if visited.contains(&src.to_string()) && visited.contains(&tgt.to_string()) {
-            let src_label = graph
-                .get_node(src)
-                .map(|n| n.label.as_str())
-                .unwrap_or(src);
-            let tgt_label = graph
-                .get_node(tgt)
-                .map(|n| n.label.as_str())
-                .unwrap_or(tgt);
+        if visited.contains(src) && visited.contains(tgt) {
+            let src_label = graph.get_node(src).map(|n| n.label.as_str()).unwrap_or(src);
+            let tgt_label = graph.get_node(tgt).map(|n| n.label.as_str()).unwrap_or(tgt);
             text_len += format!("EDGE {src_label} --{}--> {tgt_label}\n", edge.relation).len();
         }
     }

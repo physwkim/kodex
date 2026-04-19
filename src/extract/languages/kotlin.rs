@@ -35,8 +35,12 @@ fn import_kotlin(
 }
 
 pub static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
-    ts_language: || tree_sitter_kotlin::LANGUAGE.into(),
-    class_types: &["class_declaration", "object_declaration", "interface_declaration"],
+    ts_language: || tree_sitter_kotlin::language().into(),
+    class_types: &[
+        "class_declaration",
+        "object_declaration",
+        "interface_declaration",
+    ],
     function_types: &["function_declaration"],
     import_types: &["import_header"],
     call_types: &["call_expression"],

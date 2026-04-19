@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 
-use crate::graph::KodexGraph;
 use super::node_community_map;
+use crate::graph::KodexGraph;
 
 /// Export graph to GraphML XML format (compatible with Gephi, yEd).
 pub fn to_graphml(
@@ -22,12 +22,36 @@ pub fn to_graphml(
     .unwrap();
 
     // Key declarations
-    writeln!(xml, r#"  <key id="label" for="node" attr.name="label" attr.type="string"/>"#).unwrap();
-    writeln!(xml, r#"  <key id="file_type" for="node" attr.name="file_type" attr.type="string"/>"#).unwrap();
-    writeln!(xml, r#"  <key id="source_file" for="node" attr.name="source_file" attr.type="string"/>"#).unwrap();
-    writeln!(xml, r#"  <key id="community" for="node" attr.name="community" attr.type="int"/>"#).unwrap();
-    writeln!(xml, r#"  <key id="relation" for="edge" attr.name="relation" attr.type="string"/>"#).unwrap();
-    writeln!(xml, r#"  <key id="confidence" for="edge" attr.name="confidence" attr.type="string"/>"#).unwrap();
+    writeln!(
+        xml,
+        r#"  <key id="label" for="node" attr.name="label" attr.type="string"/>"#
+    )
+    .unwrap();
+    writeln!(
+        xml,
+        r#"  <key id="file_type" for="node" attr.name="file_type" attr.type="string"/>"#
+    )
+    .unwrap();
+    writeln!(
+        xml,
+        r#"  <key id="source_file" for="node" attr.name="source_file" attr.type="string"/>"#
+    )
+    .unwrap();
+    writeln!(
+        xml,
+        r#"  <key id="community" for="node" attr.name="community" attr.type="int"/>"#
+    )
+    .unwrap();
+    writeln!(
+        xml,
+        r#"  <key id="relation" for="edge" attr.name="relation" attr.type="string"/>"#
+    )
+    .unwrap();
+    writeln!(
+        xml,
+        r#"  <key id="confidence" for="edge" attr.name="confidence" attr.type="string"/>"#
+    )
+    .unwrap();
     writeln!(xml, r#"  <graph id="G" edgedefault="directed">"#).unwrap();
 
     // Nodes
@@ -35,9 +59,24 @@ pub fn to_graphml(
         if let Some(node) = graph.get_node(id) {
             let cid = node_comm.get(id).copied().unwrap_or(0);
             writeln!(xml, r#"    <node id="{}">"#, xml_escape(id)).unwrap();
-            writeln!(xml, r#"      <data key="label">{}</data>"#, xml_escape(&node.label)).unwrap();
-            writeln!(xml, r#"      <data key="file_type">{}</data>"#, node.file_type).unwrap();
-            writeln!(xml, r#"      <data key="source_file">{}</data>"#, xml_escape(&node.source_file)).unwrap();
+            writeln!(
+                xml,
+                r#"      <data key="label">{}</data>"#,
+                xml_escape(&node.label)
+            )
+            .unwrap();
+            writeln!(
+                xml,
+                r#"      <data key="file_type">{}</data>"#,
+                node.file_type
+            )
+            .unwrap();
+            writeln!(
+                xml,
+                r#"      <data key="source_file">{}</data>"#,
+                xml_escape(&node.source_file)
+            )
+            .unwrap();
             writeln!(xml, r#"      <data key="community">{cid}</data>"#).unwrap();
             writeln!(xml, "    </node>").unwrap();
         }
@@ -52,8 +91,18 @@ pub fn to_graphml(
             xml_escape(tgt)
         )
         .unwrap();
-        writeln!(xml, r#"      <data key="relation">{}</data>"#, xml_escape(&edge.relation)).unwrap();
-        writeln!(xml, r#"      <data key="confidence">{}</data>"#, edge.confidence).unwrap();
+        writeln!(
+            xml,
+            r#"      <data key="relation">{}</data>"#,
+            xml_escape(&edge.relation)
+        )
+        .unwrap();
+        writeln!(
+            xml,
+            r#"      <data key="confidence">{}</data>"#,
+            edge.confidence
+        )
+        .unwrap();
         writeln!(xml, "    </edge>").unwrap();
     }
 

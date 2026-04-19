@@ -36,7 +36,12 @@ fn import_csharp(
 
 pub static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
     ts_language: || tree_sitter_c_sharp::LANGUAGE.into(),
-    class_types: &["class_declaration", "interface_declaration", "struct_declaration", "enum_declaration"],
+    class_types: &[
+        "class_declaration",
+        "interface_declaration",
+        "struct_declaration",
+        "enum_declaration",
+    ],
     function_types: &["method_declaration", "constructor_declaration"],
     import_types: &["using_directive"],
     call_types: &["invocation_expression"],
@@ -45,7 +50,11 @@ pub static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_access_expression"],
     call_accessor_field: "name",
-    function_boundary_types: &["method_declaration", "constructor_declaration", "lambda_expression"],
+    function_boundary_types: &[
+        "method_declaration",
+        "constructor_declaration",
+        "lambda_expression",
+    ],
     function_label_parens: true,
     import_handler: Some(import_csharp),
     resolve_function_name: None,

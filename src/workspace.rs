@@ -132,10 +132,7 @@ pub fn find_config(start: &Path) -> Option<PathBuf> {
 }
 
 /// Run the workspace: build each project, merge graphs, export.
-pub fn run(
-    config: &WorkspaceConfig,
-    vault_override: Option<&Path>,
-) -> Result<()> {
+pub fn run(config: &WorkspaceConfig, vault_override: Option<&Path>) -> Result<()> {
     let vault_path = vault_override
         .map(PathBuf::from)
         .or_else(|| config.vault.clone());
@@ -177,16 +174,22 @@ pub fn run(
 
             // Tag nodes with project name
             for node in &mut extraction.nodes {
-                node.source_file = format!("{project_name}/{}", node.source_file
-                    .strip_prefix(project_path.to_str().unwrap_or(""))
-                    .unwrap_or(&node.source_file)
-                    .trim_start_matches('/'));
+                node.source_file = format!(
+                    "{project_name}/{}",
+                    node.source_file
+                        .strip_prefix(project_path.to_str().unwrap_or(""))
+                        .unwrap_or(&node.source_file)
+                        .trim_start_matches('/')
+                );
             }
             for edge in &mut extraction.edges {
-                edge.source_file = format!("{project_name}/{}", edge.source_file
-                    .strip_prefix(project_path.to_str().unwrap_or(""))
-                    .unwrap_or(&edge.source_file)
-                    .trim_start_matches('/'));
+                edge.source_file = format!(
+                    "{project_name}/{}",
+                    edge.source_file
+                        .strip_prefix(project_path.to_str().unwrap_or(""))
+                        .unwrap_or(&edge.source_file)
+                        .trim_start_matches('/')
+                );
             }
 
             println!(
@@ -231,7 +234,7 @@ pub fn run(
     }
 
     // Create cross-project edges for shared names
-    for (_label, occurrences) in &name_to_projects {
+    for occurrences in name_to_projects.values() {
         if occurrences.len() < 2 {
             continue;
         }
@@ -394,9 +397,16 @@ fn collect_knowledge(projects: &[PathBuf], unified_vault: &Path) -> Result<usize
             } else {
                 // Insert project name: _KNOWLEDGE_Foo.md → _KNOWLEDGE_project_Foo.md
                 let prefix_end = filename.find('_').unwrap_or(0);
-                let second_underscore = filename[prefix_end + 1..].find('_').map(|p| p + prefix_end + 1);
+                let second_underscore = filename[prefix_end + 1..]
+                    .find('_')
+                    .map(|p| p + prefix_end + 1);
                 match second_underscore {
-                    Some(pos) => format!("{}{}_{}", &filename[..pos + 1], project_name, &filename[pos..]),
+                    Some(pos) => format!(
+                        "{}{}_{}",
+                        &filename[..pos + 1],
+                        project_name,
+                        &filename[pos..]
+                    ),
                     None => format!("{project_name}_{filename}"),
                 }
             };
@@ -460,8 +470,7 @@ fn distribute_knowledge(unified_vault: &Path, projects: &[PathBuf]) -> Result<us
         };
 
         // Extract origin from frontmatter
-        let origin = extract_frontmatter_field(&content, "origin")
-            .unwrap_or_default();
+        let origin = extract_frontmatter_field(&content, "origin").unwrap_or_default();
 
         knowledge_files.push((filename, content, origin));
     }

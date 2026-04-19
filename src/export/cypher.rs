@@ -3,8 +3,8 @@ use std::path::Path;
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::graph::KodexGraph;
 use super::cypher_escape;
+use crate::graph::KodexGraph;
 
 static NON_ALNUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^A-Za-z0-9_]").unwrap());
 

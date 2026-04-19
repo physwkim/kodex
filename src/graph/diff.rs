@@ -34,14 +34,8 @@ pub fn graph_diff(old: &KodexGraph, new: &KodexGraph) -> GraphDiff {
         .map(|(s, t, _)| (s.to_string(), t.to_string()))
         .collect();
 
-    let added_edges: Vec<(String, String)> = new_edges
-        .difference(&old_edges)
-        .cloned()
-        .collect();
-    let removed_edges: Vec<(String, String)> = old_edges
-        .difference(&new_edges)
-        .cloned()
-        .collect();
+    let added_edges: Vec<(String, String)> = new_edges.difference(&old_edges).cloned().collect();
+    let removed_edges: Vec<(String, String)> = old_edges.difference(&new_edges).cloned().collect();
 
     GraphDiff {
         added_nodes,

@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 #[cfg(feature = "fetch")]
 use crate::security::sanitize_label;
+use std::path::{Path, PathBuf};
 
 /// URL type classification.
 pub fn detect_url_type(url: &str) -> &'static str {

@@ -1,6 +1,6 @@
+pub mod call_graph;
 pub mod config;
 pub mod generic;
-pub mod call_graph;
 pub mod languages;
 
 #[cfg(feature = "extract")]
@@ -132,9 +132,10 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
     // Cross-file Python import resolution
     #[cfg(feature = "lang-python")]
     {
-        let py_paths: Vec<&PathBuf> = paths.iter().filter(|p| {
-            p.extension().and_then(|e| e.to_str()) == Some("py")
-        }).collect();
+        let py_paths: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("py"))
+            .collect();
         if !py_paths.is_empty() {
             let cross_edges = resolve_cross_file_imports(&per_file, &py_paths, &all_nodes);
             all_edges.extend(cross_edges);
@@ -299,7 +300,14 @@ fn walk_python_imports(
                 // Recurse into children
                 let cursor = &mut node.walk();
                 for child in node.children(cursor) {
-                    walk_python_imports(&child, source, str_path, local_classes, stem_to_entities, new_edges);
+                    walk_python_imports(
+                        &child,
+                        source,
+                        str_path,
+                        local_classes,
+                        stem_to_entities,
+                        new_edges,
+                    );
                 }
                 return;
             }
@@ -324,9 +332,10 @@ fn walk_python_imports(
                 imported_names.push(name);
             } else if child.kind() == "aliased_import" {
                 if let Some(name_node) = child.child_by_field_name("name") {
-                    let name = std::str::from_utf8(&source[name_node.start_byte()..name_node.end_byte()])
-                        .unwrap_or("")
-                        .to_string();
+                    let name =
+                        std::str::from_utf8(&source[name_node.start_byte()..name_node.end_byte()])
+                            .unwrap_or("")
+                            .to_string();
                     imported_names.push(name);
                 }
             }
@@ -358,7 +367,14 @@ fn walk_python_imports(
 
     let cursor = &mut node.walk();
     for child in node.children(cursor) {
-        walk_python_imports(&child, source, str_path, local_classes, stem_to_entities, new_edges);
+        walk_python_imports(
+            &child,
+            source,
+            str_path,
+            local_classes,
+            stem_to_entities,
+            new_edges,
+        );
     }
 }
 
@@ -372,8 +388,13 @@ fn extract_python_rationale(
     use tree_sitter::Parser;
 
     const RATIONALE_PREFIXES: &[&str] = &[
-        "# NOTE:", "# IMPORTANT:", "# HACK:", "# WHY:",
-        "# RATIONALE:", "# TODO:", "# FIXME:",
+        "# NOTE:",
+        "# IMPORTANT:",
+        "# HACK:",
+        "# WHY:",
+        "# RATIONALE:",
+        "# TODO:",
+        "# FIXME:",
     ];
 
     let mut nodes = Vec::new();
@@ -401,21 +422,45 @@ fn extract_python_rationale(
 
     // Module-level docstring
     if let Some((text, line)) = get_docstring(&tree.root_node(), &source) {
-        add_rationale_node(&text, line, &file_nid, stem, &str_path,
-                          &mut nodes, &mut edges, &mut seen_ids);
+        add_rationale_node(
+            &text,
+            line,
+            &file_nid,
+            stem,
+            &str_path,
+            &mut nodes,
+            &mut edges,
+            &mut seen_ids,
+        );
     }
 
     // Class and function docstrings
-    walk_docstrings(&tree.root_node(), &source, stem, &file_nid,
-                    &mut nodes, &mut edges, &mut seen_ids, &str_path);
+    walk_docstrings(
+        &tree.root_node(),
+        &source,
+        stem,
+        &file_nid,
+        &mut nodes,
+        &mut edges,
+        &mut seen_ids,
+        &str_path,
+    );
 
     // Rationale comments
     let source_text = String::from_utf8_lossy(&source);
     for (lineno, line_text) in source_text.lines().enumerate() {
         let stripped = line_text.trim();
         if RATIONALE_PREFIXES.iter().any(|p| stripped.starts_with(p)) {
-            add_rationale_node(stripped, lineno + 1, &file_nid, stem, &str_path,
-                              &mut nodes, &mut edges, &mut seen_ids);
+            add_rationale_node(
+                stripped,
+                lineno + 1,
+                &file_nid,
+                stem,
+                &str_path,
+                &mut nodes,
+                &mut edges,
+                &mut seen_ids,
+            );
         }
     }
 
@@ -424,29 +469,29 @@ fn extract_python_rationale(
 
 #[cfg(feature = "lang-python")]
 fn get_docstring(body_node: &tree_sitter::Node, source: &[u8]) -> Option<(String, usize)> {
+    // Only check first statement in body
     let cursor = &mut body_node.walk();
-    for child in body_node.children(cursor) {
-        if child.kind() == "expression_statement" {
-            let inner = &mut child.walk();
-            for sub in child.children(inner) {
-                if sub.kind() == "string" || sub.kind() == "concatenated_string" {
-                    let text = std::str::from_utf8(&source[sub.start_byte()..sub.end_byte()])
-                        .unwrap_or("")
-                        .trim_matches('"')
-                        .trim_matches('\'')
-                        .trim();
-                    if text.len() > 20 {
-                        return Some((text.to_string(), child.start_position().row + 1));
-                    }
+    let child = body_node.children(cursor).next()?;
+    if child.kind() == "expression_statement" {
+        let inner = &mut child.walk();
+        for sub in child.children(inner) {
+            if sub.kind() == "string" || sub.kind() == "concatenated_string" {
+                let text = std::str::from_utf8(&source[sub.start_byte()..sub.end_byte()])
+                    .unwrap_or("")
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .trim();
+                if text.len() > 20 {
+                    return Some((text.to_string(), child.start_position().row + 1));
                 }
             }
         }
-        break; // Only check first statement
     }
     None
 }
 
 #[cfg(feature = "lang-python")]
+#[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
 fn walk_docstrings(
     node: &tree_sitter::Node,
     source: &[u8],
@@ -462,32 +507,41 @@ fn walk_docstrings(
         let name_node = node.child_by_field_name("name");
         let body = node.child_by_field_name("body");
         if let (Some(nn), Some(b)) = (name_node, body) {
-            let class_name = std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()])
-                .unwrap_or("");
+            let class_name =
+                std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()]).unwrap_or("");
             let nid = crate::id::make_id(&[stem, class_name]);
             if let Some((text, line)) = get_docstring(&b, source) {
-                let label: String = text.chars().take(80).collect::<String>()
-                    .replace('\n', " ").replace('\r', " ");
+                let label: String = text
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+                    .replace(['\n', '\r'], " ");
                 let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
                 if seen_ids.insert(rid.clone()) {
                     nodes.push(crate::types::Node {
-                        id: rid.clone(), label,
+                        id: rid.clone(),
+                        label,
                         file_type: crate::types::FileType::Rationale,
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         confidence: Some(crate::types::Confidence::EXTRACTED),
                         confidence_score: Some(1.0),
-                        community: None, norm_label: None, degree: None,
+                        community: None,
+                        norm_label: None,
+                        degree: None,
                     });
                 }
                 edges.push(crate::types::Edge {
-                    source: rid, target: nid.clone(),
+                    source: rid,
+                    target: nid.clone(),
                     relation: "rationale_for".to_string(),
                     confidence: crate::types::Confidence::EXTRACTED,
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
-                    confidence_score: Some(1.0), weight: 1.0,
-                    original_src: None, original_tgt: None,
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
                 });
             }
             let cursor = &mut b.walk();
@@ -501,32 +555,41 @@ fn walk_docstrings(
         let name_node = node.child_by_field_name("name");
         let body = node.child_by_field_name("body");
         if let (Some(nn), Some(b)) = (name_node, body) {
-            let func_name = std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()])
-                .unwrap_or("");
+            let func_name =
+                std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()]).unwrap_or("");
             let nid = crate::id::make_id(&[stem, func_name]);
             if let Some((text, line)) = get_docstring(&b, source) {
-                let label: String = text.chars().take(80).collect::<String>()
-                    .replace('\n', " ").replace('\r', " ");
+                let label: String = text
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+                    .replace(['\n', '\r'], " ");
                 let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
                 if seen_ids.insert(rid.clone()) {
                     nodes.push(crate::types::Node {
-                        id: rid.clone(), label,
+                        id: rid.clone(),
+                        label,
                         file_type: crate::types::FileType::Rationale,
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
                         confidence: Some(crate::types::Confidence::EXTRACTED),
                         confidence_score: Some(1.0),
-                        community: None, norm_label: None, degree: None,
+                        community: None,
+                        norm_label: None,
+                        degree: None,
                     });
                 }
                 edges.push(crate::types::Edge {
-                    source: rid, target: nid,
+                    source: rid,
+                    target: nid,
                     relation: "rationale_for".to_string(),
                     confidence: crate::types::Confidence::EXTRACTED,
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
-                    confidence_score: Some(1.0), weight: 1.0,
-                    original_src: None, original_tgt: None,
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
                 });
             }
         }
@@ -534,7 +597,9 @@ fn walk_docstrings(
     }
     let cursor = &mut node.walk();
     for child in node.children(cursor) {
-        walk_docstrings(&child, source, stem, parent_nid, nodes, edges, seen_ids, str_path);
+        walk_docstrings(
+            &child, source, stem, parent_nid, nodes, edges, seen_ids, str_path,
+        );
     }
 }
 
@@ -580,8 +645,7 @@ fn extract_file(#[allow(unused)] path: &Path, lang: &str) -> ExtractionResult {
         "ruby" => generic::extract_generic(path, &languages::ruby::RUBY_CONFIG),
         #[cfg(feature = "lang-csharp")]
         "csharp" => generic::extract_generic(path, &languages::csharp::CSHARP_CONFIG),
-        #[cfg(feature = "lang-kotlin")]
-        "kotlin" => generic::extract_generic(path, &languages::kotlin::KOTLIN_CONFIG),
+        // kotlin disabled: ABI mismatch
         #[cfg(feature = "lang-scala")]
         "scala" => generic::extract_generic(path, &languages::scala::SCALA_CONFIG),
         #[cfg(feature = "lang-php")]
@@ -617,6 +681,7 @@ fn infer_common_root(paths: &[PathBuf]) -> Option<PathBuf> {
 
 /// Add a rationale node and its edge to the graph.
 #[cfg(feature = "lang-python")]
+#[allow(clippy::too_many_arguments)]
 fn add_rationale_node(
     text: &str,
     line: usize,
@@ -627,8 +692,11 @@ fn add_rationale_node(
     edges: &mut Vec<crate::types::Edge>,
     seen_ids: &mut std::collections::HashSet<String>,
 ) {
-    let label: String = text.chars().take(80).collect::<String>()
-        .replace('\n', " ").replace('\r', " ");
+    let label: String = text
+        .chars()
+        .take(80)
+        .collect::<String>()
+        .replace(['\n', '\r'], " ");
     let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
     if seen_ids.insert(rid.clone()) {
         nodes.push(crate::types::Node {

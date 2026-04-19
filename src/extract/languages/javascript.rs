@@ -21,13 +21,17 @@ fn import_js(
     let cursor = &mut node.walk();
     for child in node.children(cursor) {
         if child.kind() == "string" || child.kind() == "string_fragment" {
-            let raw = read_text(&child, source).trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ' ');
+            let raw = read_text(&child, source)
+                .trim_matches(|c| c == '\'' || c == '"' || c == '`' || c == ' ');
             if raw.is_empty() {
                 break;
             }
             let target_id = if raw.starts_with('.') {
                 // Relative import
-                make_id(&[raw.trim_start_matches("./").trim_end_matches(".js").trim_end_matches(".ts")])
+                make_id(&[raw
+                    .trim_start_matches("./")
+                    .trim_end_matches(".js")
+                    .trim_end_matches(".ts")])
             } else {
                 // Bare/scoped import - use last segment
                 let module_name = raw.rsplit('/').next().unwrap_or(raw);
@@ -59,7 +63,11 @@ pub static JS_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_expression"],
     call_accessor_field: "property",
-    function_boundary_types: &["function_declaration", "arrow_function", "method_definition"],
+    function_boundary_types: &[
+        "function_declaration",
+        "arrow_function",
+        "method_definition",
+    ],
     function_label_parens: true,
     import_handler: Some(import_js),
     resolve_function_name: None,

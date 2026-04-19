@@ -38,7 +38,7 @@ pub static RUBY_CONFIG: LanguageConfig = LanguageConfig {
     ts_language: || tree_sitter_ruby::LANGUAGE.into(),
     class_types: &["class", "module"],
     function_types: &["method", "singleton_method"],
-    import_types: &["call"],  // require/require_relative are call nodes
+    import_types: &["call"], // require/require_relative are call nodes
     call_types: &["call"],
     name_field: "name",
     body_field: "body",

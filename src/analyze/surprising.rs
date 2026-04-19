@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use super::helpers::{is_concept_node, is_file_node};
+use super::node_community_map;
 use crate::graph::KodexGraph;
 use crate::types::Confidence;
-use super::node_community_map;
-use super::helpers::{is_file_node, is_concept_node};
 
 /// A surprising connection between two nodes.
 #[derive(Debug, Clone)]
@@ -26,9 +26,7 @@ pub fn surprising_connections(
     communities: Option<&HashMap<usize, Vec<String>>>,
     top_n: usize,
 ) -> Vec<SurprisingConnection> {
-    let node_comm = communities
-        .map(|c| node_community_map(c))
-        .unwrap_or_default();
+    let node_comm = communities.map(node_community_map).unwrap_or_default();
 
     let mut surprises: Vec<SurprisingConnection> = Vec::new();
 

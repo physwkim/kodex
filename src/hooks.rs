@@ -94,7 +94,11 @@ pub fn status(path: &Path) -> String {
             && std::fs::read_to_string(&hook_path)
                 .unwrap_or_default()
                 .contains(HOOK_MARKER);
-        let status = if installed { "installed" } else { "not installed" };
+        let status = if installed {
+            "installed"
+        } else {
+            "not installed"
+        };
         results.push(format!("{hook_name}: {status}"));
     }
 

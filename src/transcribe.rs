@@ -12,9 +12,12 @@ pub fn download_audio(url: &str, output_dir: &Path) -> crate::error::Result<Path
     let output = std::process::Command::new("yt-dlp")
         .args([
             "-x",
-            "--audio-format", "wav",
-            "--audio-quality", "0",
-            "-o", &format!("{}/%(title)s.%(ext)s", output_dir.display()),
+            "--audio-format",
+            "wav",
+            "--audio-quality",
+            "0",
+            "-o",
+            &format!("{}/%(title)s.%(ext)s", output_dir.display()),
             url,
         ])
         .output()
@@ -51,12 +54,9 @@ pub fn download_audio(url: &str, output_dir: &Path) -> crate::error::Result<Path
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
     });
 
-    entries
-        .last()
-        .map(|e| e.path())
-        .ok_or_else(|| {
-            crate::error::KodexError::Other("No audio file found after download".to_string())
-        })
+    entries.last().map(|e| e.path()).ok_or_else(|| {
+        crate::error::KodexError::Other("No audio file found after download".to_string())
+    })
 }
 
 /// Build a Whisper prompt from god node labels for domain-aware transcription.
@@ -113,7 +113,9 @@ pub fn transcribe(
 
     // Load model
     let ctx = WhisperContext::new_with_params(&model_path, WhisperContextParameters::default())
-        .map_err(|e| crate::error::KodexError::Other(format!("Failed to load Whisper model: {e}")))?;
+        .map_err(|e| {
+            crate::error::KodexError::Other(format!("Failed to load Whisper model: {e}"))
+        })?;
 
     // Read and convert audio to 16kHz mono f32 PCM
     let samples = load_audio_samples(audio_path)?;
@@ -130,10 +132,12 @@ pub fn transcribe(
     }
 
     // Run inference
-    let mut state = ctx.create_state()
+    let mut state = ctx
+        .create_state()
         .map_err(|e| crate::error::KodexError::Other(format!("Failed to create state: {e}")))?;
 
-    state.full(params, &samples)
+    state
+        .full(params, &samples)
         .map_err(|e| crate::error::KodexError::Other(format!("Transcription failed: {e}")))?;
 
     // Collect segments
@@ -192,11 +196,15 @@ fn load_audio_samples(path: &Path) -> crate::error::Result<Vec<f32>> {
         let tmp = path.with_extension("_16k.wav");
         let status = std::process::Command::new("ffmpeg")
             .args([
-                "-y", "-i",
+                "-y",
+                "-i",
                 path.to_str().unwrap_or(""),
-                "-ar", "16000",
-                "-ac", "1",
-                "-f", "wav",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
                 tmp.to_str().unwrap_or(""),
             ])
             .stdout(std::process::Stdio::null())

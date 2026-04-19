@@ -24,7 +24,12 @@ fn import_python(
             for child in node.children(cursor) {
                 if child.kind() == "dotted_name" || child.kind() == "aliased_import" {
                     let raw = read_text(&child, source);
-                    let module_name = raw.split(" as ").next().unwrap_or(raw).trim().trim_start_matches('.');
+                    let module_name = raw
+                        .split(" as ")
+                        .next()
+                        .unwrap_or(raw)
+                        .trim()
+                        .trim_start_matches('.');
                     if !module_name.is_empty() {
                         result.push(ImportEdge {
                             target_id: make_id(&[module_name]),

@@ -20,9 +20,9 @@ fn import_lua(
     let raw = read_text(node, source);
     if raw.contains("require") {
         // Extract the module name from require("foo") or require 'foo'
-        if let Some(start) = raw.find(|c| c == '\'' || c == '"') {
+        if let Some(start) = raw.find(['\'', '"']) {
             let rest = &raw[start + 1..];
-            if let Some(end) = rest.find(|c| c == '\'' || c == '"') {
+            if let Some(end) = rest.find(['\'', '"']) {
                 let module = &rest[..end];
                 if !module.is_empty() {
                     result.push(ImportEdge {
@@ -41,7 +41,7 @@ pub static LUA_CONFIG: LanguageConfig = LanguageConfig {
     ts_language: || tree_sitter_lua::LANGUAGE.into(),
     class_types: &[],
     function_types: &["function_declaration", "function_definition"],
-    import_types: &["function_call"],  // require() calls
+    import_types: &["function_call"], // require() calls
     call_types: &["function_call"],
     name_field: "name",
     body_field: "body",

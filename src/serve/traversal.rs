@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use crate::graph::KodexGraph;
 use crate::export::strip_diacritics;
+use crate::graph::KodexGraph;
 
 /// Score nodes by keyword matching (diacritics-insensitive).
 pub fn score_nodes(graph: &KodexGraph, terms: &[String]) -> Vec<(usize, String)> {
@@ -103,14 +103,8 @@ pub fn subgraph_to_text(
 
     for (src, tgt, edge) in graph.edges() {
         if nodes.contains(src) && nodes.contains(tgt) {
-            let src_label = graph
-                .get_node(src)
-                .map(|n| n.label.as_str())
-                .unwrap_or(src);
-            let tgt_label = graph
-                .get_node(tgt)
-                .map(|n| n.label.as_str())
-                .unwrap_or(tgt);
+            let src_label = graph.get_node(src).map(|n| n.label.as_str()).unwrap_or(src);
+            let tgt_label = graph.get_node(tgt).map(|n| n.label.as_str()).unwrap_or(tgt);
             lines.push(format!(
                 "EDGE {src_label} --{}--> {tgt_label} [{}]",
                 edge.relation, edge.confidence

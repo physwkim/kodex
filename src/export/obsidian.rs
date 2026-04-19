@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::graph::KodexGraph;
 use super::{node_community_map, COMMUNITY_COLORS};
+use crate::graph::KodexGraph;
 
 /// Export graph as an Obsidian vault (one .md per node + community overviews).
 pub fn to_obsidian(
@@ -64,7 +64,11 @@ pub fn to_obsidian(
         if let Some(loc) = &node.source_location {
             md.push_str(&format!("location: {loc}\n"));
         }
-        md.push_str(&format!("tags: [kodex/{}, community/{}]\n", node.file_type, safe_name(&comm_label)));
+        md.push_str(&format!(
+            "tags: [kodex/{}, community/{}]\n",
+            node.file_type,
+            safe_name(&comm_label)
+        ));
         md.push_str("---\n\n");
 
         md.push_str(&format!("# {}\n\n", node.label));
@@ -131,8 +135,7 @@ pub fn to_obsidian(
         ));
 
         // Inter-community edge counts
-        let node_set: std::collections::HashSet<&str> =
-            nodes.iter().map(|s| s.as_str()).collect();
+        let node_set: std::collections::HashSet<&str> = nodes.iter().map(|s| s.as_str()).collect();
         let mut cross_comm_counts: HashMap<usize, usize> = HashMap::new();
         for (src, tgt, _) in graph.edges() {
             let src_in = node_set.contains(src);
@@ -170,7 +173,8 @@ pub fn to_obsidian(
         // Bridge nodes — top 5 nodes that connect to most other communities
         let mut bridge_scores: Vec<(&str, usize)> = Vec::new();
         for nid in nodes {
-            let mut reached_communities: std::collections::HashSet<usize> = std::collections::HashSet::new();
+            let mut reached_communities: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
             for neighbor in graph.neighbors(nid) {
                 if let Some(&nc) = node_comm.get(&neighbor) {
                     if nc != cid {

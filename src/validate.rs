@@ -5,7 +5,8 @@ use serde_json::Value;
 const VALID_FILE_TYPES: &[&str] = &["code", "document", "image", "paper", "rationale", "video"];
 const VALID_CONFIDENCES: &[&str] = &["AMBIGUOUS", "EXTRACTED", "INFERRED"];
 const REQUIRED_NODE_FIELDS: &[&str] = &["id", "label", "file_type", "source_file"];
-const REQUIRED_EDGE_FIELDS: &[&str] = &["source", "target", "relation", "confidence", "source_file"];
+const REQUIRED_EDGE_FIELDS: &[&str] =
+    &["source", "target", "relation", "confidence", "source_file"];
 
 /// Validate an extraction JSON value against the kodex schema.
 /// Returns a list of error strings -- empty list means valid.
@@ -31,10 +32,7 @@ pub fn validate_extraction(data: &Value) -> Vec<String> {
                             continue;
                         }
                     };
-                    let node_id = node_obj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
+                    let node_id = node_obj.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                     for &field in REQUIRED_NODE_FIELDS {
                         if !node_obj.contains_key(field) {
                             errors.push(format!(
@@ -56,9 +54,7 @@ pub fn validate_extraction(data: &Value) -> Vec<String> {
     }
 
     // --- Edges (accept "links" as fallback for NetworkX <= 3.1) ---
-    let edge_list = obj
-        .get("edges")
-        .or_else(|| obj.get("links"));
+    let edge_list = obj.get("edges").or_else(|| obj.get("links"));
     match edge_list {
         None => errors.push("Missing required key 'edges'".to_string()),
         Some(edges_val) => match edges_val.as_array() {
@@ -169,7 +165,9 @@ mod tests {
     fn test_missing_nodes() {
         let data = json!({"edges": []});
         let errs = validate_extraction(&data);
-        assert!(errs.iter().any(|e| e.contains("Missing required key 'nodes'")));
+        assert!(errs
+            .iter()
+            .any(|e| e.contains("Missing required key 'nodes'")));
     }
 
     #[test]
@@ -199,7 +197,9 @@ mod tests {
             "edges": [{"source": "a", "target": "missing", "relation": "r", "confidence": "EXTRACTED", "source_file": "a.py"}]
         });
         let errs = validate_extraction(&data);
-        assert!(errs.iter().any(|e| e.contains("does not match any node id")));
+        assert!(errs
+            .iter()
+            .any(|e| e.contains("does not match any node id")));
     }
 
     #[test]

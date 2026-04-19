@@ -90,10 +90,7 @@ pub fn load_knowledge(vault_dir: &Path) -> Vec<Knowledge> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        let filename = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if !filename.starts_with(KNOWLEDGE_PREFIX) {
             continue;
         }
@@ -104,7 +101,11 @@ pub fn load_knowledge(vault_dir: &Path) -> Vec<Knowledge> {
         }
     }
 
-    items.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    items.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     items
 }
 
@@ -123,8 +124,7 @@ pub fn learn(
 ) -> crate::error::Result<PathBuf> {
     std::fs::create_dir_all(vault_dir)?;
 
-    let safe_name = title
-        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "_");
+    let safe_name = title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "_");
     let filename = format!("{KNOWLEDGE_PREFIX}{safe_name}.md");
     let path = vault_dir.join(&filename);
     let now = timestamp();
@@ -194,11 +194,7 @@ pub fn learn(
 }
 
 /// Query knowledge by keyword, type, or tag.
-pub fn query_knowledge(
-    vault_dir: &Path,
-    query: &str,
-    type_filter: Option<&str>,
-) -> Vec<Knowledge> {
+pub fn query_knowledge(vault_dir: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
     let all = load_knowledge(vault_dir);
     let query_lower = query.to_lowercase();
 
@@ -216,7 +212,9 @@ pub fn query_knowledge(
             }
             k.title.to_lowercase().contains(&query_lower)
                 || k.description.to_lowercase().contains(&query_lower)
-                || k.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                || k.tags
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&query_lower))
         })
         .collect()
 }
@@ -259,7 +257,10 @@ fn build_index_content(items: &[Knowledge], max_items: usize) -> String {
     // Group by type
     let mut by_type: HashMap<String, Vec<&Knowledge>> = HashMap::new();
     for k in items.iter().take(max_items) {
-        by_type.entry(k.knowledge_type.to_string()).or_default().push(k);
+        by_type
+            .entry(k.knowledge_type.to_string())
+            .or_default()
+            .push(k);
     }
 
     let mut types: Vec<_> = by_type.into_iter().collect();
@@ -368,10 +369,22 @@ fn parse_knowledge_note(content: &str) -> Option<Knowledge> {
 
     let title = extract_title(content)?;
     let description = extract_body(content);
-    let confidence = fm.get("confidence").and_then(|s| s.parse().ok()).unwrap_or(0.5);
-    let observations = fm.get("observations").and_then(|s| s.parse().ok()).unwrap_or(1);
-    let first_seen = fm.get("first_seen").and_then(|s| s.parse().ok()).unwrap_or(0);
-    let last_seen = fm.get("last_seen").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let confidence = fm
+        .get("confidence")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.5);
+    let observations = fm
+        .get("observations")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let first_seen = fm
+        .get("first_seen")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let last_seen = fm
+        .get("last_seen")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     let related_nodes = fm
         .get("related_nodes")
@@ -542,13 +555,15 @@ mod tests {
 
         // First observation
         learn(
-            dir.path(), None,
+            dir.path(),
+            None,
             KnowledgeType::Pattern,
             "Repository Pattern",
             "All data access goes through Repository classes",
             &["user_repo".to_string(), "order_repo".to_string()],
             &["architecture".to_string()],
-        ).unwrap();
+        )
+        .unwrap();
 
         let items = load_knowledge(dir.path());
         assert_eq!(items.len(), 1);
@@ -558,13 +573,15 @@ mod tests {
 
         // Second observation — reinforces
         learn(
-            dir.path(), None,
+            dir.path(),
+            None,
             KnowledgeType::Pattern,
             "Repository Pattern",
             "Confirmed: ProductRepo also follows this pattern",
             &["product_repo".to_string()],
             &[],
-        ).unwrap();
+        )
+        .unwrap();
 
         let items = load_knowledge(dir.path());
         assert_eq!(items.len(), 1);
@@ -577,9 +594,36 @@ mod tests {
     fn test_query_knowledge() {
         let dir = TempDir::new().unwrap();
 
-        learn(dir.path(), None, KnowledgeType::Pattern, "Singleton", "Global state", &[], &["design".to_string()]).unwrap();
-        learn(dir.path(), None, KnowledgeType::Convention, "Error Handling", "Use AppError", &[], &["rust".to_string()]).unwrap();
-        learn(dir.path(), None, KnowledgeType::Decision, "JWT Auth", "Chose JWT for stateless", &[], &["auth".to_string()]).unwrap();
+        learn(
+            dir.path(),
+            None,
+            KnowledgeType::Pattern,
+            "Singleton",
+            "Global state",
+            &[],
+            &["design".to_string()],
+        )
+        .unwrap();
+        learn(
+            dir.path(),
+            None,
+            KnowledgeType::Convention,
+            "Error Handling",
+            "Use AppError",
+            &[],
+            &["rust".to_string()],
+        )
+        .unwrap();
+        learn(
+            dir.path(),
+            None,
+            KnowledgeType::Decision,
+            "JWT Auth",
+            "Chose JWT for stateless",
+            &[],
+            &["auth".to_string()],
+        )
+        .unwrap();
 
         let all = query_knowledge(dir.path(), "", None);
         assert_eq!(all.len(), 3);
@@ -595,8 +639,26 @@ mod tests {
     fn test_knowledge_context() {
         let dir = TempDir::new().unwrap();
 
-        learn(dir.path(), None, KnowledgeType::Pattern, "Observer", "Event-driven", &[], &[]).unwrap();
-        learn(dir.path(), None, KnowledgeType::Preference, "Functional Style", "User prefers FP", &[], &[]).unwrap();
+        learn(
+            dir.path(),
+            None,
+            KnowledgeType::Pattern,
+            "Observer",
+            "Event-driven",
+            &[],
+            &[],
+        )
+        .unwrap();
+        learn(
+            dir.path(),
+            None,
+            KnowledgeType::Preference,
+            "Functional Style",
+            "User prefers FP",
+            &[],
+            &[],
+        )
+        .unwrap();
 
         let ctx = knowledge_context(dir.path(), 10);
         assert!(ctx.contains("Observer"));

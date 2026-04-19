@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Base defaults to the `kodex-out` directory relative to CWD.
 /// Raises error if path escapes base, or base does not exist.
-pub fn validate_graph_path(
-    path: &str,
-    base: Option<&Path>,
-) -> crate::error::Result<PathBuf> {
+pub fn validate_graph_path(path: &str, base: Option<&Path>) -> crate::error::Result<PathBuf> {
     let base = match base {
         Some(b) => b.to_path_buf(),
         None => {
@@ -17,7 +14,11 @@ pub fn validate_graph_path(
                 .unwrap_or_else(|_| PathBuf::from(path));
             let mut found = None;
             for ancestor in resolved.ancestors() {
-                if ancestor.file_name().map(|n| n == "kodex-out").unwrap_or(false) {
+                if ancestor
+                    .file_name()
+                    .map(|n| n == "kodex-out")
+                    .unwrap_or(false)
+                {
                     found = Some(ancestor.to_path_buf());
                     break;
                 }
@@ -30,26 +31,24 @@ pub fn validate_graph_path(
         }
     };
 
-    let base = base
-        .canonicalize()
-        .map_err(|_| crate::error::KodexError::PathEscape(format!(
+    let base = base.canonicalize().map_err(|_| {
+        crate::error::KodexError::PathEscape(format!(
             "Graph base directory does not exist: {}. Run kodex first to build the graph.",
             base.display()
-        )))?;
+        ))
+    })?;
 
-    let resolved = PathBuf::from(path)
-        .canonicalize()
-        .map_err(|_| crate::error::KodexError::FileNotFound(format!(
-            "Graph file not found: {path}"
-        )))?;
+    let resolved = PathBuf::from(path).canonicalize().map_err(|_| {
+        crate::error::KodexError::FileNotFound(format!("Graph file not found: {path}"))
+    })?;
 
-    resolved
-        .strip_prefix(&base)
-        .map_err(|_| crate::error::KodexError::PathEscape(format!(
+    resolved.strip_prefix(&base).map_err(|_| {
+        crate::error::KodexError::PathEscape(format!(
             "Path {path:?} escapes the allowed directory {}. \
              Only paths inside kodex-out/ are permitted.",
             base.display()
-        )))?;
+        ))
+    })?;
 
     Ok(resolved)
 }
@@ -67,10 +66,7 @@ mod tests {
         let file = base.join("graph.json");
         std::fs::write(&file, "{}").unwrap();
 
-        let result = validate_graph_path(
-            file.to_str().unwrap(),
-            Some(&base),
-        );
+        let result = validate_graph_path(file.to_str().unwrap(), Some(&base));
         assert!(result.is_ok());
     }
 
@@ -84,10 +80,7 @@ mod tests {
         let outside = dir.path().join("secret.txt");
         std::fs::write(&outside, "secret").unwrap();
 
-        let result = validate_graph_path(
-            outside.to_str().unwrap(),
-            Some(&base),
-        );
+        let result = validate_graph_path(outside.to_str().unwrap(), Some(&base));
         assert!(result.is_err());
     }
 }

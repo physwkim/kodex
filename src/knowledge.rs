@@ -26,9 +26,9 @@ pub fn save_insight(
         .ok_or_else(|| crate::error::KodexError::Other("Invalid graph.json".to_string()))?;
 
     // Check if insight already exists
-    let exists = nodes.iter().any(|n| {
-        n.get("id").and_then(|v| v.as_str()) == Some(&insight_id)
-    });
+    let exists = nodes
+        .iter()
+        .any(|n| n.get("id").and_then(|v| v.as_str()) == Some(&insight_id));
 
     if !exists {
         nodes.push(serde_json::json!({
@@ -63,9 +63,7 @@ pub fn save_insight(
     }
 
     // Add as hyperedge too
-    let hyperedges = data
-        .get_mut("hyperedges")
-        .and_then(|v| v.as_array_mut());
+    let hyperedges = data.get_mut("hyperedges").and_then(|v| v.as_array_mut());
     if let Some(hyper) = hyperedges {
         hyper.push(serde_json::json!({
             "id": insight_id,
@@ -105,9 +103,9 @@ pub fn save_note(
         .and_then(|v| v.as_array_mut())
         .ok_or_else(|| crate::error::KodexError::Other("Invalid graph.json".to_string()))?;
 
-    let exists = nodes.iter().any(|n| {
-        n.get("id").and_then(|v| v.as_str()) == Some(&note_id)
-    });
+    let exists = nodes
+        .iter()
+        .any(|n| n.get("id").and_then(|v| v.as_str()) == Some(&note_id));
 
     if !exists {
         nodes.push(serde_json::json!({
@@ -210,9 +208,7 @@ fn write_insight_note(
     let path = vault_dir.join(format!("_INSIGHT_{safe_name}.md"));
 
     let wikilinks: Vec<String> = node_ids.iter().map(|n| format!("[[{n}]]")).collect();
-    let pattern_tag = pattern
-        .map(|p| format!("#pattern/{p}"))
-        .unwrap_or_default();
+    let pattern_tag = pattern.map(|p| format!("#pattern/{p}")).unwrap_or_default();
 
     let md = format!(
         "---\n\

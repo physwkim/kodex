@@ -156,7 +156,11 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
     // Deduplicate edges — keep the one with highest confidence
     let mut edge_map: HashMap<(String, String, String), Edge> = HashMap::new();
     for edge in edges {
-        let key = (edge.source.clone(), edge.target.clone(), edge.relation.clone());
+        let key = (
+            edge.source.clone(),
+            edge.target.clone(),
+            edge.relation.clone(),
+        );
         let should_replace = edge_map
             .get(&key)
             .map(|existing| edge.confidence.default_score() > existing.confidence.default_score())
@@ -386,12 +390,7 @@ fn extract_inheritance(
             let inner_cursor = &mut child.walk();
             for arg in child.children(inner_cursor) {
                 let text = read_text(&arg, source).trim().to_string();
-                if !text.is_empty()
-                    && text != "("
-                    && text != ")"
-                    && text != ","
-                    && text != ":"
-                {
+                if !text.is_empty() && text != "(" && text != ")" && text != "," && text != ":" {
                     let base_name = text.split('<').next().unwrap_or(&text).trim();
                     if !base_name.is_empty() {
                         let base_nid = make_id(&[stem, base_name]);

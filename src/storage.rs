@@ -41,8 +41,10 @@ pub fn save_hdf5(
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
 
     file.set_attr_string("version", "0.1.0").ok();
-    file.set_attr_numeric("node_count", &(graph.node_count() as u64)).ok();
-    file.set_attr_numeric("edge_count", &(graph.edge_count() as u64)).ok();
+    file.set_attr_numeric("node_count", &(graph.node_count() as u64))
+        .ok();
+    file.set_attr_numeric("edge_count", &(graph.edge_count() as u64))
+        .ok();
 
     let comm_map = crate::export::node_community_map(communities);
 
@@ -61,13 +63,16 @@ pub fn save_hdf5(
             file_types.push(node.file_type.to_string());
             source_files.push(node.source_file.clone());
             confidences.push(
-                node.confidence.map(|c| c.to_string()).unwrap_or_else(|| "EXTRACTED".to_string()),
+                node.confidence
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "EXTRACTED".to_string()),
             );
             community_ids.push(comm_map.get(id).copied().unwrap_or(0) as u32);
         }
     }
 
-    let nodes_grp = file.create_group("nodes")
+    let nodes_grp = file
+        .create_group("nodes")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
     write_string_dataset(&nodes_grp, "id", &ids)?;
@@ -77,8 +82,9 @@ pub fn save_hdf5(
     write_string_dataset(&nodes_grp, "confidence", &confidences)?;
 
     if !community_ids.is_empty() {
-        nodes_grp.new_dataset::<u32>()
-            .shape(&[community_ids.len()])
+        nodes_grp
+            .new_dataset::<u32>()
+            .shape([community_ids.len()])
             .create("community")
             .and_then(|ds| ds.write_raw(&community_ids))
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
@@ -99,7 +105,8 @@ pub fn save_hdf5(
         e_weight.push(edge.weight);
     }
 
-    let edges_grp = file.create_group("edges")
+    let edges_grp = file
+        .create_group("edges")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
     write_string_dataset(&edges_grp, "source", &e_src)?;
@@ -108,14 +115,16 @@ pub fn save_hdf5(
     write_string_dataset(&edges_grp, "confidence", &e_conf)?;
 
     if !e_weight.is_empty() {
-        edges_grp.new_dataset::<f64>()
-            .shape(&[e_weight.len()])
+        edges_grp
+            .new_dataset::<f64>()
+            .shape([e_weight.len()])
             .create("weight")
             .and_then(|ds| ds.write_raw(&e_weight))
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     }
 
-    file.close().map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    file.close()
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     Ok(())
 }
 
@@ -130,22 +139,28 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
     let source_files = read_string_dataset(&file, "nodes/source_file")?;
     let confidences = read_string_dataset(&file, "nodes/confidence")?;
 
-    let community_ids: Vec<u32> = file.dataset("nodes/community")
+    let community_ids: Vec<u32> = file
+        .dataset("nodes/community")
         .and_then(|ds| ds.read_raw())
         .unwrap_or_default();
 
     let mut extraction = ExtractionResult::default();
 
-    for i in 0..ids.len() {
+    for (i, id) in ids.iter().enumerate() {
         extraction.nodes.push(crate::types::Node {
-            id: ids[i].clone(),
+            id: id.clone(),
             label: labels.get(i).cloned().unwrap_or_default(),
-            file_type: FileType::from_str_loose(file_types.get(i).map(|s| s.as_str()).unwrap_or("code"))
-                .unwrap_or(FileType::Code),
+            file_type: FileType::from_str_loose(
+                file_types.get(i).map(|s| s.as_str()).unwrap_or("code"),
+            )
+            .unwrap_or(FileType::Code),
             source_file: source_files.get(i).cloned().unwrap_or_default(),
             source_location: None,
             confidence: Confidence::from_str_loose(
-                confidences.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"),
+                confidences
+                    .get(i)
+                    .map(|s| s.as_str())
+                    .unwrap_or("EXTRACTED"),
             ),
             confidence_score: None,
             community: community_ids.get(i).map(|&c| c as usize),
@@ -158,14 +173,15 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
     let e_tgt = read_string_dataset(&file, "edges/target")?;
     let e_rel = read_string_dataset(&file, "edges/relation")?;
     let e_conf = read_string_dataset(&file, "edges/confidence")?;
-    let e_weight: Vec<f64> = file.dataset("edges/weight")
+    let e_weight: Vec<f64> = file
+        .dataset("edges/weight")
         .and_then(|ds| ds.read_raw())
         .unwrap_or_default();
 
     for i in 0..e_src.len() {
-        let confidence = Confidence::from_str_loose(
-            e_conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"),
-        ).unwrap_or(Confidence::EXTRACTED);
+        let confidence =
+            Confidence::from_str_loose(e_conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"))
+                .unwrap_or(Confidence::EXTRACTED);
 
         extraction.edges.push(crate::types::Edge {
             source: e_src[i].clone(),
@@ -204,8 +220,9 @@ fn write_string_dataset(
         })
         .collect();
 
-    group.new_dataset::<u8>()
-        .shape(&[strings.len(), max_len])
+    group
+        .new_dataset::<u8>()
+        .shape([strings.len(), max_len])
         .create(name)
         .and_then(|ds| ds.write_raw(&padded))
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))?;
@@ -227,7 +244,8 @@ fn read_string_dataset(file: &H5File, path: &str) -> crate::error::Result<Vec<St
     let n = shape[0];
     let max_len = shape[1];
 
-    let raw: Vec<u8> = ds.read_raw()
+    let raw: Vec<u8> = ds
+        .read_raw()
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}")))?;
 
     let mut strings = Vec::with_capacity(n);
@@ -258,26 +276,41 @@ mod tests {
         let extraction = ExtractionResult {
             nodes: vec![
                 crate::types::Node {
-                    id: "a".to_string(), label: "Alpha".to_string(),
-                    file_type: FileType::Code, source_file: "a.py".to_string(),
-                    source_location: None, confidence: Some(Confidence::EXTRACTED),
-                    confidence_score: Some(1.0), community: None,
-                    norm_label: None, degree: None,
+                    id: "a".to_string(),
+                    label: "Alpha".to_string(),
+                    file_type: FileType::Code,
+                    source_file: "a.py".to_string(),
+                    source_location: None,
+                    confidence: Some(Confidence::EXTRACTED),
+                    confidence_score: Some(1.0),
+                    community: None,
+                    norm_label: None,
+                    degree: None,
                 },
                 crate::types::Node {
-                    id: "b".to_string(), label: "Beta".to_string(),
-                    file_type: FileType::Code, source_file: "b.py".to_string(),
-                    source_location: None, confidence: Some(Confidence::INFERRED),
-                    confidence_score: Some(0.5), community: None,
-                    norm_label: None, degree: None,
+                    id: "b".to_string(),
+                    label: "Beta".to_string(),
+                    file_type: FileType::Code,
+                    source_file: "b.py".to_string(),
+                    source_location: None,
+                    confidence: Some(Confidence::INFERRED),
+                    confidence_score: Some(0.5),
+                    community: None,
+                    norm_label: None,
+                    degree: None,
                 },
             ],
             edges: vec![crate::types::Edge {
-                source: "a".to_string(), target: "b".to_string(),
-                relation: "imports".to_string(), confidence: Confidence::EXTRACTED,
-                source_file: "a.py".to_string(), source_location: None,
-                confidence_score: Some(1.0), weight: 1.0,
-                original_src: None, original_tgt: None,
+                source: "a".to_string(),
+                target: "b".to_string(),
+                relation: "imports".to_string(),
+                confidence: Confidence::EXTRACTED,
+                source_file: "a.py".to_string(),
+                source_location: None,
+                confidence_score: Some(1.0),
+                weight: 1.0,
+                original_src: None,
+                original_tgt: None,
             }],
             ..Default::default()
         };

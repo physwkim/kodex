@@ -21,7 +21,11 @@ fn run_pipeline(dir: &std::path::Path) -> (usize, usize) {
 fn test_detect_fixtures() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let result = kodex::detect::detect(&dir, false);
-    assert!(result.files.code.len() >= 3, "Should find at least 3 code files, found {}", result.files.code.len());
+    assert!(
+        result.files.code.len() >= 3,
+        "Should find at least 3 code files, found {}",
+        result.files.code.len()
+    );
     assert!(result.total_files >= 3);
 }
 
@@ -35,29 +39,54 @@ fn test_extract_python() {
     );
 
     assert!(result.error.is_none(), "Extract error: {:?}", result.error);
-    assert!(!result.nodes.is_empty(), "Should extract nodes from Python file");
+    assert!(
+        !result.nodes.is_empty(),
+        "Should extract nodes from Python file"
+    );
 
     // Should find FileReader and CsvParser classes
     let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
-    assert!(labels.iter().any(|l| *l == "FileReader"), "Should find FileReader class, got: {:?}", labels);
-    assert!(labels.iter().any(|l| *l == "CsvParser"), "Should find CsvParser class, got: {:?}", labels);
+    assert!(
+        labels.contains(&"FileReader"),
+        "Should find FileReader class, got: {:?}",
+        labels
+    );
+    assert!(
+        labels.contains(&"CsvParser"),
+        "Should find CsvParser class, got: {:?}",
+        labels
+    );
 
     // Should find functions
-    assert!(labels.iter().any(|l| l.contains("main")), "Should find main function");
-    assert!(labels.iter().any(|l| l.contains("read")), "Should find read method");
+    assert!(
+        labels.iter().any(|l| l.contains("main")),
+        "Should find main function"
+    );
+    assert!(
+        labels.iter().any(|l| l.contains("read")),
+        "Should find read method"
+    );
 
     // Should have edges
     assert!(!result.edges.is_empty(), "Should extract edges");
 
     // Check for contains/method edges
     let relations: Vec<&str> = result.edges.iter().map(|e| e.relation.as_str()).collect();
-    assert!(relations.contains(&"contains"), "Should have 'contains' edges");
+    assert!(
+        relations.contains(&"contains"),
+        "Should have 'contains' edges"
+    );
 
     // Check inheritance (CsvParser extends FileReader)
-    let extends_edges: Vec<_> = result.edges.iter()
+    let extends_edges: Vec<_> = result
+        .edges
+        .iter()
         .filter(|e| e.relation == "extends")
         .collect();
-    assert!(!extends_edges.is_empty(), "CsvParser should extend FileReader");
+    assert!(
+        !extends_edges.is_empty(),
+        "CsvParser should extend FileReader"
+    );
 }
 
 #[test]
@@ -70,15 +99,30 @@ fn test_extract_javascript() {
     );
 
     assert!(result.error.is_none(), "Extract error: {:?}", result.error);
-    assert!(!result.nodes.is_empty(), "Should extract nodes from JS file");
+    assert!(
+        !result.nodes.is_empty(),
+        "Should extract nodes from JS file"
+    );
 
     let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
-    assert!(labels.iter().any(|l| *l == "DataLoader"), "Should find DataLoader class, got: {:?}", labels);
-    assert!(labels.iter().any(|l| l.contains("processData")), "Should find processData function");
-    assert!(labels.iter().any(|l| l.contains("load")), "Should find load method");
+    assert!(
+        labels.contains(&"DataLoader"),
+        "Should find DataLoader class, got: {:?}",
+        labels
+    );
+    assert!(
+        labels.iter().any(|l| l.contains("processData")),
+        "Should find processData function"
+    );
+    assert!(
+        labels.iter().any(|l| l.contains("load")),
+        "Should find load method"
+    );
 
     // Should have import edges
-    let import_edges: Vec<_> = result.edges.iter()
+    let import_edges: Vec<_> = result
+        .edges
+        .iter()
         .filter(|e| e.relation.contains("import"))
         .collect();
     assert!(!import_edges.is_empty(), "Should have import edges");
@@ -88,19 +132,26 @@ fn test_extract_javascript() {
 #[cfg(feature = "lang-go")]
 fn test_extract_go() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.go");
-    let result = kodex::extract::generic::extract_generic(
-        &path,
-        &kodex::extract::languages::go::GO_CONFIG,
-    );
+    let result =
+        kodex::extract::generic::extract_generic(&path, &kodex::extract::languages::go::GO_CONFIG);
 
     assert!(result.error.is_none(), "Extract error: {:?}", result.error);
-    assert!(!result.nodes.is_empty(), "Should extract nodes from Go file");
+    assert!(
+        !result.nodes.is_empty(),
+        "Should extract nodes from Go file"
+    );
 
     let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
-    assert!(labels.iter().any(|l| l.contains("NewConfig")), "Should find NewConfig func, got: {:?}", labels);
+    assert!(
+        labels.iter().any(|l| l.contains("NewConfig")),
+        "Should find NewConfig func, got: {:?}",
+        labels
+    );
 
     // Should have import edges
-    let import_edges: Vec<_> = result.edges.iter()
+    let import_edges: Vec<_> = result
+        .edges
+        .iter()
         .filter(|e| e.relation.contains("import"))
         .collect();
     assert!(!import_edges.is_empty(), "Should have import edges");
@@ -124,32 +175,41 @@ fn test_graph_export_round_trip() {
     let extraction = kodex::types::ExtractionResult {
         nodes: vec![
             kodex::types::Node {
-                id: "a".to_string(), label: "Alpha".to_string(),
+                id: "a".to_string(),
+                label: "Alpha".to_string(),
                 file_type: kodex::types::FileType::Code,
                 source_file: "a.py".to_string(),
                 source_location: Some("L1".to_string()),
                 confidence: Some(kodex::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
-                community: None, norm_label: None, degree: None,
+                community: None,
+                norm_label: None,
+                degree: None,
             },
             kodex::types::Node {
-                id: "b".to_string(), label: "Beta".to_string(),
+                id: "b".to_string(),
+                label: "Beta".to_string(),
                 file_type: kodex::types::FileType::Code,
                 source_file: "b.py".to_string(),
                 source_location: Some("L1".to_string()),
                 confidence: Some(kodex::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
-                community: None, norm_label: None, degree: None,
+                community: None,
+                norm_label: None,
+                degree: None,
             },
         ],
         edges: vec![kodex::types::Edge {
-            source: "a".to_string(), target: "b".to_string(),
+            source: "a".to_string(),
+            target: "b".to_string(),
             relation: "imports".to_string(),
             confidence: kodex::types::Confidence::EXTRACTED,
             source_file: "a.py".to_string(),
             source_location: Some("L2".to_string()),
-            confidence_score: Some(1.0), weight: 1.0,
-            original_src: None, original_tgt: None,
+            confidence_score: Some(1.0),
+            weight: 1.0,
+            original_src: None,
+            original_tgt: None,
         }],
         ..Default::default()
     };
@@ -191,28 +251,46 @@ fn test_graph_export_round_trip() {
 #[test]
 fn test_cluster_and_analyze() {
     let extraction = kodex::types::ExtractionResult {
-        nodes: (0..10).map(|i| kodex::types::Node {
-            id: format!("n{i}"), label: format!("Node{i}"),
-            file_type: kodex::types::FileType::Code,
-            source_file: format!("file{}.py", i % 3),
-            source_location: Some(format!("L{}", i + 1)),
-            confidence: Some(kodex::types::Confidence::EXTRACTED),
-            confidence_score: Some(1.0),
-            community: None, norm_label: None, degree: None,
-        }).collect(),
-        edges: vec![
-            ("n0", "n1"), ("n1", "n2"), ("n0", "n2"),  // cluster 1
-            ("n3", "n4"), ("n4", "n5"), ("n3", "n5"),  // cluster 2
-            ("n6", "n7"), ("n7", "n8"), ("n8", "n9"),  // cluster 3
-            ("n2", "n3"),  // bridge
-        ].iter().map(|(s, t)| kodex::types::Edge {
-            source: s.to_string(), target: t.to_string(),
+        nodes: (0..10)
+            .map(|i| kodex::types::Node {
+                id: format!("n{i}"),
+                label: format!("Node{i}"),
+                file_type: kodex::types::FileType::Code,
+                source_file: format!("file{}.py", i % 3),
+                source_location: Some(format!("L{}", i + 1)),
+                confidence: Some(kodex::types::Confidence::EXTRACTED),
+                confidence_score: Some(1.0),
+                community: None,
+                norm_label: None,
+                degree: None,
+            })
+            .collect(),
+        edges: [
+            ("n0", "n1"),
+            ("n1", "n2"),
+            ("n0", "n2"), // cluster 1
+            ("n3", "n4"),
+            ("n4", "n5"),
+            ("n3", "n5"), // cluster 2
+            ("n6", "n7"),
+            ("n7", "n8"),
+            ("n8", "n9"), // cluster 3
+            ("n2", "n3"), // bridge
+        ]
+        .iter()
+        .map(|(s, t)| kodex::types::Edge {
+            source: s.to_string(),
+            target: t.to_string(),
             relation: "calls".to_string(),
             confidence: kodex::types::Confidence::EXTRACTED,
             source_file: "test.py".to_string(),
-            source_location: None, confidence_score: Some(1.0),
-            weight: 1.0, original_src: None, original_tgt: None,
-        }).collect(),
+            source_location: None,
+            confidence_score: Some(1.0),
+            weight: 1.0,
+            original_src: None,
+            original_tgt: None,
+        })
+        .collect(),
         ..Default::default()
     };
 
@@ -220,7 +298,11 @@ fn test_cluster_and_analyze() {
     let communities = kodex::cluster::cluster(&graph);
 
     // Should detect at least 2 communities
-    assert!(communities.len() >= 2, "Should detect at least 2 communities, got {}", communities.len());
+    assert!(
+        communities.len() >= 2,
+        "Should detect at least 2 communities, got {}",
+        communities.len()
+    );
 
     // God nodes
     let gods = kodex::analyze::god_nodes(&graph, 5);
@@ -235,13 +317,22 @@ fn test_cluster_and_analyze() {
 
     // Report
     let cohesion = kodex::cluster::score_all(&graph, &communities);
-    let labels: std::collections::HashMap<usize, String> = communities.keys()
-        .map(|&c| (c, format!("Community {c}"))).collect();
+    let labels: std::collections::HashMap<usize, String> = communities
+        .keys()
+        .map(|&c| (c, format!("Community {c}")))
+        .collect();
     let report = kodex::report::generate(
-        &graph, &communities, &cohesion, &labels,
-        &gods, &surprises,
+        &graph,
+        &communities,
+        &cohesion,
+        &labels,
+        &gods,
+        &surprises,
         &kodex::types::DetectionResult::default(),
-        0, 0, "test", Some(&questions),
+        0,
+        0,
+        "test",
+        Some(&questions),
     );
     assert!(report.contains("# Graph Report"));
     assert!(report.contains("God Nodes"));

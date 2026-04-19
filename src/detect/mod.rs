@@ -1,14 +1,17 @@
-mod classify;
+pub mod classify;
 mod ignore;
-mod sensitive;
-mod paper;
 mod manifest;
+mod paper;
+mod sensitive;
 
-pub use classify::{classify_file, FileCategory, CODE_EXTENSIONS, DOC_EXTENSIONS, PAPER_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, OFFICE_EXTENSIONS};
+pub use classify::{
+    classify_file, FileCategory, CODE_EXTENSIONS, DOC_EXTENSIONS, IMAGE_EXTENSIONS,
+    OFFICE_EXTENSIONS, PAPER_EXTENSIONS, VIDEO_EXTENSIONS,
+};
 pub use ignore::load_kodexignore;
-pub use sensitive::is_sensitive;
-pub use paper::looks_like_paper;
 pub use manifest::{load_manifest, save_manifest};
+pub use paper::looks_like_paper;
+pub use sensitive::is_sensitive;
 
 use crate::types::{DetectedFiles, DetectionResult};
 use std::path::Path;
@@ -21,10 +24,22 @@ pub const FILE_COUNT_UPPER: usize = 200;
 
 /// Noise directories to always skip.
 const NOISE_DIRS: &[&str] = &[
-    "node_modules", "__pycache__", ".git", ".hg", ".svn",
-    "target", "dist", "build", ".tox", ".mypy_cache",
-    ".pytest_cache", ".ruff_cache", "venv", ".venv",
-    "kodex-out", ".kodex-out",
+    "node_modules",
+    "__pycache__",
+    ".git",
+    ".hg",
+    ".svn",
+    "target",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "venv",
+    ".venv",
+    "kodex-out",
+    ".kodex-out",
 ];
 
 /// Find all extractable files in `root` directory.

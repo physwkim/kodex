@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use super::{js_safe, node_community_map, COMMUNITY_COLORS};
 use crate::graph::KodexGraph;
 use crate::security::sanitize_label;
-use super::{node_community_map, js_safe, COMMUNITY_COLORS};
 
 const MAX_NODES_FOR_VIZ: usize = 5000;
 
@@ -97,9 +97,8 @@ pub fn to_html(
     let nodes_json = js_safe(&serde_json::to_string(&vis_nodes).unwrap_or_default());
     let edges_json = js_safe(&serde_json::to_string(&vis_edges).unwrap_or_default());
     let legend_json = js_safe(&serde_json::to_string(&legend).unwrap_or_default());
-    let hyperedges_json = js_safe(
-        &serde_json::to_string(&graph.hyperedges).unwrap_or_else(|_| "[]".to_string()),
-    );
+    let hyperedges_json =
+        js_safe(&serde_json::to_string(&graph.hyperedges).unwrap_or_else(|_| "[]".to_string()));
 
     let stats = format!(
         "{} nodes &middot; {} edges &middot; {} communities",

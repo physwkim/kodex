@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::KodexGraph;
 use super::{node_community_map, COMMUNITY_COLORS};
+use crate::graph::KodexGraph;
 
 /// Export graph as Obsidian Canvas JSON (infinite canvas with community groupings).
 pub fn to_canvas(
@@ -101,7 +101,6 @@ pub fn to_canvas(
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(&canvas)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(&canvas).map_err(std::io::Error::other)?;
     std::fs::write(output_path, json)
 }

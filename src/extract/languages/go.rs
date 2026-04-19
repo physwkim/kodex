@@ -20,7 +20,13 @@ fn import_go(
     result
 }
 
-fn collect_import_specs(node: &Node, source: &[u8], result: &mut Vec<ImportEdge>, default_line: usize) {
+#[allow(clippy::only_used_in_recursion)]
+fn collect_import_specs(
+    node: &Node,
+    source: &[u8],
+    result: &mut Vec<ImportEdge>,
+    default_line: usize,
+) {
     let cursor = &mut node.walk();
     for child in node.children(cursor) {
         if child.kind() == "import_spec" {

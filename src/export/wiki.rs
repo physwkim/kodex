@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::KodexGraph;
 use crate::analyze::god_nodes::{self, GodNode};
+use crate::graph::KodexGraph;
 
 /// Generate Wikipedia-style wiki: index.md + community articles + god node articles.
 pub fn to_wiki(

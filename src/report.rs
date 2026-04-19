@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::analyze::god_nodes::GodNode;
-use crate::analyze::surprising::SurprisingConnection;
+use crate::analyze::helpers::{is_concept_node, is_file_node};
 use crate::analyze::questions::SuggestedQuestion;
-use crate::analyze::helpers::{is_file_node, is_concept_node};
+use crate::analyze::surprising::SurprisingConnection;
 use crate::graph::KodexGraph;
 use crate::types::{Confidence, DetectionResult};
 
@@ -115,14 +115,7 @@ pub fn generate(
     // --- God Nodes ---
     writeln!(md, "## God Nodes (most connected)\n").unwrap();
     for (i, god) in god_node_list.iter().enumerate() {
-        writeln!(
-            md,
-            "{}. `{}` - {} edges",
-            i + 1,
-            god.label,
-            god.degree
-        )
-        .unwrap();
+        writeln!(md, "{}. `{}` - {} edges", i + 1, god.label, god.degree).unwrap();
     }
     writeln!(md).unwrap();
 
@@ -213,19 +206,9 @@ pub fn generate(
     if !ambiguous.is_empty() {
         writeln!(md, "## Ambiguous Edges - Review These\n").unwrap();
         for (src, tgt, edge) in &ambiguous {
-            let src_label = graph
-                .get_node(src)
-                .map(|n| n.label.as_str())
-                .unwrap_or(src);
-            let tgt_label = graph
-                .get_node(tgt)
-                .map(|n| n.label.as_str())
-                .unwrap_or(tgt);
-            writeln!(
-                md,
-                "- `{src_label}` \u{2192} `{tgt_label}` [AMBIGUOUS]"
-            )
-            .unwrap();
+            let src_label = graph.get_node(src).map(|n| n.label.as_str()).unwrap_or(src);
+            let tgt_label = graph.get_node(tgt).map(|n| n.label.as_str()).unwrap_or(tgt);
+            writeln!(md, "- `{src_label}` \u{2192} `{tgt_label}` [AMBIGUOUS]").unwrap();
             writeln!(
                 md,
                 "  {} \u{00b7} relation: {}",
@@ -271,19 +254,10 @@ pub fn generate(
                 .get(cid)
                 .cloned()
                 .unwrap_or_else(|| format!("Community {cid}"));
-            writeln!(
-                md,
-                "- Thin community `{label}` ({} nodes)",
-                nodes.len()
-            )
-            .unwrap();
+            writeln!(md, "- Thin community `{label}` ({} nodes)", nodes.len()).unwrap();
         }
         if amb_pct > 20.0 {
-            writeln!(
-                md,
-                "- High ambiguity: {amb_pct:.0}% of edges are AMBIGUOUS"
-            )
-            .unwrap();
+            writeln!(md, "- High ambiguity: {amb_pct:.0}% of edges are AMBIGUOUS").unwrap();
         }
         writeln!(md).unwrap();
     }

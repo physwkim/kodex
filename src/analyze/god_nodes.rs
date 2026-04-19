@@ -1,5 +1,5 @@
+use super::helpers::{is_concept_node, is_file_node};
 use crate::graph::KodexGraph;
-use super::helpers::{is_file_node, is_concept_node};
 
 /// Information about a high-degree "god node".
 #[derive(Debug, Clone)]

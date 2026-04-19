@@ -35,7 +35,8 @@ tree-sitter-c = { version = "0.23", optional = true }
 tree-sitter-cpp = { version = "0.23", optional = true }
 tree-sitter-ruby = { version = "0.23", optional = true }
 tree-sitter-c-sharp = { version = "0.23", optional = true }
-tree-sitter-kotlin = { version = "0.3", optional = true }
+# tree-sitter-kotlin uses tree-sitter 0.20 (ABI mismatch with 0.24)
+# tree-sitter-kotlin = { version = "0.3", optional = true }
 tree-sitter-scala = { version = "0.23", optional = true }
 tree-sitter-php = { version = "0.23", optional = true }
 tree-sitter-swift = { version = "0.7", optional = true }
@@ -66,7 +67,8 @@ lang-c = ["extract", "tree-sitter-c"]
 lang-cpp = ["extract", "tree-sitter-cpp"]
 lang-ruby = ["extract", "tree-sitter-ruby"]
 lang-csharp = ["extract", "tree-sitter-c-sharp"]
-lang-kotlin = ["extract", "tree-sitter-kotlin"]
+# lang-kotlin disabled: tree-sitter-kotlin uses tree-sitter 0.20 ABI
+# lang-kotlin = ["extract", "tree-sitter-kotlin"]
 lang-scala = ["extract", "tree-sitter-scala"]
 lang-php = ["extract", "tree-sitter-php"]
 lang-swift = ["extract", "tree-sitter-swift"]
@@ -74,7 +76,7 @@ lang-lua = ["extract", "tree-sitter-lua"]
 all-languages = [
     "lang-python", "lang-javascript", "lang-typescript",
     "lang-go", "lang-rust", "lang-java", "lang-c", "lang-cpp",
-    "lang-ruby", "lang-csharp", "lang-kotlin", "lang-scala",
+    "lang-ruby", "lang-csharp", "lang-scala",
     "lang-php", "lang-swift", "lang-lua",
 ]
 fetch = ["reqwest"]

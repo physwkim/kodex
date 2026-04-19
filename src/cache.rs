@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 /// Strip YAML frontmatter from Markdown content, returning only the body.
 fn body_content(content: &[u8]) -> &[u8] {
     let text = std::str::from_utf8(content).unwrap_or("");
-    if text.starts_with("---") {
-        if let Some(end) = text[3..].find("\n---") {
+    if let Some(rest) = text.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
             let offset = 3 + end + 4; // skip past "\n---"
             if offset <= content.len() {
                 return &content[offset..];

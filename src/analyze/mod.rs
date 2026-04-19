@@ -1,12 +1,12 @@
 pub mod god_nodes;
-pub mod surprising;
-pub mod questions;
 pub mod helpers;
+pub mod questions;
+pub mod surprising;
 
 pub use god_nodes::god_nodes;
-pub use surprising::surprising_connections;
+pub use helpers::{is_concept_node, is_file_node};
 pub use questions::suggest_questions;
-pub use helpers::{is_file_node, is_concept_node};
+pub use surprising::surprising_connections;
 
 use std::collections::HashMap;
 

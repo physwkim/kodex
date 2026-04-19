@@ -56,7 +56,9 @@ pub fn watch(
 
                     // Check if change is in vault directory (reverse sync)
                     if let Some(vp) = vault_path {
-                        if path.starts_with(vp) && path.extension().map(|e| e == "md").unwrap_or(false) {
+                        if path.starts_with(vp)
+                            && path.extension().map(|e| e == "md").unwrap_or(false)
+                        {
                             pending_vault = true;
                             continue;
                         }
@@ -252,9 +254,7 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
     match std::fs::read_to_string(&graph_path) {
         Ok(text) => {
             if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&text) {
-                let links = data
-                    .get_mut("links")
-                    .and_then(|v| v.as_array_mut());
+                let links = data.get_mut("links").and_then(|v| v.as_array_mut());
                 if let Some(links) = links {
                     for (src, tgt) in &new_edges {
                         links.push(serde_json::json!({
@@ -281,15 +281,18 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
 #[cfg(feature = "watch")]
 fn find_node_by_filename(graph: &crate::graph::KodexGraph, filename: &str) -> Option<String> {
     let lower = filename.to_lowercase().replace('_', "");
-    graph.node_ids().find(|id| {
-        graph
-            .get_node(id)
-            .map(|n| {
-                let label_clean = n.label.to_lowercase().replace(' ', "").replace('_', "");
-                label_clean == lower || id.to_lowercase().replace('_', "") == lower
-            })
-            .unwrap_or(false)
-    }).cloned()
+    graph
+        .node_ids()
+        .find(|id| {
+            graph
+                .get_node(id)
+                .map(|n| {
+                    let label_clean = n.label.to_lowercase().replace([' ', '_'], "");
+                    label_clean == lower || id.to_lowercase().replace('_', "") == lower
+                })
+                .unwrap_or(false)
+        })
+        .cloned()
 }
 
 #[cfg(not(feature = "watch"))]

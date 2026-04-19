@@ -38,7 +38,11 @@ fn import_java(
 
 pub static JAVA_CONFIG: LanguageConfig = LanguageConfig {
     ts_language: || tree_sitter_java::LANGUAGE.into(),
-    class_types: &["class_declaration", "interface_declaration", "enum_declaration"],
+    class_types: &[
+        "class_declaration",
+        "interface_declaration",
+        "enum_declaration",
+    ],
     function_types: &["method_declaration", "constructor_declaration"],
     import_types: &["import_declaration"],
     call_types: &["method_invocation"],
@@ -47,7 +51,11 @@ pub static JAVA_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "name",
     call_accessor_node_types: &["method_invocation"],
     call_accessor_field: "name",
-    function_boundary_types: &["method_declaration", "constructor_declaration", "lambda_expression"],
+    function_boundary_types: &[
+        "method_declaration",
+        "constructor_declaration",
+        "lambda_expression",
+    ],
     function_label_parens: true,
     import_handler: Some(import_java),
     resolve_function_name: None,

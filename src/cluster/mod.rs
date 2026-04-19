@@ -1,8 +1,8 @@
-mod louvain;
 mod cohesion;
+mod louvain;
 
-use std::collections::HashMap;
 use crate::graph::KodexGraph;
+use std::collections::HashMap;
 
 pub use cohesion::{cohesion_score, score_all};
 

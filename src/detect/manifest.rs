@@ -26,7 +26,6 @@ pub fn save_manifest(files: &HashMap<String, f64>, root: &Path) -> std::io::Resu
     if let Some(parent) = manifest_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(files)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(files).map_err(std::io::Error::other)?;
     std::fs::write(manifest_file, json)
 }

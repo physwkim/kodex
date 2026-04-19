@@ -137,7 +137,8 @@ enum Commands {
 }
 
 fn dirs_or_cwd() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    dirs::home_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 fn main() {
@@ -147,16 +148,29 @@ fn main() {
         Some(Commands::Run { path }) => {
             run_pipeline(&path);
         }
-        Some(Commands::Query { question, dfs, budget, graph }) => {
+        Some(Commands::Query {
+            question,
+            dfs,
+            budget,
+            graph,
+        }) => {
             cmd_query(&question, dfs, budget, &graph);
         }
-        Some(Commands::Path { source, target, graph }) => {
+        Some(Commands::Path {
+            source,
+            target,
+            graph,
+        }) => {
             cmd_path(&source, &target, &graph);
         }
         Some(Commands::Explain { node, graph }) => {
             cmd_explain(&node, &graph);
         }
-        Some(Commands::Watch { path, debounce, vault }) => {
+        Some(Commands::Watch {
+            path,
+            debounce,
+            vault,
+        }) => {
             if let Err(e) = kodex::watch::watch(&path, debounce, vault.as_deref()) {
                 eprintln!("Watch error: {e}");
             }
@@ -187,7 +201,12 @@ fn main() {
         Some(Commands::ClusterOnly { path }) => {
             cmd_cluster_only(&path);
         }
-        Some(Commands::Add { url, author, contributor, dir }) => {
+        Some(Commands::Add {
+            url,
+            author,
+            contributor,
+            dir,
+        }) => {
             cmd_add(&url, author.as_deref(), contributor.as_deref(), &dir);
         }
         Some(Commands::Serve { graph }) => {
@@ -219,18 +238,16 @@ fn run_pipeline(path: &std::path::Path) {
         detection.files.video.len(),
     );
     if !detection.skipped_sensitive.is_empty() {
-        println!("  skipped {} sensitive file(s)", detection.skipped_sensitive.len());
+        println!(
+            "  skipped {} sensitive file(s)",
+            detection.skipped_sensitive.len()
+        );
     }
 
     // Step 2: Extract (code files only, requires extract feature)
     #[cfg(feature = "extract")]
     let extraction = {
-        let code_paths: Vec<PathBuf> = detection
-            .files
-            .code
-            .iter()
-            .map(PathBuf::from)
-            .collect();
+        let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
         if code_paths.is_empty() {
             println!("  no code files to extract");
             kodex::types::ExtractionResult::default()
@@ -344,7 +361,11 @@ fn run_pipeline(path: &std::path::Path) {
         Err(e) => eprintln!("  vault error: {e}"),
     }
 
-    println!("  done! Data: {} | Vault: {}", out_dir.display(), vault_dir.display());
+    println!(
+        "  done! Data: {} | Vault: {}",
+        out_dir.display(),
+        vault_dir.display()
+    );
 }
 
 fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::path::Path) {
@@ -399,13 +420,9 @@ fn cmd_path(source: &str, target: &str, graph_path: &std::path::Path) {
             let src_idx = graph.node_index.get(src_id);
             let tgt_idx = graph.node_index.get(tgt_id);
             if let (Some(&si), Some(&ti)) = (src_idx, tgt_idx) {
-                if let Some(path) = petgraph::algo::astar(
-                    &graph.inner,
-                    si,
-                    |n| n == ti,
-                    |_| 1,
-                    |_| 0,
-                ) {
+                if let Some(path) =
+                    petgraph::algo::astar(&graph.inner, si, |n| n == ti, |_| 1, |_| 0)
+                {
                     println!("Path ({} hops):", path.0);
                     for idx in &path.1 {
                         let node = &graph.inner[*idx];
@@ -478,7 +495,10 @@ fn cmd_benchmark(graph_path: &std::path::Path) {
 }
 
 fn cmd_update(path: &std::path::Path) {
-    println!("kodex update: re-extracting code files in {}", path.display());
+    println!(
+        "kodex update: re-extracting code files in {}",
+        path.display()
+    );
 
     let detection = kodex::detect::detect(path, false);
     let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
@@ -498,7 +518,8 @@ fn cmd_update(path: &std::path::Path) {
         let community_labels: std::collections::HashMap<usize, String> = communities
             .iter()
             .map(|(&cid, nodes)| {
-                let label = nodes.first()
+                let label = nodes
+                    .first()
                     .and_then(|nid| graph.get_node(nid))
                     .map(|n| n.label.clone())
                     .unwrap_or_else(|| format!("Community {cid}"));
@@ -510,9 +531,18 @@ fn cmd_update(path: &std::path::Path) {
         let _ = std::fs::create_dir_all(&out_dir);
         let _ = kodex::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5"));
         let _ = kodex::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
-        let _ = kodex::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
+        let _ = kodex::export::to_html(
+            &graph,
+            &communities,
+            &out_dir.join("graph.html"),
+            Some(&community_labels),
+        );
 
-        println!("  updated: {} nodes, {} edges", graph.node_count(), graph.edge_count());
+        println!(
+            "  updated: {} nodes, {} edges",
+            graph.node_count(),
+            graph.edge_count()
+        );
     }
 
     #[cfg(not(feature = "extract"))]
@@ -535,14 +565,18 @@ fn cmd_cluster_only(path: &std::path::Path) {
     println!("Re-clustered: {} communities", communities.len());
     for (cid, nodes) in &communities {
         let coh = cohesion.get(cid).copied().unwrap_or(0.0);
-        println!("  Community {cid}: {} nodes (cohesion {coh:.2})", nodes.len());
+        println!(
+            "  Community {cid}: {} nodes (cohesion {coh:.2})",
+            nodes.len()
+        );
     }
 
     // Re-export with new communities
     let community_labels: std::collections::HashMap<usize, String> = communities
         .iter()
         .map(|(&cid, nodes)| {
-            let label = nodes.first()
+            let label = nodes
+                .first()
                 .and_then(|nid| graph.get_node(nid))
                 .map(|n| n.label.clone())
                 .unwrap_or_else(|| format!("Community {cid}"));
@@ -553,7 +587,12 @@ fn cmd_cluster_only(path: &std::path::Path) {
     let out_dir = path.join("kodex-out");
     let _ = kodex::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5"));
     let _ = kodex::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
-    let _ = kodex::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
+    let _ = kodex::export::to_html(
+        &graph,
+        &communities,
+        &out_dir.join("graph.html"),
+        Some(&community_labels),
+    );
     println!("  re-exported kodex.h5, graph.json, graph.html");
 }
 
@@ -568,7 +607,6 @@ fn cmd_add(url: &str, author: Option<&str>, contributor: Option<&str>, dir: &std
             Ok(path) => println!("  saved to {}", path.display()),
             Err(e) => eprintln!("  fetch failed: {e}"),
         }
-        return;
     }
 
     #[cfg(not(feature = "fetch"))]
@@ -582,7 +620,8 @@ fn cmd_add(url: &str, author: Option<&str>, contributor: Option<&str>, dir: &std
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let safe_name: String = url.chars()
+        let safe_name: String = url
+            .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
             .take(50)
             .collect();
@@ -635,7 +674,11 @@ fn cmd_serve(graph_path: &std::path::Path) {
 fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
     let req: serde_json::Value = match serde_json::from_str(input) {
         Ok(v) => v,
-        Err(e) => return format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32700,"message":"Parse error: {e}"}},"id":null}}"#),
+        Err(e) => {
+            return format!(
+                r#"{{"jsonrpc":"2.0","error":{{"code":-32700,"message":"Parse error: {e}"}},"id":null}}"#
+            )
+        }
     };
 
     let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
@@ -644,14 +687,26 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
 
     let result = match method {
         "query_graph" => {
-            let question = params.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let question = params
+                .get("question")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
-            let budget = params.get("token_budget").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
-            let terms: Vec<String> = question.split_whitespace().filter(|t| t.len() > 2).map(|t| t.to_lowercase()).collect();
+            let budget = params
+                .get("token_budget")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(2000) as usize;
+            let terms: Vec<String> = question
+                .split_whitespace()
+                .filter(|t| t.len() > 2)
+                .map(|t| t.to_lowercase())
+                .collect();
             let scored = kodex::serve::score_nodes(graph, &terms);
             let start: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
             let (visited, edges) = kodex::serve::bfs(graph, &start, depth);
-            serde_json::json!(kodex::serve::subgraph_to_text(graph, &visited, &edges, budget))
+            serde_json::json!(kodex::serve::subgraph_to_text(
+                graph, &visited, &edges, budget
+            ))
         }
         "get_node" => {
             let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
@@ -681,24 +736,46 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
         }
         "save_insight" => {
             let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
-            let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
-            let node_ids: Vec<String> = params.get("nodes")
+            let description = params
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let node_ids: Vec<String> = params
+                .get("nodes")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let pattern = params.get("pattern").and_then(|v| v.as_str());
             let graph_path = std::path::Path::new("kodex-out/kodex.h5");
-            match kodex::knowledge::save_insight(graph_path, None, label, description, &node_ids, pattern) {
-                Ok(()) => serde_json::json!({"status": "saved", "label": label, "nodes": node_ids.len()}),
+            match kodex::knowledge::save_insight(
+                graph_path,
+                None,
+                label,
+                description,
+                &node_ids,
+                pattern,
+            ) {
+                Ok(()) => {
+                    serde_json::json!({"status": "saved", "label": label, "nodes": node_ids.len()})
+                }
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
         "save_note" => {
             let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            let related: Vec<String> = params.get("related_nodes")
+            let related: Vec<String> = params
+                .get("related_nodes")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let graph_path = std::path::Path::new("kodex-out/kodex.h5");
             match kodex::knowledge::save_note(graph_path, None, title, content, &related) {
@@ -709,25 +786,46 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
         "add_edge" => {
             let source = params.get("source").and_then(|v| v.as_str()).unwrap_or("");
             let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
-            let relation = params.get("relation").and_then(|v| v.as_str()).unwrap_or("related_to");
+            let relation = params
+                .get("relation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("related_to");
             let description = params.get("description").and_then(|v| v.as_str());
             let graph_path = std::path::Path::new("kodex-out/kodex.h5");
             match kodex::knowledge::add_edge(graph_path, source, target, relation, description) {
-                Ok(()) => serde_json::json!({"status": "saved", "source": source, "target": target}),
+                Ok(()) => {
+                    serde_json::json!({"status": "saved", "source": source, "target": target})
+                }
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
         "learn" => {
-            let knowledge_type = params.get("type").and_then(|v| v.as_str()).unwrap_or("pattern");
+            let knowledge_type = params
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pattern");
             let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let description = params.get("description").and_then(|v| v.as_str()).unwrap_or("");
-            let related: Vec<String> = params.get("related_nodes")
+            let description = params
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let related: Vec<String> = params
+                .get("related_nodes")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let tags: Vec<String> = params.get("tags")
+            let tags: Vec<String> = params
+                .get("tags")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             let kt = match knowledge_type {
                 "architecture" => kodex::learn::KnowledgeType::Architecture,
@@ -749,7 +847,15 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
             };
             let vault = std::path::Path::new("kodex-out/vault");
             let graph_path = std::path::Path::new("kodex-out/kodex.h5");
-            match kodex::learn::learn(vault, Some(graph_path), kt, title, description, &related, &tags) {
+            match kodex::learn::learn(
+                vault,
+                Some(graph_path),
+                kt,
+                title,
+                description,
+                &related,
+                &tags,
+            ) {
                 Ok(_) => serde_json::json!({"status": "learned", "title": title}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -759,27 +865,34 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
             let type_filter = params.get("type").and_then(|v| v.as_str());
             let vault = std::path::Path::new("kodex-out/vault");
             let results = kodex::learn::query_knowledge(vault, query, type_filter);
-            let items: Vec<serde_json::Value> = results.iter().map(|k| {
-                serde_json::json!({
-                    "title": k.title,
-                    "type": k.knowledge_type.to_string(),
-                    "description": k.description.lines().next().unwrap_or(""),
-                    "confidence": (k.confidence * 100.0) as u32,
-                    "observations": k.observations,
-                    "related_nodes": k.related_nodes,
+            let items: Vec<serde_json::Value> = results
+                .iter()
+                .map(|k| {
+                    serde_json::json!({
+                        "title": k.title,
+                        "type": k.knowledge_type.to_string(),
+                        "description": k.description.lines().next().unwrap_or(""),
+                        "confidence": (k.confidence * 100.0) as u32,
+                        "observations": k.observations,
+                        "related_nodes": k.related_nodes,
+                    })
                 })
-            }).collect();
+                .collect();
             serde_json::json!(items)
         }
         "knowledge_context" => {
             let vault = std::path::Path::new("kodex-out/vault");
-            let max = params.get("max_items").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let max = params
+                .get("max_items")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(20) as usize;
             serde_json::json!(kodex::learn::knowledge_context(vault, max))
         }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 
-    format!(r#"{{"jsonrpc":"2.0","result":{},"id":{}}}"#,
+    format!(
+        r#"{{"jsonrpc":"2.0","result":{},"id":{}}}"#,
         serde_json::to_string(&result).unwrap_or_default(),
         serde_json::to_string(&id).unwrap_or_default(),
     )
@@ -789,17 +902,17 @@ fn cmd_workspace(action: &str, vault_override: Option<&std::path::Path>) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     match action {
-        "init" => {
-            match kodex::workspace::init(&cwd) {
-                Ok(path) => println!("Created {}", path.display()),
-                Err(e) => eprintln!("Error: {e}"),
-            }
-        }
+        "init" => match kodex::workspace::init(&cwd) {
+            Ok(path) => println!("Created {}", path.display()),
+            Err(e) => eprintln!("Error: {e}"),
+        },
         "run" => {
             let config_path = match kodex::workspace::find_config(&cwd) {
                 Some(p) => p,
                 None => {
-                    eprintln!("No kodex-workspace.yaml found. Run `graphify workspace init` first.");
+                    eprintln!(
+                        "No kodex-workspace.yaml found. Run `graphify workspace init` first."
+                    );
                     return;
                 }
             };

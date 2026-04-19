@@ -10,13 +10,8 @@ pub struct ImportEdge {
 
 /// Function pointer types for language-specific handlers.
 #[cfg(feature = "extract")]
-pub type ImportHandler = fn(
-    node: &Node,
-    source: &[u8],
-    file_nid: &str,
-    stem: &str,
-    str_path: &str,
-) -> Vec<ImportEdge>;
+pub type ImportHandler =
+    fn(node: &Node, source: &[u8], file_nid: &str, stem: &str, str_path: &str) -> Vec<ImportEdge>;
 
 #[cfg(feature = "extract")]
 pub type FunctionNameResolver = fn(node: &Node, source: &[u8]) -> Option<String>;

@@ -51,7 +51,11 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
             .cloned()
             .unwrap_or_else(|| make_id(&[&filename]));
 
-        let file_type = match frontmatter.get("file_type").or(frontmatter.get("type")).map(|s| s.as_str()) {
+        let file_type = match frontmatter
+            .get("file_type")
+            .or(frontmatter.get("type"))
+            .map(|s| s.as_str())
+        {
             Some("code") => FileType::Code,
             Some("document") => FileType::Document,
             Some("paper") => FileType::Paper,
@@ -83,10 +87,7 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
             id: node_id.clone(),
             label: extract_title(&content).unwrap_or_else(|| filename.replace('_', " ")),
             file_type,
-            source_file: frontmatter
-                .get("source_file")
-                .cloned()
-                .unwrap_or_default(),
+            source_file: frontmatter.get("source_file").cloned().unwrap_or_default(),
             source_location: frontmatter.get("location").cloned(),
             confidence: Some(confidence),
             confidence_score: frontmatter
@@ -179,10 +180,7 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
 }
 
 /// Save the graph as a cached graph.json derived from vault.
-pub fn cache_graph_from_vault(
-    vault_dir: &Path,
-    cache_path: &Path,
-) -> crate::error::Result<()> {
+pub fn cache_graph_from_vault(vault_dir: &Path, cache_path: &Path) -> crate::error::Result<()> {
     let graph = load_graph_from_vault(vault_dir)?;
     let communities = crate::cluster::cluster(&graph);
     crate::export::to_json(&graph, &communities, cache_path)?;
@@ -191,9 +189,7 @@ pub fn cache_graph_from_vault(
 
 /// Check if cached graph.json is stale compared to vault files.
 pub fn is_cache_stale(vault_dir: &Path, cache_path: &Path) -> bool {
-    let cache_mtime = match std::fs::metadata(cache_path)
-        .and_then(|m| m.modified())
-    {
+    let cache_mtime = match std::fs::metadata(cache_path).and_then(|m| m.modified()) {
         Ok(t) => t,
         Err(_) => return true, // No cache
     };
@@ -223,7 +219,8 @@ fn collect_md_files(dir: &Path) -> crate::error::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !dir.is_dir() {
         return Err(crate::error::KodexError::Other(format!(
-            "Vault directory not found: {}", dir.display()
+            "Vault directory not found: {}",
+            dir.display()
         )));
     }
     for entry in std::fs::read_dir(dir)?.flatten() {
@@ -275,9 +272,8 @@ fn parse_connections(
     let mut edges = Vec::new();
     let mut in_connections = false;
 
-    let conn_re: Regex = Regex::new(
-        r"- \[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*-\s*(\S+)\s*\[(\w+)\]"
-    ).unwrap();
+    let conn_re: Regex =
+        Regex::new(r"- \[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*-\s*(\S+)\s*\[(\w+)\]").unwrap();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -327,7 +323,10 @@ mod tests {
 
     #[test]
     fn test_extract_title() {
-        assert_eq!(extract_title("---\n---\n# Hello\nBody"), Some("Hello".to_string()));
+        assert_eq!(
+            extract_title("---\n---\n# Hello\nBody"),
+            Some("Hello".to_string())
+        );
         assert_eq!(extract_title("No heading"), None);
     }
 
@@ -343,7 +342,8 @@ mod tests {
         std::fs::write(
             dir.path().join("Beta.md"),
             "---\nid: beta\nfile_type: code\nsource_file: b.py\n---\n# Beta\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let graph = load_graph_from_vault(dir.path()).unwrap();
         assert_eq!(graph.node_count(), 2);

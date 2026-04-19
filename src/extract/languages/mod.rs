@@ -25,8 +25,7 @@ pub mod ruby;
 #[cfg(feature = "lang-csharp")]
 pub mod csharp;
 
-#[cfg(feature = "lang-kotlin")]
-pub mod kotlin;
+// kotlin disabled: tree-sitter-kotlin ABI mismatch
 
 #[cfg(feature = "lang-scala")]
 pub mod scala;

@@ -1,24 +1,24 @@
-mod json_export;
-mod html;
-mod obsidian;
-mod cypher;
-mod wiki;
-mod graphml;
 mod canvas;
+mod cypher;
+mod graphml;
+mod html;
+mod json_export;
+mod obsidian;
+mod wiki;
 
-pub use json_export::to_json;
-pub use html::to_html;
-pub use obsidian::to_obsidian;
-pub use cypher::to_cypher;
-pub use wiki::to_wiki;
-pub use graphml::to_graphml;
 pub use canvas::to_canvas;
+pub use cypher::to_cypher;
+pub use graphml::to_graphml;
+pub use html::to_html;
+pub use json_export::to_json;
+pub use obsidian::to_obsidian;
+pub use wiki::to_wiki;
 
 use std::collections::{HashMap, HashSet};
 
 pub const COMMUNITY_COLORS: &[&str] = &[
-    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
-    "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC",
+    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7",
+    "#9C755F", "#BAB0AC",
 ];
 
 /// Strip diacritics from text (NFD normalize, remove combining marks).

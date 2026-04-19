@@ -30,7 +30,12 @@ fn import_swift(
 
 pub static SWIFT_CONFIG: LanguageConfig = LanguageConfig {
     ts_language: || tree_sitter_swift::LANGUAGE.into(),
-    class_types: &["class_declaration", "struct_declaration", "protocol_declaration", "enum_declaration"],
+    class_types: &[
+        "class_declaration",
+        "struct_declaration",
+        "protocol_declaration",
+        "enum_declaration",
+    ],
     function_types: &["function_declaration"],
     import_types: &["import_declaration"],
     call_types: &["call_expression"],

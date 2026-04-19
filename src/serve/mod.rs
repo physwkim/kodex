@@ -1,12 +1,12 @@
 mod traversal;
 
-pub use traversal::{bfs, dfs, subgraph_to_text, score_nodes};
+pub use traversal::{bfs, dfs, score_nodes, subgraph_to_text};
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::KodexGraph;
 use crate::graph::build_from_extraction;
+use crate::graph::KodexGraph;
 use crate::types::ExtractionResult;
 
 /// Smart graph loading: try vault first, fall back to graph.json.
@@ -21,7 +21,11 @@ pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
     }
 
     // Explicit HDF5 file
-    if path.extension().map(|e| e == "h5" || e == "hdf5").unwrap_or(false) {
+    if path
+        .extension()
+        .map(|e| e == "h5" || e == "hdf5")
+        .unwrap_or(false)
+    {
         return crate::storage::load_hdf5(path);
     }
 

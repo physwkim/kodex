@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn test_normalize_id() {
-        assert_eq!(normalize_id("Session_ValidateToken"), "session_validatetoken");
+        assert_eq!(
+            normalize_id("Session_ValidateToken"),
+            "session_validatetoken"
+        );
         assert_eq!(normalize_id("foo--bar"), "foo_bar");
     }
 }

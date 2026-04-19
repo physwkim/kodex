@@ -36,7 +36,11 @@ fn import_php(
 
 pub static PHP_CONFIG: LanguageConfig = LanguageConfig {
     ts_language: || tree_sitter_php::LANGUAGE_PHP.into(),
-    class_types: &["class_declaration", "interface_declaration", "trait_declaration"],
+    class_types: &[
+        "class_declaration",
+        "interface_declaration",
+        "trait_declaration",
+    ],
     function_types: &["function_definition", "method_declaration"],
     import_types: &["namespace_use_declaration"],
     call_types: &["function_call_expression", "member_call_expression"],
@@ -45,7 +49,11 @@ pub static PHP_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_call_expression"],
     call_accessor_field: "name",
-    function_boundary_types: &["function_definition", "method_declaration", "anonymous_function_creation_expression"],
+    function_boundary_types: &[
+        "function_definition",
+        "method_declaration",
+        "anonymous_function_creation_expression",
+    ],
     function_label_parens: true,
     import_handler: Some(import_php),
     resolve_function_name: None,

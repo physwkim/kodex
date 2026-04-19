@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::KodexGraph;
 use super::{node_community_map, strip_diacritics};
+use crate::graph::KodexGraph;
 
 /// Export graph to JSON in networkx node-link format.
 pub fn to_json(
@@ -35,7 +35,9 @@ pub fn to_json(
     let links: Vec<serde_json::Value> = graph
         .edges()
         .map(|(src, tgt, edge)| {
-            let score = edge.confidence_score.unwrap_or_else(|| edge.confidence.default_score());
+            let score = edge
+                .confidence_score
+                .unwrap_or_else(|| edge.confidence.default_score());
             serde_json::json!({
                 "source": src,
                 "target": tgt,
@@ -66,7 +68,6 @@ pub fn to_json(
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(&data)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(&data).map_err(std::io::Error::other)?;
     std::fs::write(output_path, json)
 }
