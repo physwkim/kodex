@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use crate::graph::GraphifyGraph;
+use crate::graph::EngramGraph;
 
 /// Louvain community detection with modularity optimization.
 ///
 /// Greedily moves nodes to the neighboring community that yields the
 /// greatest modularity gain, iterating until no improvement is found.
-pub fn louvain_communities(graph: &GraphifyGraph) -> HashMap<String, usize> {
+pub fn louvain_communities(graph: &EngramGraph) -> HashMap<String, usize> {
     let node_ids: Vec<String> = graph.node_ids().cloned().collect();
     if node_ids.is_empty() {
         return HashMap::new();

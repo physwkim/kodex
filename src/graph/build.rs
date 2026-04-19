@@ -1,11 +1,11 @@
 use crate::id::normalize_id;
 use crate::types::ExtractionResult;
 
-use super::GraphifyGraph;
+use super::EngramGraph;
 
 /// Build a graph from a single extraction result.
-pub fn build_from_extraction(extraction: &ExtractionResult) -> GraphifyGraph {
-    let mut graph = GraphifyGraph::new();
+pub fn build_from_extraction(extraction: &ExtractionResult) -> EngramGraph {
+    let mut graph = EngramGraph::new();
 
     // Add nodes
     for node in &extraction.nodes {
@@ -41,8 +41,8 @@ pub fn build_from_extraction(extraction: &ExtractionResult) -> GraphifyGraph {
 
 /// Merge multiple extraction results into one graph.
 /// Duplicate node IDs are overwritten by later extractions.
-pub fn build_merged(extractions: &[ExtractionResult]) -> GraphifyGraph {
-    let mut graph = GraphifyGraph::new();
+pub fn build_merged(extractions: &[ExtractionResult]) -> EngramGraph {
+    let mut graph = EngramGraph::new();
 
     for extraction in extractions {
         for node in &extraction.nodes {

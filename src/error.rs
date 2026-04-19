@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum GraphifyError {
+pub enum EngramError {
     #[error("Extraction error: {0}")]
     Extraction(String),
 
@@ -30,4 +30,4 @@ pub enum GraphifyError {
     Other(String),
 }
 
-pub type Result<T> = std::result::Result<T, GraphifyError>;
+pub type Result<T> = std::result::Result<T, EngramError>;

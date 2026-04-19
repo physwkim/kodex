@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::error::{GraphifyError, Result};
+use crate::error::{EngramError, Result};
 use crate::types::{Edge, ExtractionResult};
 
 const CONFIG_FILE: &str = "engram-workspace.yaml";
@@ -18,7 +18,7 @@ pub struct WorkspaceConfig {
 /// Keeps it simple — no serde_yaml dependency.
 pub fn load_config(path: &Path) -> Result<WorkspaceConfig> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| GraphifyError::Other(format!("Failed to read {}: {e}", path.display())))?;
+        .map_err(|e| EngramError::Other(format!("Failed to read {}: {e}", path.display())))?;
 
     let mut projects = Vec::new();
     let mut output = None;
@@ -54,7 +54,7 @@ pub fn load_config(path: &Path) -> Result<WorkspaceConfig> {
     }
 
     if projects.is_empty() {
-        return Err(GraphifyError::Other(
+        return Err(EngramError::Other(
             "No projects listed in workspace config".to_string(),
         ));
     }
@@ -70,7 +70,7 @@ pub fn load_config(path: &Path) -> Result<WorkspaceConfig> {
 pub fn init(dir: &Path) -> Result<PathBuf> {
     let config_path = dir.join(CONFIG_FILE);
     if config_path.exists() {
-        return Err(GraphifyError::Other(format!(
+        return Err(EngramError::Other(format!(
             "{CONFIG_FILE} already exists at {}",
             config_path.display()
         )));
@@ -142,7 +142,7 @@ pub fn run(
 
     std::fs::create_dir_all(&config.output)?;
 
-    println!("graphify workspace: {} projects", config.projects.len());
+    println!("engram workspace: {} projects", config.projects.len());
 
     // Step 1: Build each project
     let mut all_extractions: Vec<(String, ExtractionResult)> = Vec::new();
@@ -204,7 +204,7 @@ pub fn run(
     }
 
     if all_extractions.is_empty() {
-        return Err(GraphifyError::Other("No extractions produced".to_string()));
+        return Err(EngramError::Other("No extractions produced".to_string()));
     }
 
     // Step 2: Merge into unified graph

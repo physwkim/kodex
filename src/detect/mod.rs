@@ -5,7 +5,7 @@ mod paper;
 mod manifest;
 
 pub use classify::{classify_file, FileCategory, CODE_EXTENSIONS, DOC_EXTENSIONS, PAPER_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, OFFICE_EXTENSIONS};
-pub use ignore::load_graphifyignore;
+pub use ignore::load_engramignore;
 pub use sensitive::is_sensitive;
 pub use paper::looks_like_paper;
 pub use manifest::{load_manifest, save_manifest};
@@ -29,7 +29,7 @@ const NOISE_DIRS: &[&str] = &[
 
 /// Find all extractable files in `root` directory.
 pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
-    let ignore_patterns = load_graphifyignore(root);
+    let ignore_patterns = load_engramignore(root);
     let pattern_count = ignore_patterns.len();
 
     let mut files = DetectedFiles::default();
@@ -137,7 +137,7 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
         needs_graph,
         warning,
         skipped_sensitive,
-        graphifyignore_patterns: pattern_count,
+        engramignore_patterns: pattern_count,
     }
 }
 

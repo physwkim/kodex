@@ -1,8 +1,8 @@
 # engram
 
-Rust port of [graphify](https://github.com/safishamsi/graphify) — a knowledge graph builder for code and documents.
+AI knowledge graph that learns across sessions. Builds a persistent, queryable graph from your codebase and accumulates knowledge as you work — patterns, decisions, conventions, domain concepts — so the next session starts where the last one left off.
 
-Deterministic AST extraction via tree-sitter, community detection, interactive visualization, and MCP server for AI editor integration. Single binary, no Python runtime required.
+Tree-sitter AST extraction, Louvain community detection, Obsidian vault integration, MCP server for AI editors. Single Rust binary.
 
 ## Install
 
@@ -299,9 +299,9 @@ curl -L -o ~/.cache/whisper/ggml-base.bin \
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
-| `GRAPHIFY_WHISPER_MODEL` | Model size | `base` |
-| `GRAPHIFY_WHISPER_MODEL_PATH` | Explicit model path | auto-detect |
-| `GRAPHIFY_WHISPER_PROMPT` | Override domain prompt | from god nodes |
+| `ENGRAM_WHISPER_MODEL` | Model size | `base` |
+| `ENGRAM_WHISPER_MODEL_PATH` | Explicit model path | auto-detect |
+| `ENGRAM_WHISPER_PROMPT` | Override domain prompt | from god nodes |
 
 ## Feature Flags
 

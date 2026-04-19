@@ -146,7 +146,7 @@ fn uninstall_hook(dir: &Path, name: &str) -> String {
         return "not installed".to_string();
     }
 
-    // Remove the graphify section
+    // Remove the engram section
     let mut result = String::new();
     let mut in_section = false;
     for line in content.lines() {

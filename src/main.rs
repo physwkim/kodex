@@ -612,7 +612,7 @@ fn cmd_serve(graph_path: &std::path::Path) {
     }
 }
 
-fn handle_jsonrpc(input: &str, graph: &engram::graph::GraphifyGraph) -> String {
+fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
     let req: serde_json::Value = match serde_json::from_str(input) {
         Ok(v) => v,
         Err(e) => return format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32700,"message":"Parse error: {e}"}},"id":null}}"#),

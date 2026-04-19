@@ -5,13 +5,13 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use crate::types::{Edge, Hyperedge, Node};
 
 /// Wrapper around petgraph providing O(1) node lookup by ID string.
-pub struct GraphifyGraph {
+pub struct EngramGraph {
     pub inner: DiGraph<Node, Edge>,
     pub node_index: HashMap<String, NodeIndex>,
     pub hyperedges: Vec<Hyperedge>,
 }
 
-impl GraphifyGraph {
+impl EngramGraph {
     pub fn new() -> Self {
         Self {
             inner: DiGraph::new(),
@@ -105,7 +105,7 @@ impl GraphifyGraph {
     }
 }
 
-impl Default for GraphifyGraph {
+impl Default for EngramGraph {
     fn default() -> Self {
         Self::new()
     }
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_add_and_lookup() {
-        let mut g = GraphifyGraph::new();
+        let mut g = EngramGraph::new();
         g.add_node(test_node("a"));
         g.add_node(test_node("b"));
         g.add_edge(test_edge("a", "b"));
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_degree() {
-        let mut g = GraphifyGraph::new();
+        let mut g = EngramGraph::new();
         g.add_node(test_node("a"));
         g.add_node(test_node("b"));
         g.add_node(test_node("c"));
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_node_overwrite() {
-        let mut g = GraphifyGraph::new();
+        let mut g = EngramGraph::new();
         g.add_node(test_node("a"));
         let mut updated = test_node("a");
         updated.label = "Updated".to_string();

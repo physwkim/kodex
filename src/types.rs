@@ -199,7 +199,7 @@ pub struct DetectionResult {
     #[serde(default)]
     pub skipped_sensitive: Vec<String>,
     #[serde(default)]
-    pub graphifyignore_patterns: usize,
+    pub engramignore_patterns: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

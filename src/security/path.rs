@@ -32,20 +32,20 @@ pub fn validate_graph_path(
 
     let base = base
         .canonicalize()
-        .map_err(|_| crate::error::GraphifyError::PathEscape(format!(
-            "Graph base directory does not exist: {}. Run graphify first to build the graph.",
+        .map_err(|_| crate::error::EngramError::PathEscape(format!(
+            "Graph base directory does not exist: {}. Run engram first to build the graph.",
             base.display()
         )))?;
 
     let resolved = PathBuf::from(path)
         .canonicalize()
-        .map_err(|_| crate::error::GraphifyError::FileNotFound(format!(
+        .map_err(|_| crate::error::EngramError::FileNotFound(format!(
             "Graph file not found: {path}"
         )))?;
 
     resolved
         .strip_prefix(&base)
-        .map_err(|_| crate::error::GraphifyError::PathEscape(format!(
+        .map_err(|_| crate::error::EngramError::PathEscape(format!(
             "Path {path:?} escapes the allowed directory {}. \
              Only paths inside engram-out/ are permitted.",
             base.display()

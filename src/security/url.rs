@@ -11,14 +11,14 @@ const BLOCKED_HOSTS: &[&str] = &["metadata.google.internal", "metadata.google.co
 pub fn validate_url(url: &str) -> crate::error::Result<String> {
     // Parse scheme
     let scheme_end = url.find("://").ok_or_else(|| {
-        crate::error::GraphifyError::UrlValidation(format!(
+        crate::error::EngramError::UrlValidation(format!(
             "Invalid URL (no scheme): {url:?}"
         ))
     })?;
     let scheme = &url[..scheme_end].to_lowercase();
 
     if !ALLOWED_SCHEMES.contains(&scheme.as_str()) {
-        return Err(crate::error::GraphifyError::UrlValidation(format!(
+        return Err(crate::error::EngramError::UrlValidation(format!(
             "Blocked URL scheme '{scheme}' - only http and https are allowed. Got: {url:?}"
         )));
     }
@@ -42,14 +42,14 @@ pub fn validate_url(url: &str) -> crate::error::Result<String> {
     };
 
     if hostname.is_empty() {
-        return Err(crate::error::GraphifyError::UrlValidation(format!(
+        return Err(crate::error::EngramError::UrlValidation(format!(
             "Empty hostname in URL: {url:?}"
         )));
     }
 
     // Block known cloud metadata hostnames
     if BLOCKED_HOSTS.contains(&hostname.to_lowercase().as_str()) {
-        return Err(crate::error::GraphifyError::UrlValidation(format!(
+        return Err(crate::error::EngramError::UrlValidation(format!(
             "Blocked cloud metadata endpoint '{hostname}'. Got: {url:?}"
         )));
     }
@@ -60,7 +60,7 @@ pub fn validate_url(url: &str) -> crate::error::Result<String> {
         for addr in addrs {
             let ip = addr.ip();
             if is_blocked_ip(&ip) {
-                return Err(crate::error::GraphifyError::UrlValidation(format!(
+                return Err(crate::error::EngramError::UrlValidation(format!(
                     "Blocked private/internal IP {ip} (resolved from '{hostname}'). Got: {url:?}"
                 )));
             }

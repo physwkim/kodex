@@ -3,7 +3,7 @@ use std::path::Path;
 
 /// Load `.engramignore` patterns by walking up from `root` to find the file.
 /// Returns a list of glob patterns (like .gitignore syntax).
-pub fn load_graphifyignore(root: &Path) -> Vec<String> {
+pub fn load_engramignore(root: &Path) -> Vec<String> {
     let mut patterns = Vec::new();
 
     // Check root and parent directories
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn test_no_ignorefile() {
         let dir = TempDir::new().unwrap();
-        let patterns = load_graphifyignore(dir.path());
+        let patterns = load_engramignore(dir.path());
         assert!(patterns.is_empty());
     }
 
@@ -50,7 +50,7 @@ mod tests {
             "# comment\nvendor/\n*.generated.py\n",
         )
         .unwrap();
-        let patterns = load_graphifyignore(dir.path());
+        let patterns = load_engramignore(dir.path());
         assert_eq!(patterns, vec!["vendor/", "*.generated.py"]);
     }
 }

@@ -26,11 +26,11 @@ pub fn watch(
 
     let (tx, rx) = channel();
     let mut watcher = notify::RecommendedWatcher::new(tx, Config::default())
-        .map_err(|e| crate::error::GraphifyError::Other(format!("Watch error: {e}")))?;
+        .map_err(|e| crate::error::EngramError::Other(format!("Watch error: {e}")))?;
 
     watcher
         .watch(watch_path, RecursiveMode::Recursive)
-        .map_err(|e| crate::error::GraphifyError::Other(format!("Watch error: {e}")))?;
+        .map_err(|e| crate::error::EngramError::Other(format!("Watch error: {e}")))?;
 
     // Also watch vault for reverse sync (Obsidian edits → graph)
     if let Some(vp) = vault_path {
@@ -274,7 +274,7 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
 }
 
 #[cfg(feature = "watch")]
-fn find_node_by_filename(graph: &crate::graph::GraphifyGraph, filename: &str) -> Option<String> {
+fn find_node_by_filename(graph: &crate::graph::EngramGraph, filename: &str) -> Option<String> {
     let lower = filename.to_lowercase().replace('_', "");
     graph.node_ids().find(|id| {
         graph
@@ -293,7 +293,7 @@ pub fn watch(
     _debounce_secs: f64,
     _vault_path: Option<&Path>,
 ) -> crate::error::Result<()> {
-    Err(crate::error::GraphifyError::Other(
+    Err(crate::error::EngramError::Other(
         "Watch feature not enabled. Rebuild with --features watch".to_string(),
     ))
 }

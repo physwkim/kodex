@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::graph::GraphifyGraph;
+use crate::graph::EngramGraph;
 
 /// Compute cohesion score for a community: ratio of actual to possible internal edges.
 /// Range: 0.0 (no internal edges) to 1.0 (complete subgraph).
-pub fn cohesion_score(graph: &GraphifyGraph, community_nodes: &[String]) -> f64 {
+pub fn cohesion_score(graph: &EngramGraph, community_nodes: &[String]) -> f64 {
     let n = community_nodes.len();
     if n < 2 {
         return 1.0; // Single node or empty: perfect cohesion by definition
@@ -30,7 +30,7 @@ pub fn cohesion_score(graph: &GraphifyGraph, community_nodes: &[String]) -> f64 
 
 /// Compute cohesion scores for all communities.
 pub fn score_all(
-    graph: &GraphifyGraph,
+    graph: &EngramGraph,
     communities: &HashMap<usize, Vec<String>>,
 ) -> HashMap<usize, f64> {
     communities

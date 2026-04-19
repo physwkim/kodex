@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::GraphifyGraph;
+use crate::graph::EngramGraph;
 use super::{node_community_map, COMMUNITY_COLORS};
 
 /// Export graph as Obsidian Canvas JSON (infinite canvas with community groupings).
 pub fn to_canvas(
-    graph: &GraphifyGraph,
+    graph: &EngramGraph,
     communities: &HashMap<usize, Vec<String>>,
     output_path: &Path,
     community_labels: Option<&HashMap<usize, String>>,

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::graph::GraphifyGraph;
+use crate::graph::EngramGraph;
 
 /// True if node is a file-level hub or AST method stub.
 ///
@@ -8,7 +8,7 @@ use crate::graph::GraphifyGraph;
 /// - Label matches source filename
 /// - Label is ".method_name()" (method stub)
 /// - Label is "function_name()" with ≤1 connection
-pub fn is_file_node(graph: &GraphifyGraph, node_id: &str) -> bool {
+pub fn is_file_node(graph: &EngramGraph, node_id: &str) -> bool {
     let node = match graph.get_node(node_id) {
         Some(n) => n,
         None => return false,
@@ -36,7 +36,7 @@ pub fn is_file_node(graph: &GraphifyGraph, node_id: &str) -> bool {
 /// Signals:
 /// - Empty source_file
 /// - source_file has no file extension (not a real path)
-pub fn is_concept_node(graph: &GraphifyGraph, node_id: &str) -> bool {
+pub fn is_concept_node(graph: &EngramGraph, node_id: &str) -> bool {
     let node = match graph.get_node(node_id) {
         Some(n) => n,
         None => return false,

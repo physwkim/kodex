@@ -452,7 +452,7 @@ fn add_knowledge_to_graph(graph_path: &Path, k: &Knowledge) -> crate::error::Res
     }
 
     let json = serde_json::to_string_pretty(&data)
-        .map_err(|e| crate::error::GraphifyError::Other(e.to_string()))?;
+        .map_err(|e| crate::error::EngramError::Other(e.to_string()))?;
     let tmp = graph_path.with_extension("json.tmp");
     std::fs::write(&tmp, &json)?;
     std::fs::rename(&tmp, graph_path).or_else(|_| {

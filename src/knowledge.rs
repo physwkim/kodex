@@ -23,7 +23,7 @@ pub fn save_insight(
     let nodes = data
         .get_mut("nodes")
         .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| crate::error::GraphifyError::Other("Invalid graph.json".to_string()))?;
+        .ok_or_else(|| crate::error::EngramError::Other("Invalid graph.json".to_string()))?;
 
     // Check if insight already exists
     let exists = nodes.iter().any(|n| {
@@ -48,7 +48,7 @@ pub fn save_insight(
     let links = data
         .get_mut("links")
         .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| crate::error::GraphifyError::Other("Invalid graph.json".to_string()))?;
+        .ok_or_else(|| crate::error::EngramError::Other("Invalid graph.json".to_string()))?;
 
     for nid in node_ids {
         links.push(serde_json::json!({
@@ -103,7 +103,7 @@ pub fn save_note(
     let nodes = data
         .get_mut("nodes")
         .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| crate::error::GraphifyError::Other("Invalid graph.json".to_string()))?;
+        .ok_or_else(|| crate::error::EngramError::Other("Invalid graph.json".to_string()))?;
 
     let exists = nodes.iter().any(|n| {
         n.get("id").and_then(|v| v.as_str()) == Some(&note_id)
@@ -125,7 +125,7 @@ pub fn save_note(
     let links = data
         .get_mut("links")
         .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| crate::error::GraphifyError::Other("Invalid graph.json".to_string()))?;
+        .ok_or_else(|| crate::error::EngramError::Other("Invalid graph.json".to_string()))?;
 
     for nid in related_nodes {
         links.push(serde_json::json!({
@@ -162,7 +162,7 @@ pub fn add_edge(
     let links = data
         .get_mut("links")
         .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| crate::error::GraphifyError::Other("Invalid graph.json".to_string()))?;
+        .ok_or_else(|| crate::error::EngramError::Other("Invalid graph.json".to_string()))?;
 
     links.push(serde_json::json!({
         "source": source,
@@ -187,7 +187,7 @@ fn load_graph_json(path: &Path) -> crate::error::Result<serde_json::Value> {
 
 fn save_graph_json(path: &Path, data: &serde_json::Value) -> crate::error::Result<()> {
     let json = serde_json::to_string_pretty(data)
-        .map_err(|e| crate::error::GraphifyError::Other(format!("JSON error: {e}")))?;
+        .map_err(|e| crate::error::EngramError::Other(format!("JSON error: {e}")))?;
     // Atomic write: temp file + rename
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, &json)?;
@@ -219,7 +219,7 @@ fn write_insight_note(
          type: insight\n\
          pattern: {pattern}\n\
          created_by: ai\n\
-         tags: [graphify/insight, {pattern_tag}]\n\
+         tags: [engram/insight, {pattern_tag}]\n\
          ---\n\n\
          # {label}\n\n\
          {description}\n\n\
@@ -249,7 +249,7 @@ fn write_free_note(
         "---\n\
          type: note\n\
          created_by: ai\n\
-         tags: [graphify/note]\n\
+         tags: [engram/note]\n\
          ---\n\n\
          # {title}\n\n\
          {content}\n\n\

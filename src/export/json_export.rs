@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::GraphifyGraph;
+use crate::graph::EngramGraph;
 use super::{node_community_map, strip_diacritics};
 
 /// Export graph to JSON in networkx node-link format.
 pub fn to_json(
-    graph: &GraphifyGraph,
+    graph: &EngramGraph,
     communities: &HashMap<usize, Vec<String>>,
     output_path: &Path,
 ) -> std::io::Result<()> {
