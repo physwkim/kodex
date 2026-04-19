@@ -2,13 +2,13 @@
 
 AI knowledge graph that learns across sessions. Builds a persistent, queryable graph from your codebase and accumulates knowledge as you work — patterns, decisions, conventions, domain concepts — so the next session starts where the last one left off.
 
-Tree-sitter AST extraction, Louvain community detection, Obsidian vault integration, MCP server for AI editors. Single Rust binary.
+Tree-sitter AST extraction, Louvain community detection, HDF5 storage, Obsidian vault integration, MCP server for AI editors. Single Rust binary.
 
 ## Install
 
 ```bash
 cargo build --release
-cargo build --release --features all          # all features
+cargo build --release --features all          # all optional features
 cargo build --release --features "lang-python,lang-go"  # specific languages
 ```
 
@@ -21,10 +21,26 @@ engram path "Client" "Database"
 engram explain "AuthService"
 ```
 
-Output in `my-project/engram-out/`:
-- `graph.json` — queryable knowledge graph
-- `graph.html` — interactive visualization (vis.js)
-- `GRAPH_REPORT.md` — analysis report
+## Output Structure
+
+```
+my-project/engram-out/
+├── engram.h5            ← primary storage (HDF5, fast partial I/O)
+├── graph.json           ← JSON compat
+├── graph.html           ← interactive visualization (vis.js)
+├── GRAPH_REPORT.md      ← analysis report
+├── cache/               ← extraction cache
+└── vault/               ← Obsidian opens HERE
+    ├── .obsidian/
+    ├── _KNOWLEDGE_INDEX.md   ← compact knowledge summary (read this first)
+    ├── _KNOWLEDGE_*.md       ← AI-accumulated knowledge
+    ├── _INSIGHT_*.md         ← AI-discovered insights
+    ├── _COMMUNITY_*.md       ← community overviews
+    ├── AuthService.md        ← code node notes
+    └── GRAPH_REPORT.md
+```
+
+Data files (`engram.h5`, `graph.json`, `graph.html`) stay in `engram-out/`. Obsidian vault lives in `engram-out/vault/` — no binary files visible in Obsidian.
 
 ## Commands
 
@@ -36,7 +52,7 @@ Output in `my-project/engram-out/`:
 | `engram explain "<node>"` | Show node details and neighbors |
 | `engram update <path>` | Re-extract code only (AST, no LLM cost) |
 | `engram cluster-only <path>` | Rerun clustering on existing graph |
-| `engram watch <path> [--vault <path>]` | Auto-rebuild on code changes, optionally sync vault |
+| `engram watch <path> [--vault <path>]` | Auto-rebuild on code changes + vault sync |
 | `engram add <url>` | Fetch URL and add to corpus |
 | `engram serve` | Start MCP stdio server |
 | `engram install [platform]` | Install skill to AI editor |
@@ -47,164 +63,122 @@ Output in `my-project/engram-out/`:
 
 ## AI Knowledge Accumulation
 
-engram enables AI agents (Claude, Cursor, etc.) to **accumulate knowledge across sessions** using the Obsidian vault as persistent storage.
+AI agents accumulate knowledge across sessions using the vault as persistent storage. No database — `.md` files are the database.
 
 ### How It Works
 
 ```
 Session 1: Claude analyzes code
-  → discovers "Repository pattern used for DB access"
-  → writes engram-out/_KNOWLEDGE_Repository_Pattern.md (confidence: 60%)
+  → discovers "Repository pattern for DB access"
+  → writes vault/_KNOWLEDGE_Repository_Pattern.md (confidence: 60%)
 
-Session 2: Claude reads _KNOWLEDGE_*.md files at session start
+Session 2: Claude reads _KNOWLEDGE_INDEX.md at session start
   → knows about Repository pattern from session 1
   → discovers same pattern in another module
-  → updates existing file: observations 2, confidence 68%
+  → updates file: observations 2, confidence 68%
 
 Session 10: pattern observed repeatedly
-  → confidence 89%, 8 observations
-  → Claude treats this as established knowledge
+  → confidence 89%, 8 observations → established knowledge
 ```
 
 ### Setup
 
-Add this to your project's `CLAUDE.md` (or copy `CLAUDE.md.example`):
+Add to your project's `CLAUDE.md`:
 
 ```markdown
 ## Engram Knowledge System
 
 ### Session start
-1. Read `engram-out/_KNOWLEDGE_*.md` — accumulated knowledge from previous sessions
-2. Read `engram-out/GRAPH_REPORT.md` — project structure overview
+1. Read `engram-out/vault/_KNOWLEDGE_INDEX.md` — one file, compact summary
+2. Read `engram-out/GRAPH_REPORT.md` — project structure
+3. Only read individual `_KNOWLEDGE_*.md` when you need details
 
 ### During work
-When you discover patterns, decisions, conventions, or domain concepts,
-save them immediately as `engram-out/_KNOWLEDGE_<title>.md`.
-If the same knowledge file already exists, update observations and confidence.
+"Would telling the next session this help?" → save it.
+Write to `engram-out/vault/_KNOWLEDGE_<title>.md`.
+If same file exists, increment observations and raise confidence.
+Don't touch _KNOWLEDGE_INDEX.md (auto-generated).
 
-See KNOWLEDGE_SYSTEM.md for detailed rules.
+See KNOWLEDGE_SYSTEM.md for full rules.
 ```
 
 ### Knowledge Types
 
 | Type | When to Save | Example |
 |------|-------------|---------|
-| `pattern` | Architectural pattern found | "Repository pattern for all DB access" |
-| `decision` | Design choice with reasoning | "JWT chosen for stateless microservices" |
+| `architecture` | System structure discovered | "3-layer: API → Service → Repository" |
+| `pattern` | Design pattern found | "Observer for event handling" |
+| `decision` | Design choice with reasoning | "JWT for stateless microservices" |
 | `convention` | Code convention discovered | "All errors wrapped in AppError" |
 | `coupling` | Module dependency found | "auth changes require session changes" |
-| `preference` | User preference learned | "Prefers functional style over OOP" |
-| `bug_pattern` | Recurring bug type | "Off-by-one errors in pagination" |
-| `domain` | Domain concept understood | "Trade states: pending → filled → cancelled" |
+| `domain` | Business concept understood | "Trade states: pending → filled → cancelled" |
+| `preference` | User working style | "Prefers functional style over OOP" |
+| `bug_pattern` | Recurring bug type | "Off-by-one in pagination" |
+| `tech_debt` | Improvement opportunity | "Legacy auth middleware needs rewrite" |
+| `ops` | Deploy/infra knowledge | "Staging uses different DB credentials" |
+| `performance` | Bottleneck found | "N+1 query in user listing endpoint" |
+| `lesson` | Mistake learned from | "Don't mock the DB in integration tests" |
 
-### Knowledge File Format
-
-```markdown
----
-type: knowledge
-knowledge_type: pattern
-confidence: 0.68
-observations: 2
-first_seen: 1713500000
-last_seen: 1713600000
-tags: [architecture, data-access]
-related_nodes: [user_repo, order_repo, product_repo]
----
-
-# Repository Pattern
-
-All database access goes through *Repo classes that implement a common interface.
-
----
-
-Session 2: Confirmed ProductRepo also follows this pattern.
-
-## Related
-
-[[user_repo]] [[order_repo]] [[product_repo]]
-```
+Any type not listed — invent one. AI decides what's worth saving.
 
 ### Confidence Growth
 
-Confidence increases asymptotically with each observation:
+Repeated observations increase confidence asymptotically:
 
 ```
-Observation 1: 0.60
-Observation 2: 0.68
-Observation 3: 0.74
-Observation 5: 0.83
-Observation 10: 0.93
+Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 ```
 
-Formula: `new_confidence = 1.0 - (1.0 - current) * 0.8`
+### Token Optimization
 
-### MCP Tools for Knowledge
+Claude reads **one file** (`_KNOWLEDGE_INDEX.md`, ~500 tokens) instead of all knowledge files (~6000+ tokens). Details are read on-demand.
 
-When using `engram serve`, these tools are available:
+## Storage
 
-| Tool | Description |
-|------|-------------|
-| `learn` | Store or reinforce a knowledge item |
-| `recall` | Query knowledge by keyword or type |
-| `knowledge_context` | Get compact summary for session bootstrap |
-| `save_insight` | Store a pattern/concept linking multiple nodes |
-| `save_note` | Store free-text memo with related nodes |
-| `add_edge` | Add a single relationship between nodes |
+HDF5 is the default storage format via [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
 
-### Vault as Source of Truth
+| | HDF5 (default) | JSON (compat) |
+|---|---|---|
+| File | `engram.h5` | `graph.json` |
+| 10K node load | ~5ms | ~100ms |
+| Add 1 node | dataset append | full rewrite |
+| Concurrent access | SWMR supported | no locking |
+| File size (10K nodes) | ~1MB | ~5MB |
+| Partial read | per-dataset | full parse |
 
-Knowledge files live in `engram-out/` as plain `.md` files:
-
-```
-engram-out/
-├── _KNOWLEDGE_Repository_Pattern.md    ← AI-accumulated knowledge
-├── _KNOWLEDGE_JWT_Auth_Decision.md
-├── _KNOWLEDGE_Error_Convention.md
-├── _INSIGHT_Auth_Facade.md             ← AI-discovered insights
-├── _NOTE_Refactoring_Plan.md           ← AI memos
-├── _COMMUNITY_Auth.md                  ← auto-generated community overview
-├── AuthService.md                      ← auto-generated node note
-├── GRAPH_REPORT.md                     ← auto-generated report
-├── graph.json                          ← cache (auto-regenerated from vault)
-└── graph.html                          ← visualization
-```
-
-- **No database needed** — `.md` files are the database
-- **Git-trackable** — knowledge history in version control
-- **Obsidian-browsable** — open vault in Obsidian for visual exploration
-- **AI-readable** — Claude reads `.md` files at session start
+Both are generated on every `engram run`. The system prefers `.h5` when available.
 
 ## Obsidian Integration
 
-engram exports Obsidian-compatible markdown vaults with:
+Vault lives at `engram-out/vault/` — clean, no binary files.
 
-- YAML frontmatter (source_file, type, community, tags)
+Features:
+- YAML frontmatter with source_file, type, community, tags
 - `[[wikilinks]]` between connected nodes
-- `_COMMUNITY_*.md` overview notes with cohesion scores
-- Dataview queries (`TABLE source_file FROM #community/...`)
-- Bridge node detection (nodes connecting multiple communities)
+- `_COMMUNITY_*.md` with cohesion scores, Dataview queries, bridge nodes
+- `.obsidian/graph.json` with community color groups
+- Vault is the source of truth — edits sync back to graph
 
 ### Single Project
 
 ```bash
 engram run ./my-project
-# Open ./my-project/engram-out/ as an Obsidian vault
+# Open my-project/engram-out/vault/ in Obsidian
 ```
 
 ### Live Sync
 
 ```bash
+engram watch ./my-project --vault ./my-project/engram-out/vault
 # Code changes → auto-rebuild graph + vault
-engram watch ./my-project --vault ./my-project/engram-out
-
-# Edits in Obsidian (add/remove [[wikilinks]]) sync back to graph.json
+# Obsidian edits → sync back to graph
 ```
 
 ### Multi-Project Workspace
 
 ```bash
 cd ~/codes
-engram workspace init        # auto-detect git projects, create config
+engram workspace init    # auto-detect git projects
 ```
 
 ```yaml
@@ -219,30 +193,38 @@ vault: ~/obsidian-vault/dev-knowledge
 ```
 
 ```bash
-engram workspace run                     # build + merge all projects
-engram workspace run --vault ~/my-vault  # override vault path
+engram workspace run
 ```
 
-Cross-project connections are automatically detected. Community detection runs on the merged graph, so clusters can span project boundaries.
+**What workspace does:**
+1. Builds each project's graph independently
+2. Merges into unified graph (cross-project edges for shared names)
+3. Runs community detection on merged graph
+4. Exports unified vault to configured path
+5. **Collects** `_KNOWLEDGE_*.md` from each project into unified vault (tagged with origin)
+6. **Distributes** cross-project knowledge back to each project's `engram-out/vault/`
+
+Result: Claude working on `frontend` can read knowledge discovered in `backend`.
 
 ### Workflow
 
 ```
-Code → engram run → Obsidian Vault (browse, explore, edit)
-                  ↓
-           graph.json (cache)
-                  ↓
-     AI Editor → engram serve (MCP) → query, explain, learn
-                  ↓
-         _KNOWLEDGE_*.md (accumulated knowledge)
-                  ↓
-         Next session → Claude reads → better context
+Code → engram run → engram-out/
+                      ├── engram.h5 (data)
+                      └── vault/ (Obsidian)
+                            ├── _KNOWLEDGE_INDEX.md ← Claude reads this
+                            ├── _KNOWLEDGE_*.md     ← Claude writes these
+                            └── *.md                ← code graph nodes
+
+AI Editor → engram serve (MCP) → query, explain, learn, recall
+                ↓
+    vault/_KNOWLEDGE_*.md updated → next session reads → better context
 ```
 
 ## MCP Server
 
 ```bash
-engram serve --graph engram-out/graph.json
+engram serve
 ```
 
 | Tool | Description |
@@ -251,9 +233,9 @@ engram serve --graph engram-out/graph.json
 | `get_node` | Fetch node details by label |
 | `god_nodes` | List most-connected entities |
 | `graph_stats` | Node/edge/community counts |
-| `learn` | Store/reinforce knowledge |
-| `recall` | Query accumulated knowledge |
-| `knowledge_context` | Compact summary for session bootstrap |
+| `learn` | Store/reinforce knowledge (auto confidence growth) |
+| `recall` | Query accumulated knowledge by keyword or type |
+| `knowledge_context` | Compact knowledge summary for session start |
 | `save_insight` | Link multiple nodes with a named pattern |
 | `save_note` | Free-text memo with related nodes |
 | `add_edge` | Add relationship between nodes |
@@ -276,29 +258,29 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala,
 
 | Format | File | Use Case |
 |--------|------|----------|
-| JSON | `graph.json` | Programmatic queries, MCP server |
-| HTML | `graph.html` | Interactive browser visualization (vis.js) |
-| Obsidian | `*.md` | Knowledge management with wikilinks |
+| HDF5 | `engram.h5` | Primary storage, fast queries |
+| JSON | `graph.json` | Compat, external tools |
+| HTML | `graph.html` | Interactive vis.js visualization |
+| Obsidian | `vault/*.md` | Knowledge management |
 | Canvas | `graph.canvas` | Obsidian infinite canvas |
-| GraphML | `graph.graphml` | Gephi, yEd desktop visualization |
+| GraphML | `graph.graphml` | Gephi, yEd |
 | Neo4j | `import.cypher` | Graph database import |
-| Wiki | `wiki/*.md` | Wikipedia-style articles per community |
+| Wiki | `wiki/*.md` | Wikipedia-style articles |
 | Report | `GRAPH_REPORT.md` | Human-readable analysis |
 
 ## Transcription
 
-Transcribe audio/video using whisper.cpp (native C++, no Python):
+whisper.cpp (native C++, no Python):
 
 ```bash
 cargo build --release --features video
-
 mkdir -p ~/.cache/whisper
 curl -L -o ~/.cache/whisper/ggml-base.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 ```
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `ENGRAM_WHISPER_MODEL` | Model size | `base` |
 | `ENGRAM_WHISPER_MODEL_PATH` | Explicit model path | auto-detect |
 | `ENGRAM_WHISPER_PROMPT` | Override domain prompt | from god nodes |
@@ -311,34 +293,37 @@ curl -L -o ~/.cache/whisper/ggml-base.bin \
 | `lang-*` | Per-language parsers | tree-sitter-{lang} |
 | `all-languages` | All 14 languages | |
 | `fetch` | URL fetching | reqwest |
-| `watch` | File system monitoring | notify |
+| `watch` | File monitoring | notify |
 | `mcp` | Async MCP server | tokio |
-| `svg` | SVG graph export | plotters |
-| `video` | Audio/video transcription | whisper-rs, hound |
-| `parallel` | Parallel file extraction | rayon |
+| `svg` | SVG export | plotters |
+| `video` | Audio transcription | whisper-rs, hound |
+| `parallel` | Parallel extraction | rayon |
 | `all` | Everything except `video` | |
+
+Note: HDF5 (`rust-hdf5`) is always included — not feature-gated.
 
 ## Architecture
 
 ```
 CLI (main.rs, clap)
-  ├─ detect/      File discovery, classification, .engramignore
+  ├─ detect/      File discovery, .engramignore, sensitive file filtering
   ├─ extract/     AST extraction via tree-sitter (14 languages)
-  ├─ graph/       petgraph wrapper, build, merge, diff
-  ├─ cluster/     Louvain community detection
+  ├─ graph/       petgraph wrapper (EngramGraph), build, merge, diff
+  ├─ cluster/     Louvain community detection with modularity optimization
   ├─ analyze/     God nodes, surprising connections, questions
+  ├─ storage      HDF5 read/write (primary format)
   ├─ export/      JSON, HTML, Obsidian, GraphML, Canvas, Cypher, Wiki
   ├─ report       GRAPH_REPORT.md generation
   ├─ serve/       MCP stdio server (JSON-RPC 2.0)
-  ├─ workspace    Multi-project build + merge
-  ├─ vault        Vault-native graph loading (vault = source of truth)
+  ├─ workspace    Multi-project build, merge, knowledge sync
+  ├─ vault        Vault-native graph loading
   ├─ knowledge    AI insight/note persistence
-  ├─ learn        Knowledge accumulation across sessions
+  ├─ learn        Knowledge accumulation with confidence growth
   ├─ cache        SHA256 per-file extraction cache
   ├─ security/    URL validation, SSRF prevention
   ├─ ingest/      URL fetching, content normalization
   ├─ watch        File monitoring, auto-rebuild, vault sync
-  ├─ hooks        Git hooks
+  ├─ hooks        Git post-commit/post-checkout hooks
   ├─ transcribe   whisper.cpp transcription
   ├─ install      AI editor skill installation
   └─ benchmark    Token reduction measurement
@@ -348,11 +333,15 @@ CLI (main.rs, clap)
 
 ```
 detect → extract → build → cluster → analyze → export
-                                                  ├─ graph.json (cache)
-                                                  ├─ graph.html
-                                                  ├─ GRAPH_REPORT.md
-                                                  ├─ Obsidian vault (.md)
-                                                  └─ _KNOWLEDGE_*.md (AI knowledge)
+                                                  ├── engram.h5 (HDF5 primary)
+                                                  ├── graph.json (compat)
+                                                  ├── graph.html (visualization)
+                                                  ├── GRAPH_REPORT.md
+                                                  └── vault/ (Obsidian)
+                                                       ├── _KNOWLEDGE_INDEX.md
+                                                       ├── _KNOWLEDGE_*.md
+                                                       ├── _COMMUNITY_*.md
+                                                       └── *.md (node notes)
 ```
 
 ## License
