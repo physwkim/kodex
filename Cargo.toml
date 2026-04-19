@@ -21,9 +21,9 @@ clap = { version = "4", features = ["derive"] }
 walkdir = "2"
 dirs = "6"
 globset = "0.4"
+rust-hdf5 = "0.2"
 
-# Optional dependencies — tree-sitter core + language grammars
-# Language crates use tree-sitter-language for ABI bridging
+# Optional dependencies
 tree-sitter = { version = "0.24", optional = true }
 tree-sitter-python = { version = "0.23", optional = true }
 tree-sitter-javascript = { version = "0.23", optional = true }
@@ -48,7 +48,6 @@ tokio = { version = "1", features = ["full"], optional = true }
 plotters = { version = "0.3", optional = true }
 whisper-rs = { version = "0.16", optional = true }
 hound = { version = "3", optional = true }
-rust-hdf5 = { git = "https://github.com/physwkim/rust-hdf5.git", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
@@ -84,5 +83,4 @@ mcp = ["tokio"]
 svg = ["plotters"]
 parallel = ["rayon"]
 video = ["whisper-rs", "hound"]
-hdf5 = ["rust-hdf5"]
-all = ["all-languages", "fetch", "watch", "mcp", "svg", "parallel", "hdf5"]
+all = ["all-languages", "fetch", "watch", "mcp", "svg", "parallel"]
