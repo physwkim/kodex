@@ -4,12 +4,14 @@ use std::sync::LazyLock;
 
 static SENSITIVE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)(^|[\\/])\.(env|envrc)(\.|$)").unwrap(),
-        Regex::new(r"(?i)\.(pem|key|p12|pfx|cert|crt|der|p8)$").unwrap(),
-        Regex::new(r"(?i)(credential|secret|passwd|password|token|private_key)").unwrap(),
-        Regex::new(r"(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$").unwrap(),
-        Regex::new(r"(?i)(\.netrc|\.pgpass|\.htpasswd)$").unwrap(),
-        Regex::new(r"(?i)(aws_credentials|gcloud_credentials|service.account)").unwrap(),
+        Regex::new(r"(?i)(^|[\\/])\.(env|envrc)(\.|$)").expect("invalid regex"),
+        Regex::new(r"(?i)\.(pem|key|p12|pfx|cert|crt|der|p8)$").expect("invalid regex"),
+        Regex::new(r"(?i)(credential|secret|passwd|password|token|private_key)")
+            .expect("invalid regex"),
+        Regex::new(r"(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$").expect("invalid regex"),
+        Regex::new(r"(?i)(\.netrc|\.pgpass|\.htpasswd)$").expect("invalid regex"),
+        Regex::new(r"(?i)(aws_credentials|gcloud_credentials|service.account)")
+            .expect("invalid regex"),
     ]
 });
 

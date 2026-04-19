@@ -6,18 +6,18 @@ const PAPER_SIGNAL_THRESHOLD: usize = 3;
 
 static PAPER_SIGNALS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
-        Regex::new(r"(?i)\barxiv\b").unwrap(),
-        Regex::new(r"(?i)\bdoi\s*:").unwrap(),
-        Regex::new(r"(?i)\babstract\b").unwrap(),
-        Regex::new(r"(?i)\bproceedings\b").unwrap(),
-        Regex::new(r"(?i)\bjournal\b").unwrap(),
-        Regex::new(r"(?i)\bpreprint\b").unwrap(),
-        Regex::new(r"\\cite\{").unwrap(),
-        Regex::new(r"\[\d+\]").unwrap(),
-        Regex::new(r"(?i)eq\.\s*\d+|equation\s+\d+").unwrap(),
-        Regex::new(r"\d{4}\.\d{4,5}").unwrap(),
-        Regex::new(r"(?i)\bwe propose\b").unwrap(),
-        Regex::new(r"(?i)\bliterature\b").unwrap(),
+        Regex::new(r"(?i)\barxiv\b").expect("invalid regex"),
+        Regex::new(r"(?i)\bdoi\s*:").expect("invalid regex"),
+        Regex::new(r"(?i)\babstract\b").expect("invalid regex"),
+        Regex::new(r"(?i)\bproceedings\b").expect("invalid regex"),
+        Regex::new(r"(?i)\bjournal\b").expect("invalid regex"),
+        Regex::new(r"(?i)\bpreprint\b").expect("invalid regex"),
+        Regex::new(r"\\cite\{").expect("invalid regex"),
+        Regex::new(r"\[\d+\]").expect("invalid regex"),
+        Regex::new(r"(?i)eq\.\s*\d+|equation\s+\d+").expect("invalid regex"),
+        Regex::new(r"\d{4}\.\d{4,5}").expect("invalid regex"),
+        Regex::new(r"(?i)\bwe propose\b").expect("invalid regex"),
+        Regex::new(r"(?i)\bliterature\b").expect("invalid regex"),
     ]
 });
 

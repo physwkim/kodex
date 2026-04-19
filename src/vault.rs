@@ -272,8 +272,8 @@ fn parse_connections(
     let mut edges = Vec::new();
     let mut in_connections = false;
 
-    let conn_re: Regex =
-        Regex::new(r"- \[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*-\s*(\S+)\s*\[(\w+)\]").unwrap();
+    let conn_re: Regex = Regex::new(r"- \[\[([^\]|]+)(?:\|[^\]]+)?\]\]\s*-\s*(\S+)\s*\[(\w+)\]")
+        .expect("invalid regex");
 
     for line in content.lines() {
         let trimmed = line.trim();

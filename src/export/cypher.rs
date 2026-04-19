@@ -6,7 +6,8 @@ use std::sync::LazyLock;
 use super::cypher_escape;
 use crate::graph::KodexGraph;
 
-static NON_ALNUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^A-Za-z0-9_]").unwrap());
+static NON_ALNUM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[^A-Za-z0-9_]").expect("invalid regex"));
 
 /// Export graph to Neo4j Cypher MERGE statements.
 pub fn to_cypher(graph: &KodexGraph, output_path: &Path) -> std::io::Result<()> {

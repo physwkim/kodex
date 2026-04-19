@@ -193,7 +193,7 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
 
     // Scan vault .md files for wikilinks
     let mut vault_edges: Vec<(String, String)> = Vec::new();
-    let wikilink_re = regex::Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").unwrap();
+    let wikilink_re = regex::Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").expect("invalid regex");
 
     if let Ok(entries) = std::fs::read_dir(vault_path) {
         for entry in entries.flatten() {

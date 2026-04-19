@@ -337,3 +337,160 @@ fn test_cluster_and_analyze() {
     assert!(report.contains("# Graph Report"));
     assert!(report.contains("God Nodes"));
 }
+
+#[test]
+fn test_hdf5_round_trip() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5_path = dir.path().join("test.h5");
+
+    let extraction = kodex::types::ExtractionResult {
+        nodes: vec![
+            kodex::types::Node {
+                id: "x".to_string(),
+                label: "X".to_string(),
+                file_type: kodex::types::FileType::Code,
+                source_file: "x.py".to_string(),
+                source_location: Some("L1".to_string()),
+                confidence: Some(kodex::types::Confidence::EXTRACTED),
+                confidence_score: Some(1.0),
+                community: None,
+                norm_label: None,
+                degree: None,
+            },
+            kodex::types::Node {
+                id: "y".to_string(),
+                label: "Y".to_string(),
+                file_type: kodex::types::FileType::Code,
+                source_file: "y.py".to_string(),
+                source_location: None,
+                confidence: Some(kodex::types::Confidence::INFERRED),
+                confidence_score: Some(0.5),
+                community: None,
+                norm_label: None,
+                degree: None,
+            },
+        ],
+        edges: vec![kodex::types::Edge {
+            source: "x".to_string(),
+            target: "y".to_string(),
+            relation: "calls".to_string(),
+            confidence: kodex::types::Confidence::EXTRACTED,
+            source_file: "x.py".to_string(),
+            source_location: None,
+            confidence_score: Some(1.0),
+            weight: 1.0,
+            original_src: None,
+            original_tgt: None,
+        }],
+        ..Default::default()
+    };
+
+    let graph = kodex::graph::build_from_extraction(&extraction);
+    let communities = kodex::cluster::cluster(&graph);
+    kodex::storage::save_hdf5(&graph, &communities, &h5_path).unwrap();
+    assert!(h5_path.exists());
+
+    let loaded = kodex::storage::load_hdf5(&h5_path).unwrap();
+    assert_eq!(loaded.node_count(), 2);
+    assert_eq!(loaded.edge_count(), 1);
+    assert_eq!(loaded.get_node("x").unwrap().label, "X");
+}
+
+#[test]
+fn test_vault_round_trip() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    std::fs::write(
+        dir.path().join("Foo.md"),
+        "---\nid: foo\nfile_type: code\nsource_file: foo.py\n---\n# Foo\n\n## Connections\n- [[Bar]] - calls [EXTRACTED]\n",
+    ).unwrap();
+    std::fs::write(
+        dir.path().join("Bar.md"),
+        "---\nid: bar\nfile_type: code\nsource_file: bar.py\n---\n# Bar\n",
+    )
+    .unwrap();
+
+    let graph = kodex::vault::load_graph_from_vault(dir.path()).unwrap();
+    assert_eq!(graph.node_count(), 2);
+    assert_eq!(graph.edge_count(), 1);
+    assert!(graph.get_node("foo").is_some());
+    assert!(graph.get_node("bar").is_some());
+}
+
+#[test]
+fn test_knowledge_learn_and_recall() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    kodex::learn::learn(
+        dir.path(),
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Test Pattern",
+        "A test pattern description",
+        &["node_a".to_string()],
+        &["test".to_string()],
+    )
+    .unwrap();
+
+    // Should have index
+    assert!(dir.path().join("_KNOWLEDGE_INDEX.md").exists());
+
+    // Should find by query
+    let results = kodex::learn::query_knowledge(dir.path(), "test", None);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].title, "Test Pattern");
+
+    // Reinforce
+    kodex::learn::learn(
+        dir.path(),
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Test Pattern",
+        "Seen again",
+        &["node_b".to_string()],
+        &[],
+    )
+    .unwrap();
+
+    let results = kodex::learn::query_knowledge(dir.path(), "test", None);
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].observations, 2);
+    assert_eq!(results[0].related_nodes.len(), 2); // merged
+}
+
+#[test]
+fn test_knowledge_context_index() {
+    let dir = tempfile::TempDir::new().unwrap();
+
+    kodex::learn::learn(
+        dir.path(),
+        None,
+        kodex::learn::KnowledgeType::Decision,
+        "Use HDF5",
+        "Fast storage",
+        &[],
+        &[],
+    )
+    .unwrap();
+    kodex::learn::learn(
+        dir.path(),
+        None,
+        kodex::learn::KnowledgeType::Convention,
+        "Error Handling",
+        "Use Result",
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    let ctx = kodex::learn::knowledge_context(dir.path(), 10);
+    assert!(ctx.contains("Knowledge Index"));
+    assert!(ctx.contains("Use HDF5"));
+    assert!(ctx.contains("Error Handling"));
+    // Should be compact (under 1000 chars for 2 items)
+    assert!(
+        ctx.len() < 1000,
+        "Index should be compact, got {} chars",
+        ctx.len()
+    );
+}

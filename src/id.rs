@@ -1,7 +1,8 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-static NON_ALNUM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9]+").unwrap());
+static NON_ALNUM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[^a-zA-Z0-9]+").expect("invalid regex"));
 
 /// Build a stable node ID from one or more name parts.
 ///

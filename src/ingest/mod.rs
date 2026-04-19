@@ -79,7 +79,7 @@ pub fn ingest(
     // Strip HTML for web pages (basic)
     let content_body = if url_type == "webpage" || url_type == "github" {
         // Simple HTML tag stripping
-        let re = regex::Regex::new(r"<[^>]+>").unwrap();
+        let re = regex::Regex::new(r"<[^>]+>").expect("invalid regex");
         let stripped = re.replace_all(&body, "");
         let title = extract_html_title(&body).unwrap_or_else(|| url.to_string());
         format!("# {}\n\n{}", sanitize_label(&title), stripped.trim())
