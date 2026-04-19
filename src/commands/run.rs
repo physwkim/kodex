@@ -66,7 +66,7 @@ pub fn run_pipeline(path: &Path) {
     let _ = std::fs::create_dir_all(&vault_dir);
 
     super::export_all(&graph, &communities, &labels, &out_dir);
-    println!("  exported kodex.h5, graph.json, graph.html");
+    println!("  exported kodex.h5, graph.html");
 
     let report = kodex::report::generate(
         &graph,

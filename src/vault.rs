@@ -15,7 +15,7 @@ static WIKILINK_RE: LazyLock<Regex> =
 ///
 /// Parses every `.md` file's YAML frontmatter for node metadata and
 /// `[[wikilinks]]` for edges. The vault is the source of truth;
-/// graph.json is just a cache for performance.
+/// kodex.h5 is just a cache for performance.
 pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGraph> {
     let entries = collect_md_files(vault_dir)?;
 
@@ -179,15 +179,15 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
     Ok(crate::graph::build_from_extraction(&extraction))
 }
 
-/// Save the graph as a cached graph.json derived from vault.
+/// Save the graph as a cached HDF5 file derived from vault.
 pub fn cache_graph_from_vault(vault_dir: &Path, cache_path: &Path) -> crate::error::Result<()> {
     let graph = load_graph_from_vault(vault_dir)?;
     let communities = crate::cluster::cluster(&graph);
-    crate::export::to_json(&graph, &communities, cache_path)?;
+    crate::storage::save_hdf5(&graph, &communities, cache_path)?;
     Ok(())
 }
 
-/// Check if cached graph.json is stale compared to vault files.
+/// Check if cached HDF5 is stale compared to vault files.
 pub fn is_cache_stale(vault_dir: &Path, cache_path: &Path) -> bool {
     let cache_mtime = match std::fs::metadata(cache_path).and_then(|m| m.modified()) {
         Ok(t) => t,
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_cache_staleness() {
         let dir = TempDir::new().unwrap();
-        let cache = dir.path().join("graph.json");
+        let cache = dir.path().join("kodex.h5");
 
         // No cache → stale
         assert!(is_cache_stale(dir.path(), &cache));

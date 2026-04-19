@@ -9,17 +9,12 @@ use crate::graph::build_from_extraction;
 use crate::graph::KodexGraph;
 use crate::types::ExtractionResult;
 
-/// Smart graph loading: try vault first, fall back to graph.json.
+/// Smart graph loading — HDF5 first, vault as fallback.
 ///
-/// If `path` is a directory containing .md files, loads from vault (source of truth).
-/// If `path` is a .json file, loads from JSON (cache).
-/// If graph.json exists but is stale relative to vault, reloads from vault.
+/// Priority:
+/// 1. HDF5 (.h5) — fast, source of truth for data
+/// 2. Vault directory (.md files) — fallback, slower
 pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
-    // If path is a directory, treat as vault
-    if path.is_dir() {
-        return crate::vault::load_graph_from_vault(path);
-    }
-
     // Explicit HDF5 file
     if path
         .extension()
@@ -29,38 +24,17 @@ pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
         return crate::storage::load_hdf5(path);
     }
 
-    // If asking for JSON but HDF5 exists alongside, prefer HDF5
-    if path.extension().map(|e| e == "json").unwrap_or(false) {
-        let h5_path = path.with_extension("h5");
-        if h5_path.exists() {
-            return crate::storage::load_hdf5(&h5_path);
+    // Directory: look for kodex.h5 inside, then vault .md
+    if path.is_dir() {
+        let h5_in_dir = path.join("kodex.h5");
+        if h5_in_dir.exists() {
+            return crate::storage::load_hdf5(&h5_in_dir);
         }
+        return crate::vault::load_graph_from_vault(path);
     }
 
-    // If it's a JSON file, check if a vault directory exists alongside it
-    if path.extension().map(|e| e == "json").unwrap_or(false) {
-        if let Some(parent) = path.parent() {
-            // Check if parent is a vault (has .md files)
-            let has_md = std::fs::read_dir(parent)
-                .map(|entries| {
-                    entries
-                        .flatten()
-                        .any(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
-                })
-                .unwrap_or(false);
-
-            if has_md && crate::vault::is_cache_stale(parent, path) {
-                // Vault is newer than cache — reload from vault and update cache
-                let graph = crate::vault::load_graph_from_vault(parent)?;
-                let communities = crate::cluster::cluster(&graph);
-                let _ = crate::export::to_json(&graph, &communities, path);
-                return Ok(graph);
-            }
-        }
-    }
-
-    // Default: load from JSON
-    load_graph(path)
+    // Try as HDF5 regardless of extension
+    crate::storage::load_hdf5(path)
 }
 
 /// Load a graph from a JSON file (networkx node-link format).

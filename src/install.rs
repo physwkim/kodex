@@ -29,7 +29,7 @@ Knowledge graph builder for code and documents.
 ## Output
 
 Results are saved to `kodex-out/`:
-- `graph.json` — Queryable knowledge graph
+- `kodex.h5` — Knowledge graph (HDF5)
 - `graph.html` — Interactive visualization (vis.js)
 - `GRAPH_REPORT.md` — Analysis report
 "#;

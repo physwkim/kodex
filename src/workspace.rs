@@ -287,7 +287,7 @@ pub fn run(config: &WorkspaceConfig, vault_override: Option<&Path>) -> Result<()
     );
 
     // Step 4: Export
-    let _ = crate::export::to_json(&graph, &communities, &config.output.join("graph.json"));
+    let _ = crate::storage::save_hdf5(&graph, &communities, &config.output.join("kodex.h5"));
     let _ = crate::export::to_html(
         &graph,
         &communities,

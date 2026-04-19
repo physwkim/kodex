@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::id::make_id;
-
 // ---------------------------------------------------------------------------
 // Knowledge types that Claude can accumulate
 // ---------------------------------------------------------------------------
@@ -185,9 +183,15 @@ pub fn learn(
     // Rebuild compact index
     rebuild_index(vault_dir)?;
 
-    // Also add to graph.json if provided
-    if let Some(gp) = graph_path {
-        let _ = add_knowledge_to_graph(gp, &knowledge);
+    // Rebuild HDF5 cache if path provided
+    // Knowledge is in vault .md (source of truth); HDF5 is regenerated as cache
+    if let Some(h5_path) = graph_path {
+        if let Some(vault_parent) = h5_path.parent() {
+            let vault = vault_parent.join("vault");
+            if vault.is_dir() {
+                let _ = crate::vault::cache_graph_from_vault(&vault, h5_path);
+            }
+        }
     }
 
     Ok(path)
@@ -418,60 +422,6 @@ fn parse_knowledge_note(content: &str) -> Option<Knowledge> {
         tags,
         first_seen,
         last_seen,
-    })
-}
-
-fn add_knowledge_to_graph(graph_path: &Path, k: &Knowledge) -> crate::error::Result<()> {
-    if !graph_path.exists() {
-        return Ok(());
-    }
-    let text = std::fs::read_to_string(graph_path)?;
-    let mut data: serde_json::Value = serde_json::from_str(&text)?;
-
-    let node_id = make_id(&["knowledge", &k.title]);
-
-    let nodes = data.get_mut("nodes").and_then(|v| v.as_array_mut());
-    if let Some(nodes) = nodes {
-        // Upsert
-        nodes.retain(|n| n.get("id").and_then(|v| v.as_str()) != Some(&node_id));
-        nodes.push(serde_json::json!({
-            "id": node_id,
-            "label": k.title,
-            "file_type": "rationale",
-            "source_file": format!("knowledge/{}", k.knowledge_type),
-            "confidence": "INFERRED",
-            "confidence_score": k.confidence,
-            "knowledge_type": k.knowledge_type.to_string(),
-            "observations": k.observations,
-        }));
-    }
-
-    let links = data.get_mut("links").and_then(|v| v.as_array_mut());
-    if let Some(links) = links {
-        // Remove old edges from this knowledge node
-        links.retain(|e| e.get("source").and_then(|v| v.as_str()) != Some(&node_id));
-        // Add edges to related nodes
-        for related in &k.related_nodes {
-            links.push(serde_json::json!({
-                "source": node_id,
-                "target": related,
-                "relation": format!("knowledge_{}", k.knowledge_type),
-                "confidence": "INFERRED",
-                "source_file": "knowledge",
-                "confidence_score": k.confidence,
-                "weight": k.confidence,
-            }));
-        }
-    }
-
-    let json = serde_json::to_string_pretty(&data)
-        .map_err(|e| crate::error::KodexError::Other(e.to_string()))?;
-    let tmp = graph_path.with_extension("json.tmp");
-    std::fs::write(&tmp, &json)?;
-    std::fs::rename(&tmp, graph_path).or_else(|_| {
-        std::fs::copy(&tmp, graph_path)?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(())
     })
 }
 

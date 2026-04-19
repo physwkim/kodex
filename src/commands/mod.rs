@@ -42,7 +42,6 @@ pub fn export_all(
     out_dir: &Path,
 ) {
     let _ = kodex::storage::save_hdf5(graph, communities, &out_dir.join("kodex.h5"));
-    let _ = kodex::export::to_json(graph, communities, &out_dir.join("graph.json"));
     let _ = kodex::export::to_html(
         graph,
         communities,
@@ -184,7 +183,7 @@ pub fn cluster_only(path: &Path) {
     let labels = community_labels(&graph, &communities);
     let out_dir = path.join("kodex-out");
     export_all(&graph, &communities, &labels, &out_dir);
-    println!("  re-exported kodex.h5, graph.json, graph.html");
+    println!("  re-exported kodex.h5, graph.html");
 }
 
 #[allow(unused_variables)]

@@ -138,7 +138,6 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
         let _ = std::fs::create_dir_all(&vault_dir);
 
         let _ = crate::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5"));
-        let _ = crate::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
         let _ = crate::export::to_html(
             &graph,
             &communities,
@@ -182,8 +181,8 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
 fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
     println!("Vault changed, syncing back to graph...");
 
-    let graph_path = watch_path.join("kodex-out/graph.json");
-    let graph = match crate::serve::load_graph(&graph_path) {
+    let graph_path = watch_path.join("kodex-out/kodex.h5");
+    let graph = match crate::storage::load_hdf5(&graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("  failed to load graph: {e}");
@@ -250,32 +249,12 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
         return;
     }
 
-    // Append new edges to graph.json
-    match std::fs::read_to_string(&graph_path) {
-        Ok(text) => {
-            if let Ok(mut data) = serde_json::from_str::<serde_json::Value>(&text) {
-                let links = data.get_mut("links").and_then(|v| v.as_array_mut());
-                if let Some(links) = links {
-                    for (src, tgt) in &new_edges {
-                        links.push(serde_json::json!({
-                            "source": src,
-                            "target": tgt,
-                            "relation": "user_linked",
-                            "confidence": "EXTRACTED",
-                            "source_file": "vault",
-                            "confidence_score": 1.0,
-                            "weight": 1.0,
-                        }));
-                    }
-                    if let Ok(json) = serde_json::to_string_pretty(&data) {
-                        let _ = std::fs::write(&graph_path, json);
-                    }
-                }
-                println!("  synced {} new connection(s) from vault", new_edges.len());
-            }
-        }
-        Err(e) => eprintln!("  failed to read graph: {e}"),
-    }
+    // Rebuild HDF5 from vault (vault is source of truth for user edits)
+    println!(
+        "  synced {} new connection(s) from vault, rebuilding HDF5...",
+        new_edges.len()
+    );
+    let _ = crate::vault::cache_graph_from_vault(vault_path, &graph_path);
 }
 
 #[cfg(feature = "watch")]
