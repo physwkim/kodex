@@ -252,7 +252,7 @@ kodex install kiro      # Kiro
 
 ## Supported Languages
 
-Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua
+Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Scala, PHP, Swift, Lua
 
 ## Export Formats
 
@@ -291,7 +291,7 @@ curl -L -o ~/.cache/whisper/ggml-base.bin \
 |---------|-------------|------------|
 | `extract` | AST extraction (default) | tree-sitter |
 | `lang-*` | Per-language parsers | tree-sitter-{lang} |
-| `all-languages` | All 14 languages | |
+| `all-languages` | All 14 supported languages | |
 | `fetch` | URL fetching | reqwest |
 | `watch` | File monitoring | notify |
 | `mcp` | Async MCP server | tokio |
@@ -307,7 +307,7 @@ Note: HDF5 (`rust-hdf5`) is always included — not feature-gated.
 ```
 CLI (main.rs, clap)
   ├─ detect/      File discovery, .kodexignore, sensitive file filtering
-  ├─ extract/     AST extraction via tree-sitter (14 languages)
+  ├─ extract/     AST extraction via tree-sitter (14 supported languages)
   ├─ graph/       petgraph wrapper (EngramGraph), build, merge, diff
   ├─ cluster/     Louvain community detection with modularity optimization
   ├─ analyze/     God nodes, surprising connections, questions
