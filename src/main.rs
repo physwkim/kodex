@@ -294,6 +294,18 @@ fn run_pipeline(path: &std::path::Path) {
         println!("  exported graph.json");
     }
 
+    // HDF5
+    match engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5")) {
+        Ok(()) => println!("  exported engram.h5"),
+        Err(e) => {
+            // Silently skip if hdf5 feature not enabled
+            let msg = e.to_string();
+            if !msg.contains("requires --features") {
+                eprintln!("  HDF5 export error: {e}");
+            }
+        }
+    }
+
     // HTML
     match engram::export::to_html(
         &graph,

@@ -511,6 +511,7 @@ dependencies = [
  "rayon",
  "regex",
  "reqwest",
+ "rust-hdf5",
  "serde",
  "serde_json",
  "sha2",
@@ -1813,6 +1814,14 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rust-hdf5"
+version = "0.2.0"
+source = "git+https://github.com/physwkim/rust-hdf5.git#04deb42dcdbc80530b8886d4f3e59111069a4333"
+dependencies = [
+ "flate2",
 ]
 
 [[package]]

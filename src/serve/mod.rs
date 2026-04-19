@@ -20,6 +20,11 @@ pub fn load_graph_smart(path: &Path) -> crate::error::Result<EngramGraph> {
         return crate::vault::load_graph_from_vault(path);
     }
 
+    // HDF5 file
+    if path.extension().map(|e| e == "h5" || e == "hdf5").unwrap_or(false) {
+        return crate::storage::load_hdf5(path);
+    }
+
     // If it's a JSON file, check if a vault directory exists alongside it
     if path.extension().map(|e| e == "json").unwrap_or(false) {
         if let Some(parent) = path.parent() {

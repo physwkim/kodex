@@ -17,6 +17,7 @@ pub mod serve;
 pub mod watch;
 pub mod hooks;
 pub mod install;
+pub mod storage;
 pub mod knowledge;
 pub mod learn;
 pub mod transcribe;
