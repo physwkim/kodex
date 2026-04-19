@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-const HOOK_MARKER: &str = "# >>> engram >>>";
-const HOOK_MARKER_END: &str = "# <<< engram <<<";
+const HOOK_MARKER: &str = "# >>> kodex >>>";
+const HOOK_MARKER_END: &str = "# <<< kodex <<<";
 
 const HOOK_SCRIPT: &str = r#"
 # Auto-rebuild graph for code-only changes (no LLM cost)
-if command -v engram >/dev/null 2>&1; then
-    engram update . &
+if command -v kodex >/dev/null 2>&1; then
+    kodex update . &
 fi
 "#;
 
@@ -43,7 +43,7 @@ fn hooks_dir(root: &Path) -> PathBuf {
     root.join(".git").join("hooks")
 }
 
-/// Install engram post-commit and post-checkout hooks.
+/// Install kodex post-commit and post-checkout hooks.
 pub fn install(path: &Path) -> String {
     let root = match git_root(path) {
         Some(r) => r,
@@ -62,7 +62,7 @@ pub fn install(path: &Path) -> String {
     results.join("\n")
 }
 
-/// Uninstall engram hooks.
+/// Uninstall kodex hooks.
 pub fn uninstall(path: &Path) -> String {
     let root = match git_root(path) {
         Some(r) => r,
@@ -79,7 +79,7 @@ pub fn uninstall(path: &Path) -> String {
     results.join("\n")
 }
 
-/// Check if engram hooks are installed.
+/// Check if kodex hooks are installed.
 pub fn status(path: &Path) -> String {
     let root = match git_root(path) {
         Some(r) => r,
@@ -146,7 +146,7 @@ fn uninstall_hook(dir: &Path, name: &str) -> String {
         return "not installed".to_string();
     }
 
-    // Remove the engram section
+    // Remove the kodex section
     let mut result = String::new();
     let mut in_section = false;
     for line in content.lines() {

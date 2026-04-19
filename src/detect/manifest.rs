@@ -2,9 +2,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 
-const MANIFEST_PATH: &str = "engram-out/manifest.json";
+const MANIFEST_PATH: &str = "kodex-out/manifest.json";
 
-/// Load file manifest (path → mtime) from `engram-out/manifest.json`.
+/// Load file manifest (path → mtime) from `kodex-out/manifest.json`.
 pub fn load_manifest(root: &Path) -> Option<HashMap<String, f64>> {
     let manifest_file = root.join(MANIFEST_PATH);
     let content = std::fs::read_to_string(manifest_file).ok()?;
@@ -20,7 +20,7 @@ pub fn load_manifest(root: &Path) -> Option<HashMap<String, f64>> {
     Some(map)
 }
 
-/// Save file manifest (path → mtime) to `engram-out/manifest.json`.
+/// Save file manifest (path → mtime) to `kodex-out/manifest.json`.
 pub fn save_manifest(files: &HashMap<String, f64>, root: &Path) -> std::io::Result<()> {
     let manifest_file = root.join(MANIFEST_PATH);
     if let Some(parent) = manifest_file.parent() {

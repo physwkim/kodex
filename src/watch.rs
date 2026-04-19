@@ -26,11 +26,11 @@ pub fn watch(
 
     let (tx, rx) = channel();
     let mut watcher = notify::RecommendedWatcher::new(tx, Config::default())
-        .map_err(|e| crate::error::EngramError::Other(format!("Watch error: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Watch error: {e}")))?;
 
     watcher
         .watch(watch_path, RecursiveMode::Recursive)
-        .map_err(|e| crate::error::EngramError::Other(format!("Watch error: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Watch error: {e}")))?;
 
     // Also watch vault for reverse sync (Obsidian edits → graph)
     if let Some(vp) = vault_path {
@@ -48,9 +48,9 @@ pub fn watch(
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Ok(event)) => {
                 for path in &event.paths {
-                    // Skip engram-out changes to avoid rebuild loops
+                    // Skip kodex-out changes to avoid rebuild loops
                     let path_str = path.to_string_lossy();
-                    if path_str.contains("engram-out") {
+                    if path_str.contains("kodex-out") {
                         continue;
                     }
 
@@ -128,14 +128,14 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
             })
             .collect();
 
-        let out_dir = watch_path.join("engram-out");
+        let out_dir = watch_path.join("kodex-out");
         let vault_dir = vault_path
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| out_dir.join("vault"));
         let _ = std::fs::create_dir_all(&out_dir);
         let _ = std::fs::create_dir_all(&vault_dir);
 
-        let _ = crate::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5"));
+        let _ = crate::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5"));
         let _ = crate::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
         let _ = crate::export::to_html(
             &graph,
@@ -180,7 +180,7 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
 fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
     println!("Vault changed, syncing back to graph...");
 
-    let graph_path = watch_path.join("engram-out/graph.json");
+    let graph_path = watch_path.join("kodex-out/graph.json");
     let graph = match crate::serve::load_graph(&graph_path) {
         Ok(g) => g,
         Err(e) => {
@@ -279,7 +279,7 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
 }
 
 #[cfg(feature = "watch")]
-fn find_node_by_filename(graph: &crate::graph::EngramGraph, filename: &str) -> Option<String> {
+fn find_node_by_filename(graph: &crate::graph::KodexGraph, filename: &str) -> Option<String> {
     let lower = filename.to_lowercase().replace('_', "");
     graph.node_ids().find(|id| {
         graph
@@ -298,7 +298,7 @@ pub fn watch(
     _debounce_secs: f64,
     _vault_path: Option<&Path>,
 ) -> crate::error::Result<()> {
-    Err(crate::error::EngramError::Other(
+    Err(crate::error::KodexError::Other(
         "Watch feature not enabled. Rebuild with --features watch".to_string(),
     ))
 }

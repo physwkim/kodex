@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::security::sanitize_label;
 use super::{node_community_map, js_safe, COMMUNITY_COLORS};
 
@@ -9,13 +9,13 @@ const MAX_NODES_FOR_VIZ: usize = 5000;
 
 /// Export graph to interactive HTML visualization using vis.js.
 pub fn to_html(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
     output_path: &Path,
     community_labels: Option<&HashMap<usize, String>>,
-) -> Result<(), crate::error::EngramError> {
+) -> Result<(), crate::error::KodexError> {
     if graph.node_count() > MAX_NODES_FOR_VIZ {
-        return Err(crate::error::EngramError::Other(format!(
+        return Err(crate::error::KodexError::Other(format!(
             "Graph has {} nodes (max {MAX_NODES_FOR_VIZ} for visualization)",
             graph.node_count()
         )));
@@ -113,7 +113,7 @@ pub fn to_html(
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>engram</title>
+<title>kodex</title>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <style>
 body {{ margin:0; background:#1a1a2e; color:#ccc; font-family:system-ui; display:flex; }}
@@ -130,7 +130,7 @@ h3 {{ margin:16px 0 8px; color:#eee; font-size:14px; }}
 <body>
 <div id="graph"></div>
 <div id="sidebar">
-  <h3>engram</h3>
+  <h3>kodex</h3>
   <div class="stats">{stats}</div>
   <input id="search" placeholder="Search nodes..." />
   <h3>Communities</h3>

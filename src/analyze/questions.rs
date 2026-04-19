@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::types::Confidence;
 use super::god_nodes;
 
@@ -14,7 +14,7 @@ pub struct SuggestedQuestion {
 
 /// Generate questions the graph is uniquely positioned to answer.
 pub fn suggest_questions(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     _communities: Option<&HashMap<usize, Vec<String>>>,
     top_n: usize,
 ) -> Vec<SuggestedQuestion> {

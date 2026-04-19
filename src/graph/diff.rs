@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::EngramGraph;
+use super::KodexGraph;
 
 /// Result of comparing two graph snapshots.
 #[derive(Debug, Default)]
@@ -12,7 +12,7 @@ pub struct GraphDiff {
 }
 
 /// Compute changes between two graphs.
-pub fn graph_diff(old: &EngramGraph, new: &EngramGraph) -> GraphDiff {
+pub fn graph_diff(old: &KodexGraph, new: &KodexGraph) -> GraphDiff {
     let old_nodes: HashSet<&String> = old.node_ids().collect();
     let new_nodes: HashSet<&String> = new.node_ids().collect();
 

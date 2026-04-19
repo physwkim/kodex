@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use std::sync::LazyLock;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::id::make_id;
 use crate::types::{Confidence, Edge, ExtractionResult, FileType, Node};
 
@@ -16,7 +16,7 @@ static WIKILINK_RE: LazyLock<Regex> =
 /// Parses every `.md` file's YAML frontmatter for node metadata and
 /// `[[wikilinks]]` for edges. The vault is the source of truth;
 /// graph.json is just a cache for performance.
-pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<EngramGraph> {
+pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGraph> {
     let entries = collect_md_files(vault_dir)?;
 
     let mut nodes = Vec::new();
@@ -222,7 +222,7 @@ pub fn is_cache_stale(vault_dir: &Path, cache_path: &Path) -> bool {
 fn collect_md_files(dir: &Path) -> crate::error::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if !dir.is_dir() {
-        return Err(crate::error::EngramError::Other(format!(
+        return Err(crate::error::KodexError::Other(format!(
             "Vault directory not found: {}", dir.display()
         )));
     }

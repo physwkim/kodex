@@ -1,12 +1,12 @@
 [package]
-name = "engram"
+name = "kodex"
 version = "0.1.0"
 edition = "2021"
 description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
 
 [[bin]]
-name = "engram"
+name = "kodex"
 path = "src/main.rs"
 
 [dependencies]

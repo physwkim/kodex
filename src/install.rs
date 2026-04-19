@@ -2,39 +2,39 @@ use std::path::Path;
 
 /// Supported platforms for skill installation.
 const PLATFORMS: &[(&str, &str)] = &[
-    ("claude", ".claude/commands/engram.md"),
-    ("cursor", ".cursor/rules/engram.md"),
+    ("claude", ".claude/commands/kodex.md"),
+    ("cursor", ".cursor/rules/kodex.md"),
     ("vscode", ".github/copilot-instructions.md"),
-    ("codex", ".codex/skills/engram.md"),
-    ("opencode", ".config/opencode/skills/engram.md"),
-    ("aider", ".aider/skills/engram.md"),
-    ("kiro", ".kiro/steering/engram.md"),
+    ("codex", ".codex/skills/kodex.md"),
+    ("opencode", ".config/opencode/skills/kodex.md"),
+    ("aider", ".aider/skills/kodex.md"),
+    ("kiro", ".kiro/steering/kodex.md"),
 ];
 
 /// Default skill content embedded at compile time.
-const SKILL_CONTENT: &str = r#"# engram
+const SKILL_CONTENT: &str = r#"# kodex
 
 Knowledge graph builder for code and documents.
 
 ## Usage
 
-- `engram .` — Build knowledge graph for current directory
-- `engram query "how does auth work"` — Search graph
-- `engram path "Client" "Database"` — Find shortest connection
-- `engram explain "ClassName"` — Show node details and neighbors
-- `engram update .` — Re-extract code (AST only, no LLM)
-- `engram watch .` — Auto-rebuild on file changes
-- `engram benchmark` — Measure token reduction
+- `kodex .` — Build knowledge graph for current directory
+- `kodex query "how does auth work"` — Search graph
+- `kodex path "Client" "Database"` — Find shortest connection
+- `kodex explain "ClassName"` — Show node details and neighbors
+- `kodex update .` — Re-extract code (AST only, no LLM)
+- `kodex watch .` — Auto-rebuild on file changes
+- `kodex benchmark` — Measure token reduction
 
 ## Output
 
-Results are saved to `engram-out/`:
+Results are saved to `kodex-out/`:
 - `graph.json` — Queryable knowledge graph
 - `graph.html` — Interactive visualization (vis.js)
 - `GRAPH_REPORT.md` — Analysis report
 "#;
 
-/// Install engram skill to a platform's configuration directory.
+/// Install kodex skill to a platform's configuration directory.
 pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
 
@@ -60,7 +60,7 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     // Don't overwrite if already exists
     if skill_path.exists() {
         let existing = std::fs::read_to_string(&skill_path).unwrap_or_default();
-        if existing.contains("engram") {
+        if existing.contains("kodex") {
             return format!("Already installed at {}", skill_path.display());
         }
         // Append to existing file
@@ -79,7 +79,7 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     }
 }
 
-/// Uninstall engram skill from a platform.
+/// Uninstall kodex skill from a platform.
 pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
 

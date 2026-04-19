@@ -46,26 +46,26 @@ pub fn ingest(
 
     // Fetch content
     let client = reqwest::blocking::Client::builder()
-        .user_agent("engram/1.0")
+        .user_agent("kodex/1.0")
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| crate::error::EngramError::Other(format!("HTTP client error: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HTTP client error: {e}")))?;
 
     let response = client
         .get(url)
         .send()
-        .map_err(|e| crate::error::EngramError::Other(format!("Fetch failed: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Fetch failed: {e}")))?;
 
     let status = response.status();
     if !status.is_success() {
-        return Err(crate::error::EngramError::Other(format!(
+        return Err(crate::error::KodexError::Other(format!(
             "HTTP {status} for {url}"
         )));
     }
 
     let body = response
         .text()
-        .map_err(|e| crate::error::EngramError::Other(format!("Read body failed: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Read body failed: {e}")))?;
 
     // Build safe filename
     let safe: String = url

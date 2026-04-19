@@ -1,15 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-/// Load `.engramignore` patterns by walking up from `root` to find the file.
+/// Load `.kodexignore` patterns by walking up from `root` to find the file.
 /// Returns a list of glob patterns (like .gitignore syntax).
-pub fn load_engramignore(root: &Path) -> Vec<String> {
+pub fn load_kodexignore(root: &Path) -> Vec<String> {
     let mut patterns = Vec::new();
 
     // Check root and parent directories
     let mut dir = root.to_path_buf();
     loop {
-        let ignore_file = dir.join(".engramignore");
+        let ignore_file = dir.join(".kodexignore");
         if ignore_file.is_file() {
             if let Ok(content) = fs::read_to_string(&ignore_file) {
                 for line in content.lines() {
@@ -19,7 +19,7 @@ pub fn load_engramignore(root: &Path) -> Vec<String> {
                     }
                 }
             }
-            break; // Use only the nearest .engramignore
+            break; // Use only the nearest .kodexignore
         }
         if !dir.pop() {
             break;
@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn test_no_ignorefile() {
         let dir = TempDir::new().unwrap();
-        let patterns = load_engramignore(dir.path());
+        let patterns = load_kodexignore(dir.path());
         assert!(patterns.is_empty());
     }
 
@@ -46,11 +46,11 @@ mod tests {
     fn test_load_patterns() {
         let dir = TempDir::new().unwrap();
         fs::write(
-            dir.path().join(".engramignore"),
+            dir.path().join(".kodexignore"),
             "# comment\nvendor/\n*.generated.py\n",
         )
         .unwrap();
-        let patterns = load_engramignore(dir.path());
+        let patterns = load_kodexignore(dir.path());
         assert_eq!(patterns, vec!["vendor/", "*.generated.py"]);
     }
 }

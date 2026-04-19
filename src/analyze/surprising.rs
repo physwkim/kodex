@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::types::Confidence;
 use super::node_community_map;
 use super::helpers::{is_file_node, is_concept_node};
@@ -22,7 +22,7 @@ pub struct SurprisingConnection {
 /// Scores by confidence (AMBIGUOUS > INFERRED > EXTRACTED), cross-file,
 /// and cross-community factors.
 pub fn surprising_connections(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     communities: Option<&HashMap<usize, Vec<String>>>,
     top_n: usize,
 ) -> Vec<SurprisingConnection> {

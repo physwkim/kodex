@@ -2,13 +2,13 @@ mod louvain;
 mod cohesion;
 
 use std::collections::HashMap;
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 
 pub use cohesion::{cohesion_score, score_all};
 
 /// Run community detection on a graph.
 /// Returns community_id → list of node IDs, sorted by community size descending.
-pub fn cluster(graph: &EngramGraph) -> HashMap<usize, Vec<String>> {
+pub fn cluster(graph: &KodexGraph) -> HashMap<usize, Vec<String>> {
     let partition = louvain::louvain_communities(graph);
 
     // Convert node→community to community→nodes
@@ -66,8 +66,8 @@ mod tests {
     use super::*;
     use crate::types::*;
 
-    fn make_graph() -> EngramGraph {
-        let mut g = EngramGraph::new();
+    fn make_graph() -> KodexGraph {
+        let mut g = KodexGraph::new();
         for id in &["a", "b", "c", "d", "e"] {
             g.add_node(Node {
                 id: id.to_string(),

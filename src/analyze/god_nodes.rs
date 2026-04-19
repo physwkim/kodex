@@ -1,4 +1,4 @@
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use super::helpers::{is_file_node, is_concept_node};
 
 /// Information about a high-degree "god node".
@@ -14,7 +14,7 @@ pub struct GodNode {
 ///
 /// Excludes file-level hub nodes and concept nodes that accumulate
 /// mechanical edges rather than representing meaningful architecture.
-pub fn god_nodes(graph: &EngramGraph, top_n: usize) -> Vec<GodNode> {
+pub fn god_nodes(graph: &KodexGraph, top_n: usize) -> Vec<GodNode> {
     let mut candidates: Vec<GodNode> = graph
         .node_ids()
         .filter(|id| !is_file_node(graph, id) && !is_concept_node(graph, id))

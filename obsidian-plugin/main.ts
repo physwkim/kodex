@@ -4,58 +4,58 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-interface EngramSettings {
-    engramPath: string;
+interface KodexSettings {
+    kodexPath: string;
     graphJsonPath: string;
 }
 
-const DEFAULT_SETTINGS: EngramSettings = {
-    engramPath: 'engram',
+const DEFAULT_SETTINGS: KodexSettings = {
+    kodexPath: 'kodex',
     graphJsonPath: 'graph.json',
 };
 
-export default class EngramPlugin extends Plugin {
-    settings: EngramSettings;
+export default class KodexPlugin extends Plugin {
+    settings: KodexSettings;
 
     async onload() {
         await this.loadSettings();
 
         // Command: Query graph
         this.addCommand({
-            id: 'engram-query',
+            id: 'kodex-query',
             name: 'Query knowledge graph',
             callback: () => new QueryModal(this.app, this).open(),
         });
 
         // Command: Find path
         this.addCommand({
-            id: 'engram-path',
+            id: 'kodex-path',
             name: 'Find path between nodes',
             callback: () => new PathModal(this.app, this).open(),
         });
 
         // Command: Explain node
         this.addCommand({
-            id: 'engram-explain',
+            id: 'kodex-explain',
             name: 'Explain current note',
             callback: () => this.explainCurrentNote(),
         });
 
         // Command: God nodes
         this.addCommand({
-            id: 'engram-god-nodes',
+            id: 'kodex-god-nodes',
             name: 'Show god nodes (most connected)',
             callback: () => this.showGodNodes(),
         });
 
         // Command: Rebuild graph
         this.addCommand({
-            id: 'engram-rebuild',
+            id: 'kodex-rebuild',
             name: 'Rebuild knowledge graph',
             callback: () => this.rebuild(),
         });
 
-        this.addSettingTab(new EngramSettingTab(this.app, this));
+        this.addSettingTab(new KodexSettingTab(this.app, this));
     }
 
     async loadSettings() {
@@ -66,17 +66,17 @@ export default class EngramPlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    async runEngram(args: string): Promise<string> {
-        const cmd = `${this.settings.engramPath} ${args}`;
+    async runKodex(args: string): Promise<string> {
+        const cmd = `${this.settings.kodexPath} ${args}`;
         try {
             const { stdout, stderr } = await execAsync(cmd, {
                 cwd: this.getVaultPath(),
                 timeout: 30000,
             });
-            if (stderr) console.warn('engram stderr:', stderr);
+            if (stderr) console.warn('kodex stderr:', stderr);
             return stdout.trim();
         } catch (e: any) {
-            new Notice(`engram error: ${e.message}`);
+            new Notice(`kodex error: ${e.message}`);
             throw e;
         }
     }
@@ -97,7 +97,7 @@ export default class EngramPlugin extends Plugin {
         }
         const name = file.basename;
         try {
-            const result = await this.runEngram(
+            const result = await this.runKodex(
                 `explain "${name}" --graph "${this.getGraphPath()}"`
             );
             new ResultModal(this.app, `Explain: ${name}`, result).open();
@@ -108,7 +108,7 @@ export default class EngramPlugin extends Plugin {
 
     async showGodNodes() {
         try {
-            const result = await this.runEngram(
+            const result = await this.runKodex(
                 `query "god nodes" --graph "${this.getGraphPath()}"`
             );
             new ResultModal(this.app, 'God Nodes', result).open();
@@ -120,7 +120,7 @@ export default class EngramPlugin extends Plugin {
     async rebuild() {
         new Notice('Rebuilding graph...');
         try {
-            await this.runEngram(`update "${this.getVaultPath()}"`);
+            await this.runKodex(`update "${this.getVaultPath()}"`);
             new Notice('Graph rebuilt successfully');
         } catch {
             // Error already shown
@@ -130,9 +130,9 @@ export default class EngramPlugin extends Plugin {
 
 // --- Query Modal ---
 class QueryModal extends Modal {
-    plugin: EngramPlugin;
+    plugin: KodexPlugin;
 
-    constructor(app: App, plugin: EngramPlugin) {
+    constructor(app: App, plugin: KodexPlugin) {
         super(app);
         this.plugin = plugin;
     }
@@ -162,7 +162,7 @@ class QueryModal extends Modal {
                 if (!question) return;
                 resultDiv.setText('Searching...');
                 try {
-                    const result = await this.plugin.runEngram(
+                    const result = await this.plugin.runKodex(
                         `query "${question}" --graph "${this.plugin.getGraphPath()}"`
                     );
                     resultDiv.setText(result || 'No results found');
@@ -182,9 +182,9 @@ class QueryModal extends Modal {
 
 // --- Path Modal ---
 class PathModal extends Modal {
-    plugin: EngramPlugin;
+    plugin: KodexPlugin;
 
-    constructor(app: App, plugin: EngramPlugin) {
+    constructor(app: App, plugin: KodexPlugin) {
         super(app);
         this.plugin = plugin;
     }
@@ -221,7 +221,7 @@ class PathModal extends Modal {
                 if (!src || !tgt) return;
                 resultDiv.setText('Searching...');
                 try {
-                    const result = await this.plugin.runEngram(
+                    const result = await this.plugin.runKodex(
                         `path "${src}" "${tgt}" --graph "${this.plugin.getGraphPath()}"`
                     );
                     resultDiv.setText(result || 'No path found');
@@ -267,10 +267,10 @@ class ResultModal extends Modal {
 }
 
 // --- Settings ---
-class EngramSettingTab extends PluginSettingTab {
-    plugin: EngramPlugin;
+class KodexSettingTab extends PluginSettingTab {
+    plugin: KodexPlugin;
 
-    constructor(app: App, plugin: EngramPlugin) {
+    constructor(app: App, plugin: KodexPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
@@ -278,17 +278,17 @@ class EngramSettingTab extends PluginSettingTab {
     display(): void {
         const { containerEl } = this;
         containerEl.empty();
-        containerEl.createEl('h2', { text: 'Engram Settings' });
+        containerEl.createEl('h2', { text: 'Kodex Settings' });
 
         new Setting(containerEl)
-            .setName('engram binary path')
-            .setDesc('Path to the engram executable')
+            .setName('kodex binary path')
+            .setDesc('Path to the kodex executable')
             .addText((text) =>
                 text
-                    .setPlaceholder('engram')
-                    .setValue(this.plugin.settings.engramPath)
+                    .setPlaceholder('kodex')
+                    .setValue(this.plugin.settings.kodexPath)
                     .onChange(async (value) => {
-                        this.plugin.settings.engramPath = value;
+                        this.plugin.settings.kodexPath = value;
                         await this.plugin.saveSettings();
                     })
             );

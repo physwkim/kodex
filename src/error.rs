@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum EngramError {
+pub enum KodexError {
     #[error("Extraction error: {0}")]
     Extraction(String),
 
@@ -30,4 +30,4 @@ pub enum EngramError {
     Other(String),
 }
 
-pub type Result<T> = std::result::Result<T, EngramError>;
+pub type Result<T> = std::result::Result<T, KodexError>;

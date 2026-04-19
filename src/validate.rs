@@ -7,7 +7,7 @@ const VALID_CONFIDENCES: &[&str] = &["AMBIGUOUS", "EXTRACTED", "INFERRED"];
 const REQUIRED_NODE_FIELDS: &[&str] = &["id", "label", "file_type", "source_file"];
 const REQUIRED_EDGE_FIELDS: &[&str] = &["source", "target", "relation", "confidence", "source_file"];
 
-/// Validate an extraction JSON value against the engram schema.
+/// Validate an extraction JSON value against the kodex schema.
 /// Returns a list of error strings -- empty list means valid.
 pub fn validate_extraction(data: &Value) -> Vec<String> {
     let mut errors = Vec::new();
@@ -137,7 +137,7 @@ pub fn assert_valid(data: &Value) -> crate::error::Result<()> {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    Err(crate::error::EngramError::Validation(msg))
+    Err(crate::error::KodexError::Validation(msg))
 }
 
 #[cfg(test)]

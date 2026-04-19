@@ -5,13 +5,13 @@ use crate::analyze::god_nodes::GodNode;
 use crate::analyze::surprising::SurprisingConnection;
 use crate::analyze::questions::SuggestedQuestion;
 use crate::analyze::helpers::{is_file_node, is_concept_node};
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::types::{Confidence, DetectionResult};
 
 /// Generate GRAPH_REPORT.md content.
 #[allow(clippy::too_many_arguments)]
 pub fn generate(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
     cohesion_scores: &HashMap<usize, f64>,
     community_labels: &HashMap<usize, String>,

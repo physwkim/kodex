@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use super::node_community_map;
 
 /// Export graph to GraphML XML format (compatible with Gephi, yEd).
 pub fn to_graphml(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
     output_path: &Path,
 ) -> std::io::Result<()> {

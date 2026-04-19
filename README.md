@@ -1,4 +1,4 @@
-# engram
+# kodex
 
 AI knowledge graph that learns across sessions. Builds a persistent, queryable graph from your codebase and accumulates knowledge as you work — patterns, decisions, conventions, domain concepts — so the next session starts where the last one left off.
 
@@ -15,17 +15,17 @@ cargo build --release --features "lang-python,lang-go"  # specific languages
 ## Quick Start
 
 ```bash
-engram run ./my-project
-engram query "how does authentication work"
-engram path "Client" "Database"
-engram explain "AuthService"
+kodex run ./my-project
+kodex query "how does authentication work"
+kodex path "Client" "Database"
+kodex explain "AuthService"
 ```
 
 ## Output Structure
 
 ```
-my-project/engram-out/
-├── engram.h5            ← primary storage (HDF5, fast partial I/O)
+my-project/kodex-out/
+├── kodex.h5            ← primary storage (HDF5, fast partial I/O)
 ├── graph.json           ← JSON compat
 ├── graph.html           ← interactive visualization (vis.js)
 ├── GRAPH_REPORT.md      ← analysis report
@@ -40,26 +40,26 @@ my-project/engram-out/
     └── GRAPH_REPORT.md
 ```
 
-Data files (`engram.h5`, `graph.json`, `graph.html`) stay in `engram-out/`. Obsidian vault lives in `engram-out/vault/` — no binary files visible in Obsidian.
+Data files (`kodex.h5`, `graph.json`, `graph.html`) stay in `kodex-out/`. Obsidian vault lives in `kodex-out/vault/` — no binary files visible in Obsidian.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `engram run <path>` | Full pipeline: detect → extract → build → cluster → analyze → export |
-| `engram query "<question>"` | BFS/DFS search over the graph |
-| `engram path "<source>" "<target>"` | Shortest path between two nodes |
-| `engram explain "<node>"` | Show node details and neighbors |
-| `engram update <path>` | Re-extract code only (AST, no LLM cost) |
-| `engram cluster-only <path>` | Rerun clustering on existing graph |
-| `engram watch <path> [--vault <path>]` | Auto-rebuild on code changes + vault sync |
-| `engram add <url>` | Fetch URL and add to corpus |
-| `engram serve` | Start MCP stdio server |
-| `engram install [platform]` | Install skill to AI editor |
-| `engram benchmark` | Measure token reduction ratio |
-| `engram hook [install\|uninstall\|status]` | Manage git hooks |
-| `engram workspace init` | Create multi-project workspace config |
-| `engram workspace run [--vault <path>]` | Build + merge all workspace projects |
+| `kodex run <path>` | Full pipeline: detect → extract → build → cluster → analyze → export |
+| `kodex query "<question>"` | BFS/DFS search over the graph |
+| `kodex path "<source>" "<target>"` | Shortest path between two nodes |
+| `kodex explain "<node>"` | Show node details and neighbors |
+| `kodex update <path>` | Re-extract code only (AST, no LLM cost) |
+| `kodex cluster-only <path>` | Rerun clustering on existing graph |
+| `kodex watch <path> [--vault <path>]` | Auto-rebuild on code changes + vault sync |
+| `kodex add <url>` | Fetch URL and add to corpus |
+| `kodex serve` | Start MCP stdio server |
+| `kodex install [platform]` | Install skill to AI editor |
+| `kodex benchmark` | Measure token reduction ratio |
+| `kodex hook [install\|uninstall\|status]` | Manage git hooks |
+| `kodex workspace init` | Create multi-project workspace config |
+| `kodex workspace run [--vault <path>]` | Build + merge all workspace projects |
 
 ## AI Knowledge Accumulation
 
@@ -86,16 +86,16 @@ Session 10: pattern observed repeatedly
 Add to your project's `CLAUDE.md`:
 
 ```markdown
-## Engram Knowledge System
+## Kodex Knowledge System
 
 ### Session start
-1. Read `engram-out/vault/_KNOWLEDGE_INDEX.md` — one file, compact summary
-2. Read `engram-out/GRAPH_REPORT.md` — project structure
+1. Read `kodex-out/vault/_KNOWLEDGE_INDEX.md` — one file, compact summary
+2. Read `kodex-out/GRAPH_REPORT.md` — project structure
 3. Only read individual `_KNOWLEDGE_*.md` when you need details
 
 ### During work
 "Would telling the next session this help?" → save it.
-Write to `engram-out/vault/_KNOWLEDGE_<title>.md`.
+Write to `kodex-out/vault/_KNOWLEDGE_<title>.md`.
 If same file exists, increment observations and raise confidence.
 Don't touch _KNOWLEDGE_INDEX.md (auto-generated).
 
@@ -139,18 +139,18 @@ HDF5 is the default storage format via [rust-hdf5](https://crates.io/crates/rust
 
 | | HDF5 (default) | JSON (compat) |
 |---|---|---|
-| File | `engram.h5` | `graph.json` |
+| File | `kodex.h5` | `graph.json` |
 | 10K node load | ~5ms | ~100ms |
 | Add 1 node | dataset append | full rewrite |
 | Concurrent access | SWMR supported | no locking |
 | File size (10K nodes) | ~1MB | ~5MB |
 | Partial read | per-dataset | full parse |
 
-Both are generated on every `engram run`. The system prefers `.h5` when available.
+Both are generated on every `kodex run`. The system prefers `.h5` when available.
 
 ## Obsidian Integration
 
-Vault lives at `engram-out/vault/` — clean, no binary files.
+Vault lives at `kodex-out/vault/` — clean, no binary files.
 
 Features:
 - YAML frontmatter with source_file, type, community, tags
@@ -162,14 +162,14 @@ Features:
 ### Single Project
 
 ```bash
-engram run ./my-project
-# Open my-project/engram-out/vault/ in Obsidian
+kodex run ./my-project
+# Open my-project/kodex-out/vault/ in Obsidian
 ```
 
 ### Live Sync
 
 ```bash
-engram watch ./my-project --vault ./my-project/engram-out/vault
+kodex watch ./my-project --vault ./my-project/kodex-out/vault
 # Code changes → auto-rebuild graph + vault
 # Obsidian edits → sync back to graph
 ```
@@ -178,22 +178,22 @@ engram watch ./my-project --vault ./my-project/engram-out/vault
 
 ```bash
 cd ~/codes
-engram workspace init    # auto-detect git projects
+kodex workspace init    # auto-detect git projects
 ```
 
 ```yaml
-# engram-workspace.yaml
+# kodex-workspace.yaml
 projects:
   - ./frontend
   - ./backend
   - ./shared-lib
 
-output: ./engram-workspace
+output: ./kodex-workspace
 vault: ~/obsidian-vault/dev-knowledge
 ```
 
 ```bash
-engram workspace run
+kodex workspace run
 ```
 
 **What workspace does:**
@@ -202,21 +202,21 @@ engram workspace run
 3. Runs community detection on merged graph
 4. Exports unified vault to configured path
 5. **Collects** `_KNOWLEDGE_*.md` from each project into unified vault (tagged with origin)
-6. **Distributes** cross-project knowledge back to each project's `engram-out/vault/`
+6. **Distributes** cross-project knowledge back to each project's `kodex-out/vault/`
 
 Result: Claude working on `frontend` can read knowledge discovered in `backend`.
 
 ### Workflow
 
 ```
-Code → engram run → engram-out/
-                      ├── engram.h5 (data)
+Code → kodex run → kodex-out/
+                      ├── kodex.h5 (data)
                       └── vault/ (Obsidian)
                             ├── _KNOWLEDGE_INDEX.md ← Claude reads this
                             ├── _KNOWLEDGE_*.md     ← Claude writes these
                             └── *.md                ← code graph nodes
 
-AI Editor → engram serve (MCP) → query, explain, learn, recall
+AI Editor → kodex serve (MCP) → query, explain, learn, recall
                 ↓
     vault/_KNOWLEDGE_*.md updated → next session reads → better context
 ```
@@ -224,7 +224,7 @@ AI Editor → engram serve (MCP) → query, explain, learn, recall
 ## MCP Server
 
 ```bash
-engram serve
+kodex serve
 ```
 
 | Tool | Description |
@@ -243,11 +243,11 @@ engram serve
 ### AI Editor Setup
 
 ```bash
-engram install claude    # Claude Code
-engram install cursor    # Cursor
-engram install vscode    # VS Code Copilot
-engram install codex     # Codex
-engram install kiro      # Kiro
+kodex install claude    # Claude Code
+kodex install cursor    # Cursor
+kodex install vscode    # VS Code Copilot
+kodex install codex     # Codex
+kodex install kiro      # Kiro
 ```
 
 ## Supported Languages
@@ -258,7 +258,7 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala,
 
 | Format | File | Use Case |
 |--------|------|----------|
-| HDF5 | `engram.h5` | Primary storage, fast queries |
+| HDF5 | `kodex.h5` | Primary storage, fast queries |
 | JSON | `graph.json` | Compat, external tools |
 | HTML | `graph.html` | Interactive vis.js visualization |
 | Obsidian | `vault/*.md` | Knowledge management |
@@ -281,9 +281,9 @@ curl -L -o ~/.cache/whisper/ggml-base.bin \
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ENGRAM_WHISPER_MODEL` | Model size | `base` |
-| `ENGRAM_WHISPER_MODEL_PATH` | Explicit model path | auto-detect |
-| `ENGRAM_WHISPER_PROMPT` | Override domain prompt | from god nodes |
+| `KODEX_WHISPER_MODEL` | Model size | `base` |
+| `KODEX_WHISPER_MODEL_PATH` | Explicit model path | auto-detect |
+| `KODEX_WHISPER_PROMPT` | Override domain prompt | from god nodes |
 
 ## Feature Flags
 
@@ -306,7 +306,7 @@ Note: HDF5 (`rust-hdf5`) is always included — not feature-gated.
 
 ```
 CLI (main.rs, clap)
-  ├─ detect/      File discovery, .engramignore, sensitive file filtering
+  ├─ detect/      File discovery, .kodexignore, sensitive file filtering
   ├─ extract/     AST extraction via tree-sitter (14 languages)
   ├─ graph/       petgraph wrapper (EngramGraph), build, merge, diff
   ├─ cluster/     Louvain community detection with modularity optimization
@@ -333,7 +333,7 @@ CLI (main.rs, clap)
 
 ```
 detect → extract → build → cluster → analyze → export
-                                                  ├── engram.h5 (HDF5 primary)
+                                                  ├── kodex.h5 (HDF5 primary)
                                                   ├── graph.json (compat)
                                                   ├── graph.html (visualization)
                                                   ├── GRAPH_REPORT.md

@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use super::{node_community_map, COMMUNITY_COLORS};
 
 /// Export graph as an Obsidian vault (one .md per node + community overviews).
 pub fn to_obsidian(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
     output_dir: &Path,
     community_labels: Option<&HashMap<usize, String>>,
@@ -64,7 +64,7 @@ pub fn to_obsidian(
         if let Some(loc) = &node.source_location {
             md.push_str(&format!("location: {loc}\n"));
         }
-        md.push_str(&format!("tags: [engram/{}, community/{}]\n", node.file_type, safe_name(&comm_label)));
+        md.push_str(&format!("tags: [kodex/{}, community/{}]\n", node.file_type, safe_name(&comm_label)));
         md.push_str("---\n\n");
 
         md.push_str(&format!("# {}\n\n", node.label));

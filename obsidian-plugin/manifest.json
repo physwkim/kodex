@@ -1,9 +1,9 @@
 {
-    "id": "engram",
-    "name": "Engram",
+    "id": "kodex",
+    "name": "Kodex",
     "version": "0.1.0",
     "minAppVersion": "1.0.0",
-    "description": "Query and explore engram knowledge graphs inside Obsidian",
-    "author": "engram",
+    "description": "Query and explore kodex knowledge graphs inside Obsidian",
+    "author": "kodex",
     "isDesktopOnly": true
 }

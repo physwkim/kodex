@@ -5,7 +5,7 @@ pub use traversal::{bfs, dfs, subgraph_to_text, score_nodes};
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::graph::build_from_extraction;
 use crate::types::ExtractionResult;
 
@@ -14,7 +14,7 @@ use crate::types::ExtractionResult;
 /// If `path` is a directory containing .md files, loads from vault (source of truth).
 /// If `path` is a .json file, loads from JSON (cache).
 /// If graph.json exists but is stale relative to vault, reloads from vault.
-pub fn load_graph_smart(path: &Path) -> crate::error::Result<EngramGraph> {
+pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
     // If path is a directory, treat as vault
     if path.is_dir() {
         return crate::vault::load_graph_from_vault(path);
@@ -60,7 +60,7 @@ pub fn load_graph_smart(path: &Path) -> crate::error::Result<EngramGraph> {
 }
 
 /// Load a graph from a JSON file (networkx node-link format).
-pub fn load_graph(graph_path: &Path) -> crate::error::Result<EngramGraph> {
+pub fn load_graph(graph_path: &Path) -> crate::error::Result<KodexGraph> {
     let text = std::fs::read_to_string(graph_path)?;
     let data: serde_json::Value = serde_json::from_str(&text)?;
 
@@ -101,7 +101,7 @@ pub fn load_graph(graph_path: &Path) -> crate::error::Result<EngramGraph> {
 }
 
 /// Reconstruct communities from node community attributes.
-pub fn communities_from_graph(graph: &EngramGraph) -> HashMap<usize, Vec<String>> {
+pub fn communities_from_graph(graph: &KodexGraph) -> HashMap<usize, Vec<String>> {
     let mut communities: HashMap<usize, Vec<String>> = HashMap::new();
     for id in graph.node_ids() {
         if let Some(node) = graph.get_node(id) {

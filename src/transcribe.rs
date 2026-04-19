@@ -19,14 +19,14 @@ pub fn download_audio(url: &str, output_dir: &Path) -> crate::error::Result<Path
         ])
         .output()
         .map_err(|e| {
-            crate::error::EngramError::Other(format!(
+            crate::error::KodexError::Other(format!(
                 "yt-dlp not found: {e}. Install with: pip install yt-dlp"
             ))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crate::error::EngramError::Other(format!(
+        return Err(crate::error::KodexError::Other(format!(
             "yt-dlp failed: {stderr}"
         )));
     }
@@ -55,14 +55,14 @@ pub fn download_audio(url: &str, output_dir: &Path) -> crate::error::Result<Path
         .last()
         .map(|e| e.path())
         .ok_or_else(|| {
-            crate::error::EngramError::Other("No audio file found after download".to_string())
+            crate::error::KodexError::Other("No audio file found after download".to_string())
         })
 }
 
 /// Build a Whisper prompt from god node labels for domain-aware transcription.
 pub fn build_whisper_prompt(god_node_labels: &[String]) -> String {
     // Allow override via env var
-    if let Ok(custom) = std::env::var("ENGRAM_WHISPER_PROMPT") {
+    if let Ok(custom) = std::env::var("KODEX_WHISPER_PROMPT") {
         if !custom.is_empty() {
             return custom;
         }
@@ -93,7 +93,7 @@ pub fn transcribe(
 ) -> crate::error::Result<PathBuf> {
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-    let out_dir = output_dir.unwrap_or_else(|| Path::new("engram-out/transcripts"));
+    let out_dir = output_dir.unwrap_or_else(|| Path::new("kodex-out/transcripts"));
     std::fs::create_dir_all(out_dir)?;
 
     let stem = audio_path
@@ -108,12 +108,12 @@ pub fn transcribe(
     }
 
     // Determine model path
-    let model_name = std::env::var("ENGRAM_WHISPER_MODEL").unwrap_or_else(|_| "base".to_string());
+    let model_name = std::env::var("KODEX_WHISPER_MODEL").unwrap_or_else(|_| "base".to_string());
     let model_path = resolve_model_path(&model_name)?;
 
     // Load model
     let ctx = WhisperContext::new_with_params(&model_path, WhisperContextParameters::default())
-        .map_err(|e| crate::error::EngramError::Other(format!("Failed to load Whisper model: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Failed to load Whisper model: {e}")))?;
 
     // Read and convert audio to 16kHz mono f32 PCM
     let samples = load_audio_samples(audio_path)?;
@@ -131,10 +131,10 @@ pub fn transcribe(
 
     // Run inference
     let mut state = ctx.create_state()
-        .map_err(|e| crate::error::EngramError::Other(format!("Failed to create state: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Failed to create state: {e}")))?;
 
     state.full(params, &samples)
-        .map_err(|e| crate::error::EngramError::Other(format!("Transcription failed: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Transcription failed: {e}")))?;
 
     // Collect segments
     let num_segments = state.full_n_segments();
@@ -160,7 +160,7 @@ pub fn transcribe_all(
     output_dir: Option<&Path>,
     initial_prompt: Option<&str>,
 ) -> Vec<Result<PathBuf, String>> {
-    let out_dir = output_dir.unwrap_or_else(|| Path::new("engram-out/transcripts"));
+    let out_dir = output_dir.unwrap_or_else(|| Path::new("kodex-out/transcripts"));
 
     files
         .iter()
@@ -203,13 +203,13 @@ fn load_audio_samples(path: &Path) -> crate::error::Result<Vec<f32>> {
             .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| {
-                crate::error::EngramError::Other(format!(
+                crate::error::KodexError::Other(format!(
                     "ffmpeg not found: {e}. Install ffmpeg to convert non-WAV audio."
                 ))
             })?;
 
         if !status.success() {
-            return Err(crate::error::EngramError::Other(
+            return Err(crate::error::KodexError::Other(
                 "ffmpeg conversion failed".to_string(),
             ));
         }
@@ -218,7 +218,7 @@ fn load_audio_samples(path: &Path) -> crate::error::Result<Vec<f32>> {
 
     // Read WAV with hound
     let reader = hound::WavReader::open(&wav_path)
-        .map_err(|e| crate::error::EngramError::Other(format!("Failed to read WAV: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("Failed to read WAV: {e}")))?;
 
     let spec = reader.spec();
     let samples: Vec<f32> = match spec.sample_format {
@@ -254,7 +254,7 @@ fn load_audio_samples(path: &Path) -> crate::error::Result<Vec<f32>> {
 #[cfg(feature = "video")]
 fn resolve_model_path(model_name: &str) -> crate::error::Result<String> {
     // Check env var for explicit path
-    if let Ok(path) = std::env::var("ENGRAM_WHISPER_MODEL_PATH") {
+    if let Ok(path) = std::env::var("KODEX_WHISPER_MODEL_PATH") {
         if Path::new(&path).exists() {
             return Ok(path);
         }
@@ -288,10 +288,10 @@ fn resolve_model_path(model_name: &str) -> crate::error::Result<String> {
         }
     }
 
-    Err(crate::error::EngramError::Other(format!(
+    Err(crate::error::KodexError::Other(format!(
         "Whisper model '{filename}' not found.\n\
          Download from: https://huggingface.co/ggerganov/whisper.cpp/tree/main\n\
-         Place in ~/.cache/whisper/ or set ENGRAM_WHISPER_MODEL_PATH env var."
+         Place in ~/.cache/whisper/ or set KODEX_WHISPER_MODEL_PATH env var."
     )))
 }
 
@@ -303,7 +303,7 @@ pub fn transcribe(
     _initial_prompt: Option<&str>,
     _force: bool,
 ) -> crate::error::Result<PathBuf> {
-    Err(crate::error::EngramError::Other(
+    Err(crate::error::KodexError::Other(
         "Transcription requires --features video. Rebuild with: cargo build --features video"
             .to_string(),
     ))

@@ -1,15 +1,15 @@
 # Project Rules
 
-## Engram Knowledge System
+## Kodex Knowledge System
 
-이 프로젝트는 engram으로 지식을 축적합니다. 너는 이 프로젝트의 장기 기억이다.
+이 프로젝트는 kodex로 지식을 축적합니다. 너는 이 프로젝트의 장기 기억이다.
 
 ### 세션 시작 시 반드시
-1. `engram-out/_KNOWLEDGE_INDEX.md` 한 파일만 읽어라 — 축적된 지식 요약
+1. `kodex-out/_KNOWLEDGE_INDEX.md` 한 파일만 읽어라 — 축적된 지식 요약
 2. 상세가 필요하면 그때 개별 `_KNOWLEDGE_*.md` 를 읽어라
-3. `engram-out/GRAPH_REPORT.md` 를 읽어라 — 프로젝트 구조
+3. `kodex-out/GRAPH_REPORT.md` 를 읽어라 — 프로젝트 구조
 
 ### 작업 중
-"다음 세션의 나에게 이걸 알려주면 도움이 될까?" → 그렇다면 `engram-out/_KNOWLEDGE_<제목>.md` 에 저장하라. 같은 주제의 파일이 있으면 observations를 올리고 confidence를 갱신하라. INDEX 파일은 건드리지 마라 (자동 생성됨).
+"다음 세션의 나에게 이걸 알려주면 도움이 될까?" → 그렇다면 `kodex-out/_KNOWLEDGE_<제목>.md` 에 저장하라. 같은 주제의 파일이 있으면 observations를 올리고 confidence를 갱신하라. INDEX 파일은 건드리지 마라 (자동 생성됨).
 
 상세 규칙: KNOWLEDGE_SYSTEM.md 참조

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 
 const CHARS_PER_TOKEN: usize = 4;
 
@@ -35,7 +35,7 @@ pub struct QuestionResult {
 
 /// Measure token reduction vs naive full-corpus approach.
 pub fn run_benchmark(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     corpus_words: Option<usize>,
     questions: Option<&[&str]>,
 ) -> BenchmarkResult {
@@ -96,7 +96,7 @@ pub fn print_benchmark(result: &BenchmarkResult) {
         return;
     }
 
-    println!("\nengram token reduction benchmark");
+    println!("\nkodex token reduction benchmark");
     println!("{}", "\u{2500}".repeat(50));
     println!("  Corpus:          {} words \u{2192} ~{} tokens (naive)", result.corpus_words, result.corpus_tokens);
     println!("  Graph:           {} nodes, {} edges", result.nodes, result.edges);
@@ -115,7 +115,7 @@ pub fn print_benchmark(result: &BenchmarkResult) {
 }
 
 /// Estimate tokens for a BFS subgraph query.
-fn query_subgraph_tokens(graph: &EngramGraph, question: &str, depth: usize) -> usize {
+fn query_subgraph_tokens(graph: &KodexGraph, question: &str, depth: usize) -> usize {
     // Extract search terms
     let terms: Vec<String> = question
         .split_whitespace()

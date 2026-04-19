@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
-    name = "engram",
+    name = "kodex",
     version,
     about = "A knowledge graph builder for code and documents"
 )]
@@ -35,7 +35,7 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         budget: usize,
         /// Path to graph.json
-        #[arg(long, default_value = "engram-out/engram.h5")]
+        #[arg(long, default_value = "kodex-out/kodex.h5")]
         graph: PathBuf,
     },
 
@@ -46,7 +46,7 @@ enum Commands {
         /// Target node label
         target: String,
         /// Path to graph.json
-        #[arg(long, default_value = "engram-out/engram.h5")]
+        #[arg(long, default_value = "kodex-out/kodex.h5")]
         graph: PathBuf,
     },
 
@@ -55,7 +55,7 @@ enum Commands {
         /// Node label to explain
         node: String,
         /// Path to graph.json
-        #[arg(long, default_value = "engram-out/engram.h5")]
+        #[arg(long, default_value = "kodex-out/kodex.h5")]
         graph: PathBuf,
     },
 
@@ -74,7 +74,7 @@ enum Commands {
     /// Measure token reduction benchmark
     Benchmark {
         /// Path to graph.json
-        #[arg(default_value = "engram-out/engram.h5")]
+        #[arg(default_value = "kodex-out/kodex.h5")]
         graph: PathBuf,
     },
 
@@ -93,7 +93,7 @@ enum Commands {
 
     /// Rerun clustering on existing graph.json
     ClusterOnly {
-        /// Target directory containing engram-out/
+        /// Target directory containing kodex-out/
         path: PathBuf,
     },
 
@@ -112,7 +112,7 @@ enum Commands {
         dir: PathBuf,
     },
 
-    /// Install engram skill to AI editor platform
+    /// Install kodex skill to AI editor platform
     Install {
         /// Platform: claude, cursor, vscode, codex, opencode, aider, kiro
         #[arg(default_value = "claude")]
@@ -131,7 +131,7 @@ enum Commands {
     /// Start MCP stdio server for graph queries
     Serve {
         /// Path to graph.json
-        #[arg(default_value = "engram-out/engram.h5")]
+        #[arg(default_value = "kodex-out/kodex.h5")]
         graph: PathBuf,
     },
 }
@@ -157,7 +157,7 @@ fn main() {
             cmd_explain(&node, &graph);
         }
         Some(Commands::Watch { path, debounce, vault }) => {
-            if let Err(e) = engram::watch::watch(&path, debounce, vault.as_deref()) {
+            if let Err(e) = kodex::watch::watch(&path, debounce, vault.as_deref()) {
                 eprintln!("Watch error: {e}");
             }
         }
@@ -167,9 +167,9 @@ fn main() {
         Some(Commands::Hook { action }) => {
             let path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let result = match action.as_str() {
-                "install" => engram::hooks::install(&path),
-                "uninstall" => engram::hooks::uninstall(&path),
-                _ => engram::hooks::status(&path),
+                "install" => kodex::hooks::install(&path),
+                "uninstall" => kodex::hooks::uninstall(&path),
+                _ => kodex::hooks::status(&path),
             };
             println!("{result}");
         }
@@ -178,7 +178,7 @@ fn main() {
         }
         Some(Commands::Install { platform }) => {
             let home = dirs_or_cwd();
-            let result = engram::install::install(Some(&platform), &home);
+            let result = kodex::install::install(Some(&platform), &home);
             println!("{result}");
         }
         Some(Commands::Update { path }) => {
@@ -198,17 +198,17 @@ fn main() {
             if let Some(path) = cli.path {
                 run_pipeline(&path);
             } else {
-                println!("engram: no path specified. Use --help for usage.");
+                println!("kodex: no path specified. Use --help for usage.");
             }
         }
     }
 }
 
 fn run_pipeline(path: &std::path::Path) {
-    println!("engram: analyzing {}", path.display());
+    println!("kodex: analyzing {}", path.display());
 
     // Step 1: Detect files
-    let detection = engram::detect::detect(path, false);
+    let detection = kodex::detect::detect(path, false);
     println!(
         "  detected {} files ({} code, {} doc, {} paper, {} image, {} video)",
         detection.total_files,
@@ -233,10 +233,10 @@ fn run_pipeline(path: &std::path::Path) {
             .collect();
         if code_paths.is_empty() {
             println!("  no code files to extract");
-            engram::types::ExtractionResult::default()
+            kodex::types::ExtractionResult::default()
         } else {
             println!("  extracting {} code files...", code_paths.len());
-            let result = engram::extract::extract(&code_paths, Some(path));
+            let result = kodex::extract::extract(&code_paths, Some(path));
             println!(
                 "  extracted {} nodes, {} edges",
                 result.nodes.len(),
@@ -249,11 +249,11 @@ fn run_pipeline(path: &std::path::Path) {
     #[cfg(not(feature = "extract"))]
     let extraction = {
         println!("  extract feature not enabled, skipping AST extraction");
-        engram::types::ExtractionResult::default()
+        kodex::types::ExtractionResult::default()
     };
 
     // Step 3: Build graph
-    let graph = engram::graph::build_from_extraction(&extraction);
+    let graph = kodex::graph::build_from_extraction(&extraction);
     println!(
         "  built graph: {} nodes, {} edges",
         graph.node_count(),
@@ -261,14 +261,14 @@ fn run_pipeline(path: &std::path::Path) {
     );
 
     // Step 4: Cluster
-    let communities = engram::cluster::cluster(&graph);
+    let communities = kodex::cluster::cluster(&graph);
     println!("  detected {} communities", communities.len());
 
     // Step 5: Analyze
-    let cohesion = engram::cluster::score_all(&graph, &communities);
-    let gods = engram::analyze::god_nodes(&graph, 10);
-    let surprises = engram::analyze::surprising_connections(&graph, Some(&communities), 5);
-    let questions = engram::analyze::suggest_questions(&graph, Some(&communities), 7);
+    let cohesion = kodex::cluster::score_all(&graph, &communities);
+    let gods = kodex::analyze::god_nodes(&graph, 10);
+    let surprises = kodex::analyze::surprising_connections(&graph, Some(&communities), 5);
+    let questions = kodex::analyze::suggest_questions(&graph, Some(&communities), 7);
 
     // Generate community labels
     let community_labels: std::collections::HashMap<usize, String> = communities
@@ -284,27 +284,27 @@ fn run_pipeline(path: &std::path::Path) {
         .collect();
 
     // Step 6: Export
-    let out_dir = path.join("engram-out");
+    let out_dir = path.join("kodex-out");
     let vault_dir = out_dir.join("vault");
     let _ = std::fs::create_dir_all(&out_dir);
     let _ = std::fs::create_dir_all(&vault_dir);
 
     // HDF5 (primary storage)
-    if let Err(e) = engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5")) {
+    if let Err(e) = kodex::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5")) {
         eprintln!("  HDF5 error: {e}");
     } else {
-        println!("  exported engram.h5");
+        println!("  exported kodex.h5");
     }
 
     // JSON (compat)
-    if let Err(e) = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json")) {
+    if let Err(e) = kodex::export::to_json(&graph, &communities, &out_dir.join("graph.json")) {
         eprintln!("  JSON error: {e}");
     } else {
         println!("  exported graph.json");
     }
 
     // HTML
-    match engram::export::to_html(
+    match kodex::export::to_html(
         &graph,
         &communities,
         &out_dir.join("graph.html"),
@@ -315,7 +315,7 @@ fn run_pipeline(path: &std::path::Path) {
     }
 
     // Step 7: Report
-    let report = engram::report::generate(
+    let report = kodex::report::generate(
         &graph,
         &communities,
         &cohesion,
@@ -333,7 +333,7 @@ fn run_pipeline(path: &std::path::Path) {
     let _ = std::fs::write(vault_dir.join("GRAPH_REPORT.md"), &report);
 
     // Step 8: Obsidian vault (clean — no binary files)
-    match engram::export::to_obsidian(
+    match kodex::export::to_obsidian(
         &graph,
         &communities,
         &vault_dir,
@@ -348,7 +348,7 @@ fn run_pipeline(path: &std::path::Path) {
 }
 
 fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::path::Path) {
-    let graph = match engram::serve::load_graph_smart(graph_path) {
+    let graph = match kodex::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -362,7 +362,7 @@ fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::pat
         .map(|t| t.to_lowercase())
         .collect();
 
-    let scored = engram::serve::score_nodes(&graph, &terms);
+    let scored = kodex::serve::score_nodes(&graph, &terms);
     let start_nodes: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
 
     if start_nodes.is_empty() {
@@ -371,17 +371,17 @@ fn cmd_query(question: &str, use_dfs: bool, budget: usize, graph_path: &std::pat
     }
 
     let (visited, edges) = if use_dfs {
-        engram::serve::dfs(&graph, &start_nodes, 3)
+        kodex::serve::dfs(&graph, &start_nodes, 3)
     } else {
-        engram::serve::bfs(&graph, &start_nodes, 3)
+        kodex::serve::bfs(&graph, &start_nodes, 3)
     };
 
-    let text = engram::serve::subgraph_to_text(&graph, &visited, &edges, budget);
+    let text = kodex::serve::subgraph_to_text(&graph, &visited, &edges, budget);
     println!("{text}");
 }
 
 fn cmd_path(source: &str, target: &str, graph_path: &std::path::Path) {
-    let graph = match engram::serve::load_graph_smart(graph_path) {
+    let graph = match kodex::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -390,8 +390,8 @@ fn cmd_path(source: &str, target: &str, graph_path: &std::path::Path) {
     };
 
     // Find matching nodes
-    let src_nodes = engram::serve::score_nodes(&graph, &[source.to_lowercase()]);
-    let tgt_nodes = engram::serve::score_nodes(&graph, &[target.to_lowercase()]);
+    let src_nodes = kodex::serve::score_nodes(&graph, &[source.to_lowercase()]);
+    let tgt_nodes = kodex::serve::score_nodes(&graph, &[target.to_lowercase()]);
 
     match (src_nodes.first(), tgt_nodes.first()) {
         (Some((_, src_id)), Some((_, tgt_id))) => {
@@ -423,7 +423,7 @@ fn cmd_path(source: &str, target: &str, graph_path: &std::path::Path) {
 }
 
 fn cmd_explain(node_label: &str, graph_path: &std::path::Path) {
-    let graph = match engram::serve::load_graph_smart(graph_path) {
+    let graph = match kodex::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -431,7 +431,7 @@ fn cmd_explain(node_label: &str, graph_path: &std::path::Path) {
         }
     };
 
-    let matches = engram::serve::score_nodes(&graph, &[node_label.to_lowercase()]);
+    let matches = kodex::serve::score_nodes(&graph, &[node_label.to_lowercase()]);
     if let Some((_, node_id)) = matches.first() {
         if let Some(node) = graph.get_node(node_id) {
             println!("Node: {}", node.label);
@@ -465,7 +465,7 @@ fn cmd_explain(node_label: &str, graph_path: &std::path::Path) {
 }
 
 fn cmd_benchmark(graph_path: &std::path::Path) {
-    let graph = match engram::serve::load_graph_smart(graph_path) {
+    let graph = match kodex::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -473,14 +473,14 @@ fn cmd_benchmark(graph_path: &std::path::Path) {
         }
     };
 
-    let result = engram::benchmark::run_benchmark(&graph, None, None);
-    engram::benchmark::print_benchmark(&result);
+    let result = kodex::benchmark::run_benchmark(&graph, None, None);
+    kodex::benchmark::print_benchmark(&result);
 }
 
 fn cmd_update(path: &std::path::Path) {
-    println!("engram update: re-extracting code files in {}", path.display());
+    println!("kodex update: re-extracting code files in {}", path.display());
 
-    let detection = engram::detect::detect(path, false);
+    let detection = kodex::detect::detect(path, false);
     let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
 
     if code_paths.is_empty() {
@@ -491,10 +491,10 @@ fn cmd_update(path: &std::path::Path) {
     #[cfg(feature = "extract")]
     {
         println!("  extracting {} code files...", code_paths.len());
-        let extraction = engram::extract::extract(&code_paths, Some(path));
+        let extraction = kodex::extract::extract(&code_paths, Some(path));
 
-        let graph = engram::graph::build_from_extraction(&extraction);
-        let communities = engram::cluster::cluster(&graph);
+        let graph = kodex::graph::build_from_extraction(&extraction);
+        let communities = kodex::cluster::cluster(&graph);
         let community_labels: std::collections::HashMap<usize, String> = communities
             .iter()
             .map(|(&cid, nodes)| {
@@ -506,11 +506,11 @@ fn cmd_update(path: &std::path::Path) {
             })
             .collect();
 
-        let out_dir = path.join("engram-out");
+        let out_dir = path.join("kodex-out");
         let _ = std::fs::create_dir_all(&out_dir);
-        let _ = engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5"));
-        let _ = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
-        let _ = engram::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
+        let _ = kodex::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5"));
+        let _ = kodex::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
+        let _ = kodex::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
 
         println!("  updated: {} nodes, {} edges", graph.node_count(), graph.edge_count());
     }
@@ -520,8 +520,8 @@ fn cmd_update(path: &std::path::Path) {
 }
 
 fn cmd_cluster_only(path: &std::path::Path) {
-    let graph_path = path.join("engram-out/engram.h5");
-    let graph = match engram::serve::load_graph_smart(&graph_path) {
+    let graph_path = path.join("kodex-out/kodex.h5");
+    let graph = match kodex::serve::load_graph_smart(&graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -529,8 +529,8 @@ fn cmd_cluster_only(path: &std::path::Path) {
         }
     };
 
-    let communities = engram::cluster::cluster(&graph);
-    let cohesion = engram::cluster::score_all(&graph, &communities);
+    let communities = kodex::cluster::cluster(&graph);
+    let cohesion = kodex::cluster::score_all(&graph, &communities);
 
     println!("Re-clustered: {} communities", communities.len());
     for (cid, nodes) in &communities {
@@ -550,21 +550,21 @@ fn cmd_cluster_only(path: &std::path::Path) {
         })
         .collect();
 
-    let out_dir = path.join("engram-out");
-    let _ = engram::storage::save_hdf5(&graph, &communities, &out_dir.join("engram.h5"));
-    let _ = engram::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
-    let _ = engram::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
-    println!("  re-exported engram.h5, graph.json, graph.html");
+    let out_dir = path.join("kodex-out");
+    let _ = kodex::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.h5"));
+    let _ = kodex::export::to_json(&graph, &communities, &out_dir.join("graph.json"));
+    let _ = kodex::export::to_html(&graph, &communities, &out_dir.join("graph.html"), Some(&community_labels));
+    println!("  re-exported kodex.h5, graph.json, graph.html");
 }
 
 #[allow(unused_variables)]
 fn cmd_add(url: &str, author: Option<&str>, contributor: Option<&str>, dir: &std::path::Path) {
-    let url_type = engram::ingest::detect_url_type(url);
-    println!("engram add: fetching {url} (type: {url_type})");
+    let url_type = kodex::ingest::detect_url_type(url);
+    println!("kodex add: fetching {url} (type: {url_type})");
 
     #[cfg(feature = "fetch")]
     {
-        match engram::ingest::ingest(url, dir, author, contributor) {
+        match kodex::ingest::ingest(url, dir, author, contributor) {
             Ok(path) => println!("  saved to {}", path.display()),
             Err(e) => eprintln!("  fetch failed: {e}"),
         }
@@ -574,7 +574,7 @@ fn cmd_add(url: &str, author: Option<&str>, contributor: Option<&str>, dir: &std
     #[cfg(not(feature = "fetch"))]
     {
         // Fallback: save stub without fetching
-        if let Err(e) = engram::security::validate_url(url) {
+        if let Err(e) = kodex::security::validate_url(url) {
             eprintln!("URL validation failed: {e}");
             return;
         }
@@ -597,7 +597,7 @@ fn cmd_add(url: &str, author: Option<&str>, contributor: Option<&str>, dir: &std
 }
 
 fn cmd_serve(graph_path: &std::path::Path) {
-    let graph = match engram::serve::load_graph_smart(graph_path) {
+    let graph = match kodex::serve::load_graph_smart(graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("Failed to load graph: {e}");
@@ -632,7 +632,7 @@ fn cmd_serve(graph_path: &std::path::Path) {
     }
 }
 
-fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
+fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
     let req: serde_json::Value = match serde_json::from_str(input) {
         Ok(v) => v,
         Err(e) => return format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32700,"message":"Parse error: {e}"}},"id":null}}"#),
@@ -648,14 +648,14 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
             let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
             let budget = params.get("token_budget").and_then(|v| v.as_u64()).unwrap_or(2000) as usize;
             let terms: Vec<String> = question.split_whitespace().filter(|t| t.len() > 2).map(|t| t.to_lowercase()).collect();
-            let scored = engram::serve::score_nodes(graph, &terms);
+            let scored = kodex::serve::score_nodes(graph, &terms);
             let start: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
-            let (visited, edges) = engram::serve::bfs(graph, &start, depth);
-            serde_json::json!(engram::serve::subgraph_to_text(graph, &visited, &edges, budget))
+            let (visited, edges) = kodex::serve::bfs(graph, &start, depth);
+            serde_json::json!(kodex::serve::subgraph_to_text(graph, &visited, &edges, budget))
         }
         "get_node" => {
             let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
-            let matches = engram::serve::score_nodes(graph, &[label.to_lowercase()]);
+            let matches = kodex::serve::score_nodes(graph, &[label.to_lowercase()]);
             match matches.first() {
                 Some((_, nid)) => {
                     let node = graph.get_node(nid);
@@ -667,12 +667,12 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
         }
         "god_nodes" => {
             let top_n = params.get("top_n").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-            let gods = engram::analyze::god_nodes(graph, top_n);
+            let gods = kodex::analyze::god_nodes(graph, top_n);
             let list: Vec<serde_json::Value> = gods.iter().map(|g| serde_json::json!({"label": g.label, "degree": g.degree, "source_file": g.source_file})).collect();
             serde_json::json!(list)
         }
         "graph_stats" => {
-            let communities = engram::serve::communities_from_graph(graph);
+            let communities = kodex::serve::communities_from_graph(graph);
             serde_json::json!({
                 "nodes": graph.node_count(),
                 "edges": graph.edge_count(),
@@ -687,8 +687,8 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
             let pattern = params.get("pattern").and_then(|v| v.as_str());
-            let graph_path = std::path::Path::new("engram-out/engram.h5");
-            match engram::knowledge::save_insight(graph_path, None, label, description, &node_ids, pattern) {
+            let graph_path = std::path::Path::new("kodex-out/kodex.h5");
+            match kodex::knowledge::save_insight(graph_path, None, label, description, &node_ids, pattern) {
                 Ok(()) => serde_json::json!({"status": "saved", "label": label, "nodes": node_ids.len()}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -700,8 +700,8 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
-            let graph_path = std::path::Path::new("engram-out/engram.h5");
-            match engram::knowledge::save_note(graph_path, None, title, content, &related) {
+            let graph_path = std::path::Path::new("kodex-out/kodex.h5");
+            match kodex::knowledge::save_note(graph_path, None, title, content, &related) {
                 Ok(()) => serde_json::json!({"status": "saved", "title": title}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -711,8 +711,8 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
             let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
             let relation = params.get("relation").and_then(|v| v.as_str()).unwrap_or("related_to");
             let description = params.get("description").and_then(|v| v.as_str());
-            let graph_path = std::path::Path::new("engram-out/engram.h5");
-            match engram::knowledge::add_edge(graph_path, source, target, relation, description) {
+            let graph_path = std::path::Path::new("kodex-out/kodex.h5");
+            match kodex::knowledge::add_edge(graph_path, source, target, relation, description) {
                 Ok(()) => serde_json::json!({"status": "saved", "source": source, "target": target}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -730,26 +730,26 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
             let kt = match knowledge_type {
-                "architecture" => engram::learn::KnowledgeType::Architecture,
-                "pattern" => engram::learn::KnowledgeType::Pattern,
-                "decision" => engram::learn::KnowledgeType::Decision,
-                "convention" => engram::learn::KnowledgeType::Convention,
-                "coupling" => engram::learn::KnowledgeType::Coupling,
-                "domain" => engram::learn::KnowledgeType::Domain,
-                "preference" => engram::learn::KnowledgeType::Preference,
-                "bug_pattern" => engram::learn::KnowledgeType::BugPattern,
-                "tech_debt" => engram::learn::KnowledgeType::TechDebt,
-                "ops" => engram::learn::KnowledgeType::Ops,
-                "api" => engram::learn::KnowledgeType::Api,
-                "performance" => engram::learn::KnowledgeType::Performance,
-                "roadmap" => engram::learn::KnowledgeType::Roadmap,
-                "context" => engram::learn::KnowledgeType::Context,
-                "lesson" => engram::learn::KnowledgeType::Lesson,
-                other => engram::learn::KnowledgeType::Custom(other.to_string()),
+                "architecture" => kodex::learn::KnowledgeType::Architecture,
+                "pattern" => kodex::learn::KnowledgeType::Pattern,
+                "decision" => kodex::learn::KnowledgeType::Decision,
+                "convention" => kodex::learn::KnowledgeType::Convention,
+                "coupling" => kodex::learn::KnowledgeType::Coupling,
+                "domain" => kodex::learn::KnowledgeType::Domain,
+                "preference" => kodex::learn::KnowledgeType::Preference,
+                "bug_pattern" => kodex::learn::KnowledgeType::BugPattern,
+                "tech_debt" => kodex::learn::KnowledgeType::TechDebt,
+                "ops" => kodex::learn::KnowledgeType::Ops,
+                "api" => kodex::learn::KnowledgeType::Api,
+                "performance" => kodex::learn::KnowledgeType::Performance,
+                "roadmap" => kodex::learn::KnowledgeType::Roadmap,
+                "context" => kodex::learn::KnowledgeType::Context,
+                "lesson" => kodex::learn::KnowledgeType::Lesson,
+                other => kodex::learn::KnowledgeType::Custom(other.to_string()),
             };
-            let vault = std::path::Path::new("engram-out/vault");
-            let graph_path = std::path::Path::new("engram-out/engram.h5");
-            match engram::learn::learn(vault, Some(graph_path), kt, title, description, &related, &tags) {
+            let vault = std::path::Path::new("kodex-out/vault");
+            let graph_path = std::path::Path::new("kodex-out/kodex.h5");
+            match kodex::learn::learn(vault, Some(graph_path), kt, title, description, &related, &tags) {
                 Ok(_) => serde_json::json!({"status": "learned", "title": title}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -757,8 +757,8 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
         "recall" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
-            let vault = std::path::Path::new("engram-out/vault");
-            let results = engram::learn::query_knowledge(vault, query, type_filter);
+            let vault = std::path::Path::new("kodex-out/vault");
+            let results = kodex::learn::query_knowledge(vault, query, type_filter);
             let items: Vec<serde_json::Value> = results.iter().map(|k| {
                 serde_json::json!({
                     "title": k.title,
@@ -772,9 +772,9 @@ fn handle_jsonrpc(input: &str, graph: &engram::graph::EngramGraph) -> String {
             serde_json::json!(items)
         }
         "knowledge_context" => {
-            let vault = std::path::Path::new("engram-out/vault");
+            let vault = std::path::Path::new("kodex-out/vault");
             let max = params.get("max_items").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
-            serde_json::json!(engram::learn::knowledge_context(vault, max))
+            serde_json::json!(kodex::learn::knowledge_context(vault, max))
         }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
@@ -790,32 +790,32 @@ fn cmd_workspace(action: &str, vault_override: Option<&std::path::Path>) {
 
     match action {
         "init" => {
-            match engram::workspace::init(&cwd) {
+            match kodex::workspace::init(&cwd) {
                 Ok(path) => println!("Created {}", path.display()),
                 Err(e) => eprintln!("Error: {e}"),
             }
         }
         "run" => {
-            let config_path = match engram::workspace::find_config(&cwd) {
+            let config_path = match kodex::workspace::find_config(&cwd) {
                 Some(p) => p,
                 None => {
-                    eprintln!("No engram-workspace.yaml found. Run `graphify workspace init` first.");
+                    eprintln!("No kodex-workspace.yaml found. Run `graphify workspace init` first.");
                     return;
                 }
             };
-            let config = match engram::workspace::load_config(&config_path) {
+            let config = match kodex::workspace::load_config(&config_path) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Config error: {e}");
                     return;
                 }
             };
-            if let Err(e) = engram::workspace::run(&config, vault_override) {
+            if let Err(e) = kodex::workspace::run(&config, vault_override) {
                 eprintln!("Workspace error: {e}");
             }
         }
         _ => {
-            println!("Usage: engram workspace <init|run> [--vault <path>]");
+            println!("Usage: kodex workspace <init|run> [--vault <path>]");
         }
     }
 }

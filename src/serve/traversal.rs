@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::export::strip_diacritics;
 
 /// Score nodes by keyword matching (diacritics-insensitive).
-pub fn score_nodes(graph: &EngramGraph, terms: &[String]) -> Vec<(usize, String)> {
+pub fn score_nodes(graph: &KodexGraph, terms: &[String]) -> Vec<(usize, String)> {
     let mut scored: Vec<(usize, String)> = Vec::new();
     for id in graph.node_ids() {
         if let Some(node) = graph.get_node(id) {
@@ -21,7 +21,7 @@ pub fn score_nodes(graph: &EngramGraph, terms: &[String]) -> Vec<(usize, String)
 
 /// Breadth-first traversal from start nodes.
 pub fn bfs(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     start_nodes: &[String],
     depth: usize,
 ) -> (HashSet<String>, Vec<(String, String)>) {
@@ -48,7 +48,7 @@ pub fn bfs(
 
 /// Depth-first traversal from start nodes.
 pub fn dfs(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     start_nodes: &[String],
     depth: usize,
 ) -> (HashSet<String>, Vec<(String, String)>) {
@@ -63,7 +63,7 @@ pub fn dfs(
 }
 
 fn dfs_recurse(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     node: &str,
     depth: usize,
     visited: &mut HashSet<String>,
@@ -82,7 +82,7 @@ fn dfs_recurse(
 
 /// Render a subgraph as text, limited by token budget (~4 chars per token).
 pub fn subgraph_to_text(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     nodes: &HashSet<String>,
     _edges: &[(String, String)],
     token_budget: usize,

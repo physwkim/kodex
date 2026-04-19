@@ -5,7 +5,7 @@ mod paper;
 mod manifest;
 
 pub use classify::{classify_file, FileCategory, CODE_EXTENSIONS, DOC_EXTENSIONS, PAPER_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, OFFICE_EXTENSIONS};
-pub use ignore::load_engramignore;
+pub use ignore::load_kodexignore;
 pub use sensitive::is_sensitive;
 pub use paper::looks_like_paper;
 pub use manifest::{load_manifest, save_manifest};
@@ -24,12 +24,12 @@ const NOISE_DIRS: &[&str] = &[
     "node_modules", "__pycache__", ".git", ".hg", ".svn",
     "target", "dist", "build", ".tox", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", "venv", ".venv",
-    "engram-out", ".engram-out",
+    "kodex-out", ".kodex-out",
 ];
 
 /// Find all extractable files in `root` directory.
 pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
-    let ignore_patterns = load_engramignore(root);
+    let ignore_patterns = load_kodexignore(root);
     let pattern_count = ignore_patterns.len();
 
     let mut files = DetectedFiles::default();
@@ -60,7 +60,7 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
         let path = entry.path();
         let path_str = path.to_string_lossy().to_string();
 
-        // Check .engramignore patterns
+        // Check .kodexignore patterns
         if let Ok(rel) = path.strip_prefix(root) {
             let rel_str = rel.to_string_lossy();
             if ignore_patterns.iter().any(|pat| {
@@ -124,7 +124,7 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
         ))
     } else if total_files > FILE_COUNT_UPPER {
         Some(format!(
-            "Large file count: {total_files} files. Consider using .engramignore."
+            "Large file count: {total_files} files. Consider using .kodexignore."
         ))
     } else {
         None
@@ -137,7 +137,7 @@ pub fn detect(root: &Path, follow_symlinks: bool) -> DetectionResult {
         needs_graph,
         warning,
         skipped_sensitive,
-        engramignore_patterns: pattern_count,
+        kodexignore_patterns: pattern_count,
     }
 }
 

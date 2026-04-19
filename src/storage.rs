@@ -2,7 +2,7 @@
 //!
 //! File layout:
 //! ```text
-//! engram.h5
+//! kodex.h5
 //! ├── /nodes/
 //! │   ├── id          [u8 2D, padded strings]
 //! │   ├── label       [u8 2D]
@@ -24,12 +24,12 @@ use std::path::Path;
 
 use rust_hdf5::file::H5File;
 
-use crate::graph::EngramGraph;
+use crate::graph::KodexGraph;
 use crate::types::{Confidence, ExtractionResult, FileType};
 
 /// Save a graph to HDF5 format.
 pub fn save_hdf5(
-    graph: &EngramGraph,
+    graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
     path: &Path,
 ) -> crate::error::Result<()> {
@@ -38,7 +38,7 @@ pub fn save_hdf5(
     }
 
     let file = H5File::create(path)
-        .map_err(|e| crate::error::EngramError::Other(format!("HDF5 create: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
 
     file.set_attr_string("version", "0.1.0").ok();
     file.set_attr_numeric("node_count", &(graph.node_count() as u64)).ok();
@@ -68,7 +68,7 @@ pub fn save_hdf5(
     }
 
     let nodes_grp = file.create_group("nodes")
-        .map_err(|e| crate::error::EngramError::Other(format!("HDF5: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
     write_string_dataset(&nodes_grp, "id", &ids)?;
     write_string_dataset(&nodes_grp, "label", &labels)?;
@@ -81,7 +81,7 @@ pub fn save_hdf5(
             .shape(&[community_ids.len()])
             .create("community")
             .and_then(|ds| ds.write_raw(&community_ids))
-            .map_err(|e| crate::error::EngramError::Other(format!("HDF5: {e}")))?;
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     }
 
     // --- Edges ---
@@ -100,7 +100,7 @@ pub fn save_hdf5(
     }
 
     let edges_grp = file.create_group("edges")
-        .map_err(|e| crate::error::EngramError::Other(format!("HDF5: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
     write_string_dataset(&edges_grp, "source", &e_src)?;
     write_string_dataset(&edges_grp, "target", &e_tgt)?;
@@ -112,17 +112,17 @@ pub fn save_hdf5(
             .shape(&[e_weight.len()])
             .create("weight")
             .and_then(|ds| ds.write_raw(&e_weight))
-            .map_err(|e| crate::error::EngramError::Other(format!("HDF5: {e}")))?;
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     }
 
-    file.close().map_err(|e| crate::error::EngramError::Other(format!("HDF5: {e}")))?;
+    file.close().map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     Ok(())
 }
 
 /// Load a graph from HDF5 format.
-pub fn load_hdf5(path: &Path) -> crate::error::Result<EngramGraph> {
+pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
     let file = H5File::open(path)
-        .map_err(|e| crate::error::EngramError::Other(format!("HDF5 open: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
 
     let ids = read_string_dataset(&file, "nodes/id")?;
     let labels = read_string_dataset(&file, "nodes/label")?;
@@ -208,7 +208,7 @@ fn write_string_dataset(
         .shape(&[strings.len(), max_len])
         .create(name)
         .and_then(|ds| ds.write_raw(&padded))
-        .map_err(|e| crate::error::EngramError::Other(format!("HDF5 write {name}: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))?;
 
     Ok(())
 }
@@ -228,7 +228,7 @@ fn read_string_dataset(file: &H5File, path: &str) -> crate::error::Result<Vec<St
     let max_len = shape[1];
 
     let raw: Vec<u8> = ds.read_raw()
-        .map_err(|e| crate::error::EngramError::Other(format!("HDF5 read {path}: {e}")))?;
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}")))?;
 
     let mut strings = Vec::with_capacity(n);
     for i in 0..n {
