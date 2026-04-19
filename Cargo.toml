@@ -21,7 +21,7 @@ clap = { version = "4", features = ["derive"] }
 walkdir = "2"
 dirs = "6"
 globset = "0.4"
-rust-hdf5 = "0.2.1"
+rust-hdf5 = "0.2"
 
 # Optional dependencies
 tree-sitter = { version = "0.24", optional = true }
