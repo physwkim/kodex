@@ -11,30 +11,30 @@ const PLATFORMS: &[(&str, &str)] = &[
     ("kiro", ".kiro/steering/kodex.md"),
 ];
 
-/// Default skill content embedded at compile time.
 const SKILL_CONTENT: &str = r#"# kodex
 
-Knowledge graph builder for code and documents.
+AI knowledge graph with persistent memory.
 
-## Usage
+## MCP Tools (auto-available via `kodex serve`)
 
-- `kodex .` — Build knowledge graph for current directory
-- `kodex query "how does auth work"` — Search graph
-- `kodex path "Client" "Database"` — Find shortest connection
-- `kodex explain "ClassName"` — Show node details and neighbors
-- `kodex update .` — Re-extract code (AST only, no LLM)
-- `kodex watch .` — Auto-rebuild on file changes
-- `kodex benchmark` — Measure token reduction
+- `knowledge_context` — read accumulated knowledge at session start
+- `learn` — save a pattern/decision/convention to knowledge base
+- `recall` — search knowledge by keyword or type
+- `query_graph` — BFS/DFS search over code graph
+- `get_node` — node details by label
+- `god_nodes` — most-connected entities
+- `save_insight` — link nodes with a named pattern
+- `add_edge` — add relationship between nodes
 
-## Output
+## CLI
 
-Results are saved to `kodex-out/`:
-- `kodex.h5` — Knowledge graph (HDF5)
-- `graph.html` — Interactive visualization (vis.js)
-- `GRAPH_REPORT.md` — Analysis report
+- `kodex run .` — build knowledge graph
+- `kodex query "how does auth work"` — search graph
+- `kodex explain "ClassName"` — show node details
+- `kodex update .` — re-extract code (AST only)
 "#;
 
-/// Install kodex skill to a platform's configuration directory.
+/// Install kodex: skill file + MCP server registration.
 pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
 
@@ -49,37 +49,49 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
         }
     };
 
-    let skill_path = target_dir.join(rel_path);
+    let mut results = Vec::new();
 
+    // 1. Install skill file
+    let skill_path = target_dir.join(rel_path);
     if let Some(parent) = skill_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            return format!("Failed to create directory: {e}");
-        }
+        let _ = std::fs::create_dir_all(parent);
     }
 
-    // Don't overwrite if already exists
     if skill_path.exists() {
         let existing = std::fs::read_to_string(&skill_path).unwrap_or_default();
         if existing.contains("kodex") {
-            return format!("Already installed at {}", skill_path.display());
+            results.push(format!(
+                "Skill: already installed at {}",
+                skill_path.display()
+            ));
+        } else {
+            let mut content = existing;
+            content.push_str("\n\n");
+            content.push_str(SKILL_CONTENT);
+            match std::fs::write(&skill_path, content) {
+                Ok(()) => results.push(format!("Skill: appended to {}", skill_path.display())),
+                Err(e) => results.push(format!("Skill: failed: {e}")),
+            }
         }
-        // Append to existing file
-        let mut content = existing;
-        content.push_str("\n\n");
-        content.push_str(SKILL_CONTENT);
-        match std::fs::write(&skill_path, content) {
-            Ok(()) => return format!("Appended to {}", skill_path.display()),
-            Err(e) => return format!("Failed to write: {e}"),
+    } else {
+        match std::fs::write(&skill_path, SKILL_CONTENT) {
+            Ok(()) => results.push(format!("Skill: installed to {}", skill_path.display())),
+            Err(e) => results.push(format!("Skill: failed: {e}")),
         }
     }
 
-    match std::fs::write(&skill_path, SKILL_CONTENT) {
-        Ok(()) => format!("Installed to {}", skill_path.display()),
-        Err(e) => format!("Failed to write: {e}"),
-    }
+    // 2. Register MCP server (platform-specific)
+    let mcp_result = match platform {
+        "claude" => install_mcp_claude(target_dir),
+        "cursor" => install_mcp_cursor(target_dir),
+        _ => "MCP: not supported for this platform (manual setup needed)".to_string(),
+    };
+    results.push(mcp_result);
+
+    results.join("\n")
 }
 
-/// Uninstall kodex skill from a platform.
+/// Uninstall kodex skill + MCP registration.
 pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
 
@@ -88,13 +100,197 @@ pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
         None => return format!("Unknown platform '{platform}'"),
     };
 
+    let mut results = Vec::new();
+
+    // Remove skill file
     let skill_path = target_dir.join(rel_path);
-    if !skill_path.exists() {
-        return format!("Not installed at {}", skill_path.display());
+    if skill_path.exists() {
+        match std::fs::remove_file(&skill_path) {
+            Ok(()) => results.push(format!("Skill: removed {}", skill_path.display())),
+            Err(e) => results.push(format!("Skill: failed: {e}")),
+        }
+    } else {
+        results.push("Skill: not installed".to_string());
     }
 
-    match std::fs::remove_file(&skill_path) {
-        Ok(()) => format!("Uninstalled from {}", skill_path.display()),
-        Err(e) => format!("Failed to remove: {e}"),
+    // Remove MCP registration
+    let mcp_result = match platform {
+        "claude" => uninstall_mcp_claude(target_dir),
+        "cursor" => uninstall_mcp_cursor(target_dir),
+        _ => "MCP: manual removal needed".to_string(),
+    };
+    results.push(mcp_result);
+
+    results.join("\n")
+}
+
+// --- Claude Code MCP ---
+
+fn install_mcp_claude(target_dir: &Path) -> String {
+    let settings_path = target_dir.join(".claude/settings.json");
+    if let Some(parent) = settings_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+
+    let mut settings = if settings_path.exists() {
+        let text = std::fs::read_to_string(&settings_path).unwrap_or_default();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let obj = settings.as_object_mut().unwrap();
+
+    // Check if already registered
+    if let Some(servers) = obj.get("mcpServers").and_then(|v| v.as_object()) {
+        if servers.contains_key("kodex") {
+            return "MCP: already registered in .claude/settings.json".to_string();
+        }
+    }
+
+    // Find kodex binary path
+    let kodex_bin = find_kodex_binary();
+
+    // Add MCP server entry
+    let mcp_servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(servers) = mcp_servers.as_object_mut() {
+        servers.insert(
+            "kodex".to_string(),
+            serde_json::json!({
+                "command": kodex_bin,
+                "args": ["serve"]
+            }),
+        );
+    }
+
+    match serde_json::to_string_pretty(&settings) {
+        Ok(json) => match std::fs::write(&settings_path, json) {
+            Ok(()) => format!("MCP: registered in {}", settings_path.display()),
+            Err(e) => format!("MCP: failed to write settings: {e}"),
+        },
+        Err(e) => format!("MCP: failed to serialize: {e}"),
+    }
+}
+
+fn uninstall_mcp_claude(target_dir: &Path) -> String {
+    let settings_path = target_dir.join(".claude/settings.json");
+    if !settings_path.exists() {
+        return "MCP: no settings file".to_string();
+    }
+
+    let text = match std::fs::read_to_string(&settings_path) {
+        Ok(t) => t,
+        Err(_) => return "MCP: failed to read settings".to_string(),
+    };
+
+    let mut settings: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return "MCP: invalid settings JSON".to_string(),
+    };
+
+    if let Some(servers) = settings
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+    {
+        if servers.remove("kodex").is_some() {
+            if let Ok(json) = serde_json::to_string_pretty(&settings) {
+                let _ = std::fs::write(&settings_path, json);
+            }
+            return "MCP: removed from .claude/settings.json".to_string();
+        }
+    }
+
+    "MCP: not registered".to_string()
+}
+
+// --- Cursor MCP ---
+
+fn install_mcp_cursor(target_dir: &Path) -> String {
+    let settings_path = target_dir.join(".cursor/mcp.json");
+    if let Some(parent) = settings_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut settings = if settings_path.exists() {
+        let text = std::fs::read_to_string(&settings_path).unwrap_or_default();
+        serde_json::from_str::<serde_json::Value>(&text)
+            .unwrap_or_else(|_| serde_json::json!({"mcpServers": {}}))
+    } else {
+        serde_json::json!({"mcpServers": {}})
+    };
+
+    let obj = settings.as_object_mut().unwrap();
+
+    if let Some(servers) = obj.get("mcpServers").and_then(|v| v.as_object()) {
+        if servers.contains_key("kodex") {
+            return "MCP: already registered in .cursor/mcp.json".to_string();
+        }
+    }
+
+    let kodex_bin = find_kodex_binary();
+
+    let mcp_servers = obj
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(servers) = mcp_servers.as_object_mut() {
+        servers.insert(
+            "kodex".to_string(),
+            serde_json::json!({
+                "command": kodex_bin,
+                "args": ["serve"]
+            }),
+        );
+    }
+
+    match serde_json::to_string_pretty(&settings) {
+        Ok(json) => match std::fs::write(&settings_path, json) {
+            Ok(()) => format!("MCP: registered in {}", settings_path.display()),
+            Err(e) => format!("MCP: failed to write: {e}"),
+        },
+        Err(e) => format!("MCP: failed to serialize: {e}"),
+    }
+}
+
+fn uninstall_mcp_cursor(target_dir: &Path) -> String {
+    let settings_path = target_dir.join(".cursor/mcp.json");
+    if !settings_path.exists() {
+        return "MCP: no mcp.json".to_string();
+    }
+
+    let text = match std::fs::read_to_string(&settings_path) {
+        Ok(t) => t,
+        Err(_) => return "MCP: failed to read".to_string(),
+    };
+
+    let mut settings: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => return "MCP: invalid JSON".to_string(),
+    };
+
+    if let Some(servers) = settings
+        .get_mut("mcpServers")
+        .and_then(|v| v.as_object_mut())
+    {
+        if servers.remove("kodex").is_some() {
+            if let Ok(json) = serde_json::to_string_pretty(&settings) {
+                let _ = std::fs::write(&settings_path, json);
+            }
+            return "MCP: removed from .cursor/mcp.json".to_string();
+        }
+    }
+
+    "MCP: not registered".to_string()
+}
+
+// --- Helpers ---
+
+fn find_kodex_binary() -> String {
+    // Try to find the kodex binary in common locations
+    if let Ok(exe) = std::env::current_exe() {
+        return exe.to_string_lossy().to_string();
+    }
+    // Fallback: assume it's in PATH
+    "kodex".to_string()
 }
