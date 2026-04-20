@@ -22,7 +22,7 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
     let graph = crate::graph::build_from_extraction(&data.extraction);
     let communities = crate::cluster::cluster(&graph);
-    file.set_attr_string("version", "0.2.0").ok();
+    file.set_attr_string("version", CURRENT_VERSION).ok();
     file.set_attr_numeric("node_count", &(graph.node_count() as u64))
         .ok();
     file.set_attr_numeric("edge_count", &(graph.edge_count() as u64))
@@ -36,14 +36,75 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// Current storage format version.
+const CURRENT_VERSION: &str = "0.3.0";
+
+/// Known versions and their migration paths.
+#[allow(dead_code)]
+const KNOWN_VERSIONS: &[&str] = &["0.1.0", "0.2.0", "0.3.0"];
+
 pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
-    Ok(KodexData {
+
+    let file_version = file
+        .attr_string("version")
+        .unwrap_or_else(|_| "0.1.0".to_string());
+
+    let mut data = KodexData {
         extraction: read_extraction(&file)?,
         knowledge: read_knowledge(&file)?,
         links: read_links(&file)?,
-    })
+    };
+
+    // Auto-migrate if needed
+    if file_version != CURRENT_VERSION {
+        migrate(&mut data, &file_version);
+        // Re-save with current version (upgrade in place)
+        drop(file);
+        let _ = save(path, &data);
+    }
+
+    Ok(data)
+}
+
+/// Migrate data from an older version to current.
+fn migrate(data: &mut KodexData, from_version: &str) {
+    // v0.1.0 → v0.2.0: no uuid/fingerprint/logical_key on nodes
+    if from_version == "0.1.0" {
+        for node in &mut data.extraction.nodes {
+            if node.uuid.is_none() {
+                node.uuid = Some(uuid::Uuid::new_v4().to_string());
+            }
+            if node.fingerprint.is_none() {
+                node.fingerprint = Some(crate::fingerprint::compute_fingerprint(
+                    &node.label,
+                    &node.file_type.to_string(),
+                    &node.source_file,
+                    node.source_location.as_deref(),
+                    None,
+                ));
+            }
+            if node.logical_key.is_none() {
+                node.logical_key = Some(crate::fingerprint::logical_key(
+                    &node.source_file,
+                    &node.label,
+                ));
+            }
+        }
+    }
+
+    // v0.1.0/v0.2.0 → v0.3.0: knowledge entries need uuid
+    if from_version == "0.1.0" || from_version == "0.2.0" {
+        for entry in &mut data.knowledge {
+            if entry.uuid.is_empty() {
+                entry.uuid = uuid::Uuid::new_v4().to_string();
+            }
+        }
+    }
+
+    // Future migrations go here:
+    // if from_version < "0.4.0" { ... }
 }
 
 pub fn load_graph(path: &Path) -> crate::error::Result<KodexGraph> {
