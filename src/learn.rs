@@ -1147,7 +1147,7 @@ pub fn merge_knowledge(
         }
     }
     // Append description if different
-    if !absorb_desc.is_empty() && !keep.description.contains(&absorb_desc) {
+    if !absorb_desc.is_empty() && keep.description != absorb_desc {
         keep.description = format!("{}\n---\n{}", keep.description, absorb_desc);
     }
 
