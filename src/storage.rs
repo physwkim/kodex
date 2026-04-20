@@ -242,9 +242,11 @@ pub fn append_knowledge_with_uuid(
         });
         new_uuid
     };
-    // Handle links: None = don't touch, Some([]) = clear, Some([...]) = replace
+    // Handle node links: None = don't touch, Some([]) = clear, Some([...]) = replace
+    // Only affects node links — knowledge↔knowledge links are preserved
     if let Some(nodes) = related_nodes {
-        data.links.retain(|l| l.knowledge_uuid != k_uuid);
+        data.links
+            .retain(|l| l.knowledge_uuid != k_uuid || l.is_knowledge_link());
         for node_ref in nodes {
             data.links.push(KnowledgeLink {
                 knowledge_uuid: k_uuid.clone(),
