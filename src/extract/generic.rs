@@ -22,6 +22,61 @@ fn read_text<'a>(node: &Node, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[start..end]).unwrap_or("")
 }
 
+/// Normalize body text for hashing: strip comments, whitespace, formatting.
+/// Goal: identical structure produces same hash even after reformatting.
+#[cfg(feature = "extract")]
+fn normalize_body_for_hash(body: &str) -> String {
+    let mut result = String::with_capacity(body.len());
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut prev_char = '\0';
+
+    for ch in body.chars() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+            }
+            continue;
+        }
+        if in_block_comment {
+            if prev_char == '*' && ch == '/' {
+                in_block_comment = false;
+                prev_char = '\0';
+                continue;
+            }
+            prev_char = ch;
+            continue;
+        }
+
+        if ch == '/' && prev_char == '/' {
+            in_line_comment = true;
+            result.pop(); // remove the first '/'
+            prev_char = ch;
+            continue;
+        }
+        if ch == '*' && prev_char == '/' {
+            in_block_comment = true;
+            result.pop(); // remove the first '/'
+            prev_char = ch;
+            continue;
+        }
+        // Also handle Python # comments
+        if ch == '#' {
+            in_line_comment = true;
+            continue;
+        }
+
+        prev_char = ch;
+
+        // Strip whitespace
+        if ch.is_whitespace() {
+            continue;
+        }
+        result.push(ch);
+    }
+    result
+}
+
 /// Resolve the name of a node using the config's name_field.
 #[cfg(feature = "extract")]
 fn resolve_name(node: &Node, source: &[u8], config: &LanguageConfig) -> Option<String> {
@@ -171,17 +226,14 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
             .filter_map(|(caller_nid, start_byte, end_byte)| {
                 let idx = *nid_to_idx.get(caller_nid)?;
                 if *start_byte < source.len() && *end_byte <= source.len() {
-                    let body_bytes = &source[*start_byte..*end_byte];
-                    let normalized: Vec<u8> = body_bytes
-                        .iter()
-                        .copied()
-                        .filter(|b| !b.is_ascii_whitespace())
-                        .collect();
+                    let body_text =
+                        std::str::from_utf8(&source[*start_byte..*end_byte]).unwrap_or("");
+                    let normalized = normalize_body_for_hash(body_text);
                     if normalized.is_empty() {
                         return None; // skip empty/whitespace-only bodies
                     }
                     let mut hasher = Sha256::new();
-                    hasher.update(&normalized);
+                    hasher.update(normalized.as_bytes());
                     let hash = format!("{:x}", hasher.finalize());
                     Some((idx, hash[..16].to_string()))
                 } else {
@@ -317,6 +369,18 @@ fn walk(
 
             // Check for inheritance (superclass_types)
             extract_inheritance(node, source, stem, &class_nid, str_path, edges);
+
+            // Record class body range for body_hash (same as functions)
+            if let Some(body) = node.child_by_field_name(config.body_field) {
+                function_body_ranges.push((class_nid.clone(), body.start_byte(), body.end_byte()));
+            } else {
+                // Fallback: use entire class node range
+                function_body_ranges.push((
+                    class_nid.clone(),
+                    node.start_byte(),
+                    node.end_byte(),
+                ));
+            }
 
             // Recurse into class body with class as container
             let cursor = &mut node.walk();

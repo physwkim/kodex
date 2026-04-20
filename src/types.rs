@@ -272,7 +272,7 @@ pub struct KnowledgeEntry {
 // KnowledgeLink — knowledge ↔ node or knowledge ↔ knowledge
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KnowledgeLink {
     /// Source: always a knowledge UUID
     pub knowledge_uuid: String,
@@ -283,6 +283,15 @@ pub struct KnowledgeLink {
     /// Target type: "node" (default) or "knowledge"
     #[serde(default)]
     pub target_type: String,
+    /// Link confidence (0.0-1.0)
+    #[serde(default)]
+    pub confidence: f64,
+    /// When this link was created (unix timestamp)
+    #[serde(default)]
+    pub created_at: u64,
+    /// Snapshot of target node's body_hash at link creation time
+    #[serde(default)]
+    pub linked_body_hash: String,
 }
 
 impl KnowledgeLink {

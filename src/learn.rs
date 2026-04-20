@@ -393,49 +393,38 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
                 changed = true;
             }
         } else {
-            // All nodes alive — check body_hash drift
-            // If knowledge was created when functions had certain bodies,
-            // and those bodies have since changed, the knowledge may be stale.
-            // We detect this by comparing stored body_hash at link time
-            // (not available) with current body_hash. For now, check if
-            // any linked node's body_hash changed since last validation.
-            if entry.last_validated_at > 0 && entry.status == "active" {
-                let mut drifted = 0;
-                for node_uuid in &linked {
-                    if let Some(current_hash) = node_info.get(*node_uuid) {
-                        // Node exists and has a body_hash — if the knowledge
-                        // was validated before the node changed, flag it
-                        if current_hash.is_some() && entry.updated_at > 0 {
-                            // We can't directly compare old vs new body_hash
-                            // (we don't store per-link snapshots), but we can
-                            // check if the node was modified after last validation
-                            // by comparing updated_at timestamps. For now, just
-                            // count nodes that have body hashes (meaning they're
-                            // function/class bodies that could have changed).
-                            drifted += 1;
+            // All nodes alive — check body_hash drift using link snapshots
+            if entry.status == "active" {
+                let entry_links: Vec<&crate::types::KnowledgeLink> = data
+                    .links
+                    .iter()
+                    .filter(|l| l.knowledge_uuid == entry.uuid && !l.is_knowledge_link())
+                    .collect();
+                let mut drifted_count = 0;
+                let mut checked_count = 0;
+                for link in &entry_links {
+                    if link.linked_body_hash.is_empty() {
+                        continue; // no snapshot — can't detect drift
+                    }
+                    checked_count += 1;
+                    if let Some(Some(cur)) = node_info.get(&link.node_uuid) {
+                        if cur != &link.linked_body_hash {
+                            drifted_count += 1;
                         }
                     }
                 }
-                // If all linked nodes have body_hashes and knowledge hasn't
-                // been validated recently, suggest review
-                if drifted == alive && drifted > 0 {
-                    let age_days = if now > entry.last_validated_at {
-                        (now - entry.last_validated_at) / 86400
-                    } else {
-                        0
-                    };
-                    if age_days > 30 {
-                        stale_entries.push(StaleInfo {
-                            uuid: entry.uuid.clone(),
-                            title: entry.title.clone(),
-                            reason: format!(
-                                "Linked code may have changed ({drifted} nodes with body, not validated for {age_days} days)"
-                            ),
-                            staleness: 0.2,
-                            action: "validate: linked code has body_hash, re-check knowledge accuracy".into(),
-                        });
-                        // Don't change status — just advisory
-                    }
+                if drifted_count > 0 {
+                    let staleness = 0.2 + 0.3 * (drifted_count as f64 / checked_count.max(1) as f64);
+                    stale_entries.push(StaleInfo {
+                        uuid: entry.uuid.clone(),
+                        title: entry.title.clone(),
+                        reason: format!(
+                            "{drifted_count}/{checked_count} linked nodes have changed body since link was created"
+                        ),
+                        staleness,
+                        action: "validate: linked code has changed, knowledge may be outdated".into(),
+                    });
+                    // Don't change status — advisory until agent validates
                 }
             }
         }
@@ -490,21 +479,51 @@ impl<'a> ScoringContext<'a> {
     }
 }
 
-/// Score a knowledge entry's relevance to the current task context.
-fn relevance_score(
+/// Structured score breakdown for debugging/explanation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScoreBreakdown {
+    pub total: f64,
+    pub confidence: f64,
+    pub observations: f64,
+    pub node_overlap: f64,
+    pub file_mention: f64,
+    pub scope_match: f64,
+    pub applies_when: f64,
+    pub keyword_match: f64,
+    pub type_priority: f64,
+    pub recency: f64,
+    pub status_penalty: f64,
+    pub reasons: Vec<String>,
+}
+
+/// Score a knowledge entry's relevance with full breakdown.
+fn relevance_score_detailed(
     k: &Knowledge,
     entry: &crate::types::KnowledgeEntry,
     ctx: &ScoringContext<'_>,
-) -> f64 {
-    let mut score = 0.0;
+) -> ScoreBreakdown {
+    let mut b = ScoreBreakdown {
+        total: 0.0,
+        confidence: 0.0,
+        observations: 0.0,
+        node_overlap: 0.0,
+        file_mention: 0.0,
+        scope_match: 0.0,
+        applies_when: 0.0,
+        keyword_match: 0.0,
+        type_priority: 0.0,
+        recency: 0.0,
+        status_penalty: 0.0,
+        reasons: Vec::new(),
+    };
 
-    // 1. Confidence weight (0-20 points)
-    score += k.confidence * 20.0;
+    // 1. Confidence (0-20)
+    b.confidence = k.confidence * 20.0;
 
-    // 2. Observation frequency (0-10 points, log scale)
-    score += (k.observations as f64).ln().min(3.0) * 3.3;
+    // 2. Observations (0-10, log scale)
+    b.observations = (k.observations as f64).ln().min(3.0) * 3.3;
 
-    // 3. Node link overlap (0-30 points) — strongest signal
+    // 3. Node overlap (0-30)
     if !ctx.node_uuids.is_empty() {
         let linked: std::collections::HashSet<&str> =
             k.related_nodes.iter().map(|s| s.as_str()).collect();
@@ -514,33 +533,36 @@ fn relevance_score(
             .filter(|u| linked.contains(u.as_str()))
             .count();
         if overlap > 0 {
-            score += 30.0 * (overlap as f64 / ctx.node_uuids.len().max(1) as f64).min(1.0);
+            b.node_overlap = 30.0 * (overlap as f64 / ctx.node_uuids.len().max(1) as f64).min(1.0);
+            b.reasons.push("linked to code in scope".into());
         }
     }
 
-    // 4. File mention in title/description/tags (0-20 points)
+    // 4. File mention (0-20)
     for filename in &ctx.touched_filenames {
         if k.title.contains(filename)
             || k.description.contains(filename)
             || k.tags.iter().any(|t| t.contains(filename))
         {
-            score += 20.0;
+            b.file_mention = 20.0;
+            b.reasons.push("mentions touched file".into());
             break;
         }
     }
 
-    // 5. Scope match (0-10 points)
+    // 5. Scope match (0-10)
     if !entry.scope.is_empty() && !ctx.touched_files.is_empty() {
-        let scope = &entry.scope;
-        // File-scoped knowledge gets a boost when editing that file
-        if scope == "file" || scope == "node" {
-            score += 10.0;
-        } else if scope == "module" {
-            score += 5.0;
+        match entry.scope.as_str() {
+            "file" | "node" => {
+                b.scope_match = 10.0;
+                b.reasons.push("file/node-scoped".into());
+            }
+            "module" => b.scope_match = 5.0,
+            _ => {}
         }
     }
 
-    // 6. applies_when match (0-15 points)
+    // 6. applies_when (0-15)
     if !entry.applies_when.is_empty() && !ctx.query_tokens.is_empty() {
         let aw_lower = entry.applies_when.to_lowercase();
         let aw_matches = ctx
@@ -549,11 +571,12 @@ fn relevance_score(
             .filter(|t| aw_lower.contains(t.as_str()))
             .count();
         if aw_matches > 0 {
-            score += 15.0 * (aw_matches as f64 / ctx.query_tokens.len() as f64);
+            b.applies_when = 15.0 * (aw_matches as f64 / ctx.query_tokens.len() as f64);
+            b.reasons.push("applies_when match".into());
         }
     }
 
-    // 7. Query keyword match (0-10 points)
+    // 7. Keyword (0-10)
     if !ctx.query_tokens.is_empty() {
         let title_lower = k.title.to_lowercase();
         let desc_lower = k.description.to_lowercase();
@@ -562,37 +585,62 @@ fn relevance_score(
             .iter()
             .filter(|t| title_lower.contains(t.as_str()) || desc_lower.contains(t.as_str()))
             .count();
-        score += 10.0 * (matches as f64 / ctx.query_tokens.len() as f64);
-    }
-
-    // 8. Knowledge type priority (0-5 points)
-    // Immediately actionable types rank higher
-    match entry.knowledge_type.as_str() {
-        "bug_pattern" | "convention" | "coupling" => score += 5.0,
-        "pattern" | "decision" | "lesson" => score += 3.0,
-        "architecture" | "domain" => score += 2.0,
-        _ => {}
-    }
-
-    // 9. Recency bonus (0-10 points)
-    // Recently validated knowledge is more trustworthy
-    if entry.last_validated_at > 0 && ctx.now > entry.last_validated_at {
-        let age_days = (ctx.now - entry.last_validated_at) / 86400;
-        if age_days < 7 {
-            score += 10.0;
-        } else if age_days < 30 {
-            score += 5.0;
-        } else if age_days < 90 {
-            score += 2.0;
+        b.keyword_match = 10.0 * (matches as f64 / ctx.query_tokens.len() as f64);
+        if matches > 0 {
+            b.reasons.push("matches query".into());
         }
     }
 
-    // 10. Penalty: needs_review status
-    if entry.status == "needs_review" {
-        score *= 0.5;
+    // 8. Type priority (0-5)
+    b.type_priority = match entry.knowledge_type.as_str() {
+        "bug_pattern" | "convention" | "coupling" => 5.0,
+        "pattern" | "decision" | "lesson" => 3.0,
+        "architecture" | "domain" => 2.0,
+        _ => 0.0,
+    };
+
+    // 9. Recency (0-10)
+    if entry.last_validated_at > 0 && ctx.now > entry.last_validated_at {
+        let age_days = (ctx.now - entry.last_validated_at) / 86400;
+        b.recency = if age_days < 7 {
+            10.0
+        } else if age_days < 30 {
+            5.0
+        } else if age_days < 90 {
+            2.0
+        } else {
+            0.0
+        };
+        if b.recency > 0.0 {
+            b.reasons.push("recently validated".into());
+        }
     }
 
-    score
+    // Sum
+    b.total = b.confidence + b.observations + b.node_overlap + b.file_mention
+        + b.scope_match + b.applies_when + b.keyword_match + b.type_priority + b.recency;
+
+    // 10. Penalty
+    if entry.status == "needs_review" {
+        b.status_penalty = b.total * 0.5;
+        b.total *= 0.5;
+        b.reasons.push("needs_review penalty".into());
+    }
+
+    if b.reasons.is_empty() {
+        b.reasons.push("high confidence".into());
+    }
+
+    b
+}
+
+/// Score a knowledge entry's relevance (simple f64).
+fn relevance_score(
+    k: &Knowledge,
+    entry: &crate::types::KnowledgeEntry,
+    ctx: &ScoringContext<'_>,
+) -> f64 {
+    relevance_score_detailed(k, entry, ctx).total
 }
 
 /// Recall knowledge ranked by relevance to the current task.
@@ -878,6 +926,7 @@ pub fn link_knowledge_to_nodes(
                 node_uuid: node_uuid.clone(),
                 relation: relation.to_string(),
                 target_type: String::new(),
+                ..Default::default()
             });
         }
     }
@@ -1116,6 +1165,7 @@ pub fn merge_knowledge(
             node_uuid: uuid_absorb.to_string(),
             relation: "supersedes".to_string(),
             target_type: "knowledge".to_string(),
+            ..Default::default()
         });
     }
 
@@ -1180,6 +1230,7 @@ pub fn link_knowledge_to_knowledge(
             node_uuid: target_uuid.to_string(),
             relation: relation.to_string(),
             target_type: "knowledge".to_string(),
+            ..Default::default()
         });
     }
 
@@ -1205,6 +1256,7 @@ pub fn link_knowledge_to_knowledge(
                 node_uuid: source_uuid.to_string(),
                 relation: reverse_rel.to_string(),
                 target_type: "knowledge".to_string(),
+                ..Default::default()
             });
         }
     }

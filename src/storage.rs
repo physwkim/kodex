@@ -282,11 +282,22 @@ pub fn append_knowledge_with_uuid(
         data.links
             .retain(|l| l.knowledge_uuid != k_uuid || l.is_knowledge_link());
         for node_ref in nodes {
+            // Snapshot body_hash at link time for drift detection
+            let linked_bh = data
+                .extraction
+                .nodes
+                .iter()
+                .find(|n| n.uuid.as_deref() == Some(node_ref.as_str()))
+                .and_then(|n| n.body_hash.clone())
+                .unwrap_or_default();
             data.links.push(KnowledgeLink {
                 knowledge_uuid: k_uuid.clone(),
                 node_uuid: node_ref.clone(),
                 relation: "related_to".to_string(),
                 target_type: String::new(),
+                confidence: 1.0,
+                created_at: now,
+                linked_body_hash: linked_bh,
             });
         }
     }
@@ -648,10 +659,28 @@ fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<(
     let nu: Vec<String> = links.iter().map(|l| l.node_uuid.clone()).collect();
     let re: Vec<String> = links.iter().map(|l| l.relation.clone()).collect();
     let tt: Vec<String> = links.iter().map(|l| l.target_type.clone()).collect();
+    let lbh: Vec<String> = links.iter().map(|l| l.linked_body_hash.clone()).collect();
+    let lco: Vec<f64> = links.iter().map(|l| l.confidence).collect();
+    let lca: Vec<u64> = links.iter().map(|l| l.created_at).collect();
     write_vlen(&grp, "knowledge_uuid", &ku)?;
     write_vlen(&grp, "node_uuid", &nu)?;
     write_vlen(&grp, "relation", &re)?;
     write_vlen(&grp, "target_type", &tt)?;
+    write_vlen(&grp, "linked_body_hash", &lbh)?;
+    if !lco.is_empty() {
+        grp.new_dataset::<f64>()
+            .shape([lco.len()])
+            .create("confidence")
+            .and_then(|ds| ds.write_raw(&lco))
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    }
+    if !lca.is_empty() {
+        grp.new_dataset::<u64>()
+            .shape([lca.len()])
+            .create("created_at")
+            .and_then(|ds| ds.write_raw(&lca))
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    }
     Ok(())
 }
 
@@ -832,12 +861,24 @@ fn read_links(file: &H5File) -> crate::error::Result<Vec<KnowledgeLink>> {
     let nu = read_vlen(file, "links/node_uuid").unwrap_or_default();
     let re = read_vlen(file, "links/relation").unwrap_or_default();
     let tt = read_vlen(file, "links/target_type").unwrap_or_default();
+    let lbh = read_vlen(file, "links/linked_body_hash").unwrap_or_default();
+    let lco: Vec<f64> = file
+        .dataset("links/confidence")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let lca: Vec<u64> = file
+        .dataset("links/created_at")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
     Ok((0..ku.len())
         .map(|i| KnowledgeLink {
             knowledge_uuid: ku[i].clone(),
             node_uuid: nu.get(i).cloned().unwrap_or_default(),
             relation: re.get(i).cloned().unwrap_or_default(),
             target_type: tt.get(i).cloned().unwrap_or_default(),
+            linked_body_hash: lbh.get(i).cloned().unwrap_or_default(),
+            confidence: lco.get(i).copied().unwrap_or(1.0),
+            created_at: lca.get(i).copied().unwrap_or(0),
         })
         .collect())
 }
@@ -950,6 +991,7 @@ mod tests {
                 node_uuid: "uuid-a".into(),
                 relation: "related_to".into(),
                 target_type: String::new(),
+                ..Default::default()
             }],
         };
         save(&h5, &data).unwrap();
@@ -992,6 +1034,7 @@ mod tests {
                 node_uuid: "n-1".into(),
                 relation: "related_to".into(),
                 target_type: String::new(),
+                ..Default::default()
             }],
         };
         save(&h5, &data).unwrap();
