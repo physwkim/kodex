@@ -56,7 +56,7 @@ tempfile = "3"
 insta = "1"
 
 [features]
-default = ["extract"]
+default = ["extract", "all-languages"]
 extract = ["tree-sitter"]
 lang-python = ["extract", "tree-sitter-python"]
 lang-javascript = ["extract", "tree-sitter-javascript"]

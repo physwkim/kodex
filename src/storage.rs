@@ -20,15 +20,18 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     }
     let file = H5File::create(path)
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
-    let graph = crate::graph::build_from_extraction(&data.extraction);
-    let communities = crate::cluster::cluster(&graph);
+    // Build graph only for community detection, write extraction data directly
+    let communities = {
+        let graph = crate::graph::build_from_extraction(&data.extraction);
+        crate::cluster::cluster(&graph)
+    };
     file.set_attr_string("version", CURRENT_VERSION).ok();
-    file.set_attr_numeric("node_count", &(graph.node_count() as u64))
+    file.set_attr_numeric("node_count", &(data.extraction.nodes.len() as u64))
         .ok();
-    file.set_attr_numeric("edge_count", &(graph.edge_count() as u64))
+    file.set_attr_numeric("edge_count", &(data.extraction.edges.len() as u64))
         .ok();
-    write_nodes(&file, &graph, &communities)?;
-    write_edges(&file, &graph)?;
+    write_nodes_direct(&file, &data.extraction.nodes, &communities)?;
+    write_edges_direct(&file, &data.extraction.edges)?;
     write_hyperedges(&file, &data.extraction.hyperedges)?;
     write_knowledge(&file, &data.knowledge)?;
     write_links(&file, &data.links)?;
@@ -472,46 +475,48 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
 
 // HDF5 internals
 
-fn write_nodes(
+/// Write nodes directly from extraction data (bypasses graph to avoid node loss).
+fn write_nodes_direct(
     file: &H5File,
-    graph: &KodexGraph,
+    nodes: &[crate::types::Node],
     communities: &HashMap<usize, Vec<String>>,
 ) -> crate::error::Result<()> {
     let comm_map = crate::export::node_community_map(communities);
     let grp = file
         .create_group("nodes")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let (mut ids, mut labels, mut ft, mut sf, mut conf, mut sl, mut uu, mut fp, mut lk, mut bh) = (
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-        vec![],
-    );
-    let mut cids: Vec<u32> = vec![];
-    for id in graph.node_ids() {
-        if let Some(n) = graph.get_node(id) {
-            ids.push(id.clone());
-            labels.push(n.label.clone());
-            ft.push(n.file_type.to_string());
-            sf.push(n.source_file.clone());
-            conf.push(
-                n.confidence
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "EXTRACTED".to_string()),
-            );
-            sl.push(n.source_location.clone().unwrap_or_default());
-            uu.push(n.uuid.clone().unwrap_or_default());
-            fp.push(n.fingerprint.clone().unwrap_or_default());
-            lk.push(n.logical_key.clone().unwrap_or_default());
-            bh.push(n.body_hash.clone().unwrap_or_default());
-            cids.push(comm_map.get(id).copied().unwrap_or(0) as u32);
-        }
+    let mut ids = Vec::with_capacity(nodes.len());
+    let mut labels = Vec::with_capacity(nodes.len());
+    let mut ft = Vec::with_capacity(nodes.len());
+    let mut sf = Vec::with_capacity(nodes.len());
+    let mut conf = Vec::with_capacity(nodes.len());
+    let mut sl = Vec::with_capacity(nodes.len());
+    let mut uu = Vec::with_capacity(nodes.len());
+    let mut fp = Vec::with_capacity(nodes.len());
+    let mut lk = Vec::with_capacity(nodes.len());
+    let mut bh = Vec::with_capacity(nodes.len());
+    let mut cids: Vec<u32> = Vec::with_capacity(nodes.len());
+    for n in nodes {
+        ids.push(n.id.clone());
+        labels.push(n.label.clone());
+        ft.push(n.file_type.to_string());
+        sf.push(n.source_file.clone());
+        conf.push(
+            n.confidence
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "EXTRACTED".to_string()),
+        );
+        sl.push(n.source_location.clone().unwrap_or_default());
+        uu.push(n.uuid.clone().unwrap_or_default());
+        fp.push(n.fingerprint.clone().unwrap_or_default());
+        lk.push(n.logical_key.clone().unwrap_or_default());
+        bh.push(n.body_hash.clone().unwrap_or_default());
+        cids.push(
+            n.community
+                .map(|c| c as u32)
+                .or_else(|| comm_map.get(&n.id).copied().map(|c| c as u32))
+                .unwrap_or(0),
+        );
     }
     write_vlen(&grp, "id", &ids)?;
     write_vlen(&grp, "label", &labels)?;
@@ -533,16 +538,17 @@ fn write_nodes(
     Ok(())
 }
 
-fn write_edges(file: &H5File, graph: &KodexGraph) -> crate::error::Result<()> {
+/// Write edges directly from extraction data.
+fn write_edges_direct(file: &H5File, edges: &[crate::types::Edge]) -> crate::error::Result<()> {
     let grp = file
         .create_group("edges")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     let (mut s, mut t, mut r, mut c, mut sf, mut sl) =
         (vec![], vec![], vec![], vec![], vec![], vec![]);
     let mut w: Vec<f64> = vec![];
-    for (src, tgt, edge) in graph.edges() {
-        s.push(src.to_string());
-        t.push(tgt.to_string());
+    for edge in edges {
+        s.push(edge.source.clone());
+        t.push(edge.target.clone());
         r.push(edge.relation.clone());
         c.push(edge.confidence.to_string());
         sf.push(edge.source_file.clone());
