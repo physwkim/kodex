@@ -706,7 +706,7 @@ pub fn recall_for_task(
 
 /// Build a task-specific briefing for the agent.
 ///
-/// Returns structured context: relevant knowledge, stale warnings, conflicts, health.
+/// Returns structured context: relevant knowledge (with reasons), warnings, conflicts.
 pub fn get_task_context(
     h5_path: &Path,
     question: &str,
@@ -864,24 +864,35 @@ pub fn update_knowledge(
             crate::error::KodexError::Other(format!("Knowledge UUID not found: {knowledge_uuid}"))
         })?;
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut changed = false;
+
     if let Some(status) = &updates.status {
         entry.status = status.clone();
+        changed = true;
     }
     if let Some(scope) = &updates.scope {
         entry.scope = scope.clone();
+        changed = true;
     }
     if let Some(applies_when) = &updates.applies_when {
         entry.applies_when = applies_when.clone();
+        changed = true;
     }
     if let Some(superseded_by) = &updates.superseded_by {
         entry.superseded_by = superseded_by.clone();
         entry.status = "obsolete".to_string();
+        changed = true;
     }
     if updates.validate {
-        entry.last_validated_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        entry.last_validated_at = now;
+        changed = true;
+    }
+    if changed {
+        entry.updated_at = now;
     }
 
     crate::storage::save(h5_path, &data)
@@ -913,6 +924,11 @@ pub fn link_knowledge_to_nodes(
         )));
     }
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     for node_uuid in node_uuids {
         // Don't add duplicate links
         let exists = data.links.iter().any(|l| {
@@ -921,12 +937,22 @@ pub fn link_knowledge_to_nodes(
                 && l.relation == relation
         });
         if !exists {
+            // Snapshot body_hash for drift detection
+            let linked_bh = data
+                .extraction
+                .nodes
+                .iter()
+                .find(|n| n.uuid.as_deref() == Some(node_uuid.as_str()))
+                .and_then(|n| n.body_hash.clone())
+                .unwrap_or_default();
             data.links.push(crate::types::KnowledgeLink {
                 knowledge_uuid: knowledge_uuid.to_string(),
                 node_uuid: node_uuid.clone(),
                 relation: relation.to_string(),
                 target_type: String::new(),
-                ..Default::default()
+                confidence: 1.0,
+                created_at: now,
+                linked_body_hash: linked_bh,
             });
         }
     }
@@ -1131,14 +1157,31 @@ pub fn merge_knowledge(
         keep.description = format!("{}\n---\n{}", keep.description, absorb_desc);
     }
 
-    // Transfer node links from absorbed to keeper
+    // Transfer ALL outgoing links from absorbed to keeper (node + knowledge)
     let keep_uuid = uuid_keep.to_string();
+    let absorb_uuid = uuid_absorb.to_string();
     for link in &mut data.links {
-        if link.knowledge_uuid == uuid_absorb && !link.is_knowledge_link() {
+        if link.knowledge_uuid == absorb_uuid {
+            // Skip self-referential links to keep (will add supersedes separately)
+            if link.node_uuid == keep_uuid {
+                continue;
+            }
             link.knowledge_uuid = keep_uuid.clone();
         }
+        // Also rewrite incoming knowledge links that point TO absorbed
+        if link.is_knowledge_link() && link.node_uuid == absorb_uuid {
+            // If keeper is the source, this becomes self-referential → will be cleaned below
+            link.node_uuid = keep_uuid.clone();
+        }
     }
-    // Deduplicate links
+    // Remove self-referential knowledge links and deduplicate
+    data.links.retain(|l| {
+        // Remove knowledge links that now point to themselves
+        if l.is_knowledge_link() && l.knowledge_uuid == l.node_uuid {
+            return false;
+        }
+        true
+    });
     let mut seen = std::collections::HashSet::new();
     data.links.retain(|l| {
         let key = (

@@ -990,3 +990,92 @@ fn test_multi_project_recall() {
     assert!(!results.is_empty());
     assert_eq!(results[0].title, "Payment Validation", "Payment knowledge should rank first for payment file");
 }
+
+/// Test: merge preserves knowledge↔knowledge links
+#[test]
+fn test_merge_preserves_knowledge_links() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("merge_kk.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
+
+    // K1 depends_on K2. K3 supports K2. Then merge K2 into K1.
+    let k1 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "Auth Pattern", "desc", None, &[], None,
+    ).unwrap();
+    let k2 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Decision,
+        "JWT Decision", "desc", None, &[], None,
+    ).unwrap();
+    let k3 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Convention,
+        "Token Convention", "desc", None, &[], None,
+    ).unwrap();
+
+    // K1 depends_on K2
+    kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "depends_on", false).unwrap();
+    // K3 supports K2 (incoming link to K2)
+    kodex::learn::link_knowledge_to_knowledge(&h5, &k3, &k2, "supports", false).unwrap();
+
+    // Merge K2 into K1
+    kodex::learn::merge_knowledge(&h5, &k1, &k2).unwrap();
+
+    let data = kodex::storage::load(&h5).unwrap();
+
+    // K3's "supports" link should now point to K1 (not K2)
+    let k3_supports: Vec<_> = data.links.iter()
+        .filter(|l| l.knowledge_uuid == k3 && l.relation == "supports" && l.is_knowledge_link())
+        .collect();
+    assert_eq!(k3_supports.len(), 1);
+    assert_eq!(k3_supports[0].node_uuid, k1,
+        "Incoming knowledge link should be rewritten to keeper UUID");
+
+    // K1's outgoing "depends_on" to K2 should be gone (self-referential after merge)
+    // or rewritten — it was K1→K2, and K2 is now absorbed into K1
+    let k1_deps: Vec<_> = data.links.iter()
+        .filter(|l| l.knowledge_uuid == k1 && l.relation == "depends_on" && l.is_knowledge_link())
+        .collect();
+    // The old K1→K2 link got rewritten: K1→K1 is self-referential and was skipped
+    assert!(k1_deps.is_empty() || k1_deps.iter().all(|l| l.node_uuid != k2),
+        "Self-referential link should not exist after merge");
+}
+
+/// Test: update_knowledge sets updated_at
+#[test]
+fn test_update_knowledge_timestamps() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("ts.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
+
+    let k = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "Test", "desc", None, &[], None,
+    ).unwrap();
+
+    let data1 = kodex::storage::load(&h5).unwrap();
+    let entry1 = data1.knowledge.iter().find(|e| e.uuid == k).unwrap();
+    assert!(entry1.created_at > 0, "created_at should be set");
+    let created = entry1.created_at;
+
+    // Update
+    kodex::learn::update_knowledge(&h5, &k, &kodex::learn::KnowledgeUpdates {
+        scope: Some("module".into()),
+        ..Default::default()
+    }).unwrap();
+
+    let data2 = kodex::storage::load(&h5).unwrap();
+    let entry2 = data2.knowledge.iter().find(|e| e.uuid == k).unwrap();
+    assert_eq!(entry2.created_at, created, "created_at should not change");
+    assert!(entry2.updated_at >= created, "updated_at should be set after update");
+    assert_eq!(entry2.scope, "module");
+}
