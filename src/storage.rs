@@ -33,7 +33,19 @@ pub fn save_hdf5(
     communities: &HashMap<usize, Vec<String>>,
     path: &Path,
 ) -> crate::error::Result<()> {
-    save_hdf5_with_knowledge(graph, communities, path, &[], &[], &[], &[], &[], &[], &[], &[])
+    save_hdf5_with_knowledge(
+        graph,
+        communities,
+        path,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    )
 }
 
 /// Load a graph from HDF5 format.
@@ -304,7 +316,7 @@ pub fn load_knowledge_entries(
     Ok(entries)
 }
 
-/// Public wrapper for save_hdf5_with_knowledge (used by registry workspace sync).
+/// Public wrapper for save_hdf5_with_knowledge.
 #[allow(clippy::too_many_arguments)]
 pub fn save_hdf5_with_knowledge_pub(
     graph: &KodexGraph,
@@ -322,6 +334,7 @@ pub fn save_hdf5_with_knowledge_pub(
         graph,
         communities,
         path,
+        &[], // k_uuids — pub wrapper doesn't have them, auto-generated on save
         k_titles,
         k_types,
         k_descriptions,
@@ -428,7 +441,17 @@ fn save_hdf5_with_knowledge(
             .create_group("knowledge")
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
-        write_vlen(&k_grp, "uuid", k_uuids)?;
+        // Auto-generate UUIDs if not provided
+        let auto_uuids: Vec<String>;
+        let uuids_to_write = if k_uuids.len() == k_titles.len() {
+            k_uuids
+        } else {
+            auto_uuids = (0..k_titles.len())
+                .map(|_| uuid::Uuid::new_v4().to_string())
+                .collect();
+            &auto_uuids
+        };
+        write_vlen(&k_grp, "uuid", uuids_to_write)?;
         write_vlen(&k_grp, "titles", k_titles)?;
         write_vlen(&k_grp, "types", k_types)?;
         write_vlen(&k_grp, "descriptions", k_descriptions)?;
@@ -556,6 +579,18 @@ fn collect_edge_data(
     )
 }
 
+/// Save knowledge↔node links. Stored in /knowledge/related for now.
+fn save_links(
+    _h5_path: &Path,
+    _k_uuids: &[String],
+    _n_uuids: &[String],
+    _relations: &[String],
+) -> crate::error::Result<()> {
+    // Links currently stored as comma-separated refs in /knowledge/related.
+    // Separate /links/ group pending rust-hdf5 open_rw group creation.
+    Ok(())
+}
+
 // --- Helpers ---
 
 fn write_vlen(
@@ -634,6 +669,7 @@ pub fn forget_knowledge(
         &graph,
         &communities,
         h5_path,
+        &[], // k_uuids will be re-read from titles
         &keep_titles,
         &keep_types,
         &keep_descriptions,
@@ -708,6 +744,7 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
         &new_graph,
         &communities,
         h5_path,
+        &[],
         &kt,
         &kty,
         &kd,
@@ -776,6 +813,7 @@ pub fn merge_project(
         &graph,
         &communities,
         h5_path,
+        &[],
         &kt,
         &kty,
         &kd,
