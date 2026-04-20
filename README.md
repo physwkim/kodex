@@ -4,38 +4,11 @@ AI knowledge graph that learns across sessions. Accumulates patterns, decisions,
 
 Inspired by [graphify](https://github.com/safishamsi/graphify). Built from scratch in Rust with HDF5 as the core storage engine.
 
-## Why HDF5
-
-kodex stores everything in a single `~/.kodex/kodex.h5` file powered by [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
-
-| | kodex (HDF5) | JSON-based tools |
-|---|---|---|
-| **All projects** | Single file | One file per project |
-| **10K nodes load** | ~5ms | ~100ms |
-| **Add knowledge** | Group append | Full file rewrite |
-| **Concurrent sessions** | Actor daemon | File conflicts |
-| **Inspection** | h5py, HDFView, Silx | Text editor |
-| **Structure** | Hierarchical groups | Flat |
-
-```
-~/.kodex/kodex.h5
-├── /nodes/          ← code graph (vlen strings, h5py compatible)
-│   ├── id, label, file_type, source_file, confidence
-│   └── community    (u32)
-├── /edges/          ← relationships
-│   ├── source, target, relation, confidence
-│   └── weight       (f64)
-└── /knowledge/      ← AI-accumulated knowledge
-    ├── titles, types, descriptions, related, tags (vlen strings)
-    ├── confidence   (f64)
-    └── observations (u32)
-```
-
 ## Install
 
 ```bash
 cargo install --path .
-kodex install claude        # register MCP server
+kodex install claude        # register MCP server in Claude Code
 ```
 
 ## Quick Start
@@ -51,28 +24,55 @@ kodex forget --below 0.3                # clean low-confidence knowledge
 ## Architecture
 
 ```
-~/.kodex/                              ← global home (single source of truth)
+~/.kodex/                              ← single source of truth
 ├── kodex.h5                           ← all projects + all knowledge
 ├── kodex.sock                         ← actor Unix socket
 └── registry.json                      ← project paths
 
-~/codes/my-project/kodex-out/          ← view files only (optional)
+~/codes/my-project/kodex-out/          ← view files (optional)
 ├── graph.html                         ← interactive visualization
 └── GRAPH_REPORT.md                    ← analysis report
 ```
 
+### HDF5 Structure
+
+```
+kodex.h5 (version 0.3.0)
+├── /nodes/                  ← code entities
+│   ├── uuid                 ← stable identity (survives renames/moves)
+│   ├── id, label            ← current name
+│   ├── fingerprint          ← matching key for re-extraction
+│   ├── logical_key          ← human-readable (project/file.py::Class.method)
+│   ├── file_type, source_file, source_location, confidence
+│   └── community (u32)
+├── /edges/                  ← code relationships
+│   ├── source, target, relation, confidence
+│   ├── source_file, source_location
+│   └── weight (f64)
+├── /knowledge/              ← AI-accumulated knowledge
+│   ├── uuid                 ← knowledge identity
+│   ├── titles, types, descriptions, tags
+│   ├── confidence (f64), observations (u32)
+└── /links/                  ← knowledge ↔ node connections
+    ├── knowledge_uuid
+    ├── node_uuid
+    └── relation
+```
+
+All data in vlen strings (h5py compatible). Powered by [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
+
 ### Process Model
 
 ```
-kodex actor (single daemon)
-  ├─ owns ~/.kodex/kodex.h5 exclusively
-  ├─ listens on ~/.kodex/kodex.sock
+kodex actor (single daemon, auto-managed)
+  ├─ owns kodex.h5 exclusively
+  ├─ handles concurrent sessions via thread-per-client
   ├─ auto-started by first kodex serve
   └─ auto-exits after 5 min idle
 
 kodex serve (per Claude session, MCP stdio proxy)
   ├─ Claude ←stdin/stdout→ serve ←socket→ actor
-  └─ exits when Claude session ends
+  └─ exits when Claude session ends (stdin EOF)
 ```
 
 ```
@@ -81,29 +81,62 @@ Claude B → kodex serve → ├─ kodex.sock → kodex actor → kodex.h5
 Claude C → kodex serve → ┘
 ```
 
-All writes go through one actor. No file locking, no conflicts.
-
 ### Data Flow
 
 ```
 kodex run ./my-project
   ├─ detect → extract (tree-sitter) → build → cluster → analyze
-  ├─ save to ~/.kodex/kodex.h5 (tagged with project name)
+  ├─ merge into ~/.kodex/kodex.h5 (preserves other projects)
+  ├─ assign stable UUIDs via fingerprint matching
   ├─ register in ~/.kodex/registry.json
-  └─ generate graph.html + GRAPH_REPORT.md in project dir
+  └─ generate graph.html + GRAPH_REPORT.md
 
-kodex serve (MCP, auto-started by Claude)
-  ├─ learn → actor → kodex.h5 /knowledge/
-  ├─ recall → actor → kodex.h5 (searches all projects)
-  ├─ forget → actor → remove from kodex.h5
-  └─ query_graph → actor → kodex.h5 /nodes/ + /edges/
+kodex serve (MCP)
+  ├─ learn → knowledge entry with UUID → kodex.h5
+  ├─ recall → search all projects
+  ├─ forget → remove by title/type/confidence
+  └─ query_graph → BFS/DFS over code graph
 ```
+
+## Stable Identity
+
+Nodes and knowledge have separate UUIDs that survive code changes:
+
+```
+Session 1:
+  authenticate() → node_uuid=N-abc → fingerprint=7f3a...
+  Claude learns "JWT pattern" → knowledge_uuid=K-999
+  Link: K-999 ↔ N-abc
+
+Refactor: authenticate() → verify_token()
+
+Session 2:
+  verify_token() → fingerprint match → same node_uuid=N-abc
+  Knowledge link K-999 ↔ N-abc still intact
+```
+
+Matching policy:
+1. Exact fingerprint → reuse UUID
+2. Score-based (file proximity + label similarity + type) → reuse if ≥ 0.6
+3. Below threshold → new UUID
+
+## Version Migration
+
+kodex.h5 auto-migrates when opened by a newer version:
+
+```
+v0.1.0 (no uuid/fingerprint) → auto-generates on load
+v0.2.0 (no knowledge uuid)   → auto-generates on load
+v0.3.0 (current)              → no migration needed
+```
+
+Old h5 files just work. No manual steps.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `kodex run <path>` | Analyze codebase → save to global h5 |
+| `kodex run <path>` | Analyze + merge into global h5 |
 | `kodex query "<question>"` | BFS/DFS search |
 | `kodex path "<src>" "<tgt>"` | Shortest path |
 | `kodex explain "<node>"` | Node details + neighbors |
@@ -121,20 +154,17 @@ kodex serve (MCP, auto-started by Claude)
 
 ```
 Session 1 (project-a):
-  Claude → MCP learn("Repository Pattern", "All DB via *Repo") → kodex.h5
+  Claude → learn("Repository Pattern", ...) → kodex.h5 (knowledge_uuid=K-1)
 
 Session 2 (project-b):
-  Claude → MCP knowledge_context() → reads from kodex.h5
-  → "Repository Pattern (60%, from project-a)" — cross-project
-  → same pattern found → learn() → confidence 68%
+  Claude → knowledge_context() → "Repository Pattern (60%)"
+  → same pattern → learn() → confidence 68%, observations 2
 
 Session 10:
-  → confidence 89% → established knowledge
-  → available everywhere
+  → confidence 89% → established knowledge → available everywhere
 
-Wrong knowledge?
-  Claude → MCP forget({"title": "Bad Pattern"}) → removed from kodex.h5
-  or: kodex forget --title "Bad Pattern"
+Wrong?
+  Claude → forget({"title": "Bad Pattern"}) → removed
 ```
 
 ### Setup
@@ -143,19 +173,14 @@ Wrong knowledge?
 kodex install claude
 ```
 
-Adds to `.claude/settings.json`:
+Auto-adds to `.claude/settings.json`:
 ```json
 {
   "mcpServers": {
-    "kodex": {
-      "command": "kodex",
-      "args": ["serve"]
-    }
+    "kodex": { "command": "kodex", "args": ["serve"] }
   }
 }
 ```
-
-Claude Code auto-starts `kodex serve` → auto-starts `kodex actor`.
 
 Also: `kodex install cursor`, `kodex install vscode`, `kodex install codex`, `kodex install kiro`
 
@@ -184,17 +209,6 @@ Custom types allowed.
 Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 ```
 
-### Forget
-
-```bash
-kodex forget --title "Wrong Pattern"    # by title
-kodex forget --type bug_pattern         # by type
-kodex forget --project old-api          # by project
-kodex forget --below 0.3               # low confidence cleanup
-```
-
-MCP: `{"method": "forget", "params": {"title": "Wrong Pattern"}}`
-
 ## MCP Tools
 
 | Tool | Description |
@@ -204,9 +218,9 @@ MCP: `{"method": "forget", "params": {"title": "Wrong Pattern"}}`
 | `god_nodes` | Most-connected entities |
 | `graph_stats` | Counts |
 | `learn` | Store/reinforce knowledge |
-| `recall` | Search knowledge (all projects) |
-| `knowledge_context` | Session bootstrap summary |
-| `forget` | Delete wrong/outdated knowledge |
+| `recall` | Search all projects |
+| `knowledge_context` | Session bootstrap |
+| `forget` | Delete knowledge |
 | `save_insight` | Link nodes with pattern |
 | `save_note` | Free-text memo |
 | `add_edge` | Add relationship |
@@ -214,8 +228,6 @@ MCP: `{"method": "forget", "params": {"title": "Wrong Pattern"}}`
 ## Supported Languages
 
 Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Scala, PHP, Swift, Lua
-
-Tree-sitter AST extraction. Each language feature-gated.
 
 ## Feature Flags
 
@@ -230,7 +242,7 @@ Tree-sitter AST extraction. Each language feature-gated.
 | `parallel` | Parallel extraction (rayon) |
 | `all` | Everything except `video` |
 
-HDF5 via [rust-hdf5](https://crates.io/crates/rust-hdf5) always included.
+HDF5 via [rust-hdf5](https://crates.io/crates/rust-hdf5) always included (pure Rust).
 
 ## License
 
