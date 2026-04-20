@@ -455,6 +455,20 @@ fn process_request(input: &str) -> String {
                 .collect();
             serde_json::json!(items)
         }
+        "knowledge_graph" => {
+            let start = params.get("uuid").and_then(|v| v.as_str());
+            let depth = params
+                .get("depth")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(3) as usize;
+            let format = params.get("format").and_then(|v| v.as_str()).unwrap_or("json");
+            let nodes = crate::learn::traverse_knowledge_graph(&h5_path, start, depth);
+            if format == "markdown" {
+                serde_json::json!(crate::learn::render_knowledge_graph(&nodes))
+            } else {
+                serde_json::json!(nodes)
+            }
+        }
         "detect_stale" => {
             match crate::learn::detect_stale_knowledge(&h5_path) {
                 Ok(n) => serde_json::json!({"status": "checked", "stale_count": n}),

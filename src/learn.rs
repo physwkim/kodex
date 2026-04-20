@@ -730,6 +730,204 @@ pub fn knowledge_neighbors(h5_path: &Path, knowledge_uuid: &str) -> Vec<(String,
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge graph traversal
+// ---------------------------------------------------------------------------
+
+/// A node in the knowledge graph (enriched with metadata for display).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KnowledgeGraphNode {
+    pub uuid: String,
+    pub title: String,
+    pub knowledge_type: String,
+    pub confidence: f64,
+    pub status: String,
+    pub links_out: Vec<KnowledgeGraphEdge>,
+    pub links_in: Vec<KnowledgeGraphEdge>,
+    pub node_links: Vec<KnowledgeGraphEdge>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KnowledgeGraphEdge {
+    pub target_uuid: String,
+    pub target_title: String,
+    pub relation: String,
+}
+
+/// BFS traversal of the knowledge graph from a starting UUID.
+/// Returns all reachable knowledge within `max_depth` hops.
+/// If `start_uuid` is None, returns the entire knowledge graph.
+pub fn traverse_knowledge_graph(
+    h5_path: &Path,
+    start_uuid: Option<&str>,
+    max_depth: usize,
+) -> Vec<KnowledgeGraphNode> {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    // Build title lookup
+    let uuid_to_title: HashMap<String, String> = data
+        .knowledge
+        .iter()
+        .map(|k| (k.uuid.clone(), k.title.clone()))
+        .collect();
+
+    // Build adjacency: knowledge↔knowledge links
+    let mut outgoing: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    let mut incoming: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    // Node links (knowledge→node)
+    let mut node_links: HashMap<String, Vec<(String, String)>> = HashMap::new();
+
+    for link in &data.links {
+        if link.is_knowledge_link() {
+            outgoing
+                .entry(link.knowledge_uuid.clone())
+                .or_default()
+                .push((link.node_uuid.clone(), link.relation.clone()));
+            incoming
+                .entry(link.node_uuid.clone())
+                .or_default()
+                .push((link.knowledge_uuid.clone(), link.relation.clone()));
+        } else {
+            node_links
+                .entry(link.knowledge_uuid.clone())
+                .or_default()
+                .push((link.node_uuid.clone(), link.relation.clone()));
+        }
+    }
+
+    // Determine which UUIDs to include
+    let included: std::collections::HashSet<String> = if let Some(start) = start_uuid {
+        // BFS from start
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back((start.to_string(), 0usize));
+        visited.insert(start.to_string());
+
+        while let Some((uuid, depth)) = queue.pop_front() {
+            if depth >= max_depth {
+                continue;
+            }
+            // Follow outgoing
+            if let Some(edges) = outgoing.get(&uuid) {
+                for (target, _) in edges {
+                    if visited.insert(target.clone()) {
+                        queue.push_back((target.clone(), depth + 1));
+                    }
+                }
+            }
+            // Follow incoming
+            if let Some(edges) = incoming.get(&uuid) {
+                for (source, _) in edges {
+                    if visited.insert(source.clone()) {
+                        queue.push_back((source.clone(), depth + 1));
+                    }
+                }
+            }
+        }
+        visited
+    } else {
+        // All knowledge
+        data.knowledge.iter().map(|k| k.uuid.clone()).collect()
+    };
+
+    // Build result
+    data.knowledge
+        .iter()
+        .filter(|k| included.contains(&k.uuid))
+        .map(|k| {
+            let out = outgoing.get(&k.uuid).cloned().unwrap_or_default();
+            let inc = incoming.get(&k.uuid).cloned().unwrap_or_default();
+            let nl = node_links.get(&k.uuid).cloned().unwrap_or_default();
+
+            KnowledgeGraphNode {
+                uuid: k.uuid.clone(),
+                title: k.title.clone(),
+                knowledge_type: k.knowledge_type.clone(),
+                confidence: k.confidence,
+                status: k.status.clone(),
+                links_out: out
+                    .iter()
+                    .map(|(target, rel)| KnowledgeGraphEdge {
+                        target_uuid: target.clone(),
+                        target_title: uuid_to_title.get(target).cloned().unwrap_or_default(),
+                        relation: rel.clone(),
+                    })
+                    .collect(),
+                links_in: inc
+                    .iter()
+                    .map(|(source, rel)| KnowledgeGraphEdge {
+                        target_uuid: source.clone(),
+                        target_title: uuid_to_title.get(source).cloned().unwrap_or_default(),
+                        relation: rel.clone(),
+                    })
+                    .collect(),
+                node_links: nl
+                    .iter()
+                    .map(|(node_uuid, rel)| {
+                        // Try to resolve node label
+                        let label = data
+                            .extraction
+                            .nodes
+                            .iter()
+                            .find(|n| n.uuid.as_deref() == Some(node_uuid.as_str()))
+                            .map(|n| n.label.clone())
+                            .unwrap_or_else(|| node_uuid.clone());
+                        KnowledgeGraphEdge {
+                            target_uuid: node_uuid.clone(),
+                            target_title: label,
+                            relation: rel.clone(),
+                        }
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// Render knowledge graph as markdown for agent consumption.
+pub fn render_knowledge_graph(nodes: &[KnowledgeGraphNode]) -> String {
+    if nodes.is_empty() {
+        return "No knowledge in graph.".to_string();
+    }
+
+    let mut out = format!("## Knowledge Graph ({} entries)\n\n", nodes.len());
+
+    for node in nodes {
+        let conf = (node.confidence * 100.0) as u32;
+        out.push_str(&format!(
+            "### {} ({}, {conf}%)\n",
+            node.title, node.knowledge_type
+        ));
+
+        if !node.links_out.is_empty() {
+            for edge in &node.links_out {
+                out.push_str(&format!(
+                    "  → {} **{}**\n",
+                    edge.relation, edge.target_title
+                ));
+            }
+        }
+        if !node.links_in.is_empty() {
+            for edge in &node.links_in {
+                out.push_str(&format!(
+                    "  ← {} **{}**\n",
+                    edge.relation, edge.target_title
+                ));
+            }
+        }
+        if !node.node_links.is_empty() {
+            let labels: Vec<&str> = node.node_links.iter().map(|e| e.target_title.as_str()).collect();
+            out.push_str(&format!("  code: {}\n", labels.join(", ")));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
 
