@@ -163,7 +163,7 @@ pub fn update(path: &Path) {
 }
 
 pub fn cluster_only(path: &Path) {
-    let graph_path = path.join("kodex-out/kodex.h5");
+    let graph_path = kodex::registry::global_h5();
     let graph = match load_graph(&graph_path) {
         Some(g) => g,
         None => return,

@@ -476,6 +476,145 @@ fn read_vlen(file: &H5File, path: &str) -> crate::error::Result<Vec<String>> {
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}")))
 }
 
+/// Remove knowledge entries matching a filter.
+/// Returns how many were removed.
+pub fn forget_knowledge(
+    h5_path: &Path,
+    title_match: Option<&str>,
+    type_match: Option<&str>,
+    project_match: Option<&str>,
+    below_confidence: Option<f64>,
+) -> crate::error::Result<usize> {
+    if !h5_path.exists() {
+        return Ok(0);
+    }
+
+    let entries = load_knowledge_entries(h5_path)?;
+    let before = entries.len();
+
+    let mut keep_titles = Vec::new();
+    let mut keep_types = Vec::new();
+    let mut keep_descriptions = Vec::new();
+    let mut keep_confidences: Vec<f64> = Vec::new();
+    let mut keep_observations: Vec<u32> = Vec::new();
+    let mut keep_related: Vec<String> = Vec::new();
+    let mut keep_tags = Vec::new();
+
+    for (title, ktype, desc, conf, obs, related, tags) in &entries {
+        let should_remove = title_match.map(|m| title.contains(m)).unwrap_or(false)
+            || type_match.map(|m| ktype == m).unwrap_or(false)
+            || project_match.map(|m| related.contains(m)).unwrap_or(false)
+            || below_confidence.map(|c| *conf < c).unwrap_or(false);
+
+        if !should_remove {
+            keep_titles.push(title.clone());
+            keep_types.push(ktype.clone());
+            keep_descriptions.push(desc.clone());
+            keep_confidences.push(*conf);
+            keep_observations.push(*obs);
+            keep_related.push(related.clone());
+            keep_tags.push(tags.clone());
+        }
+    }
+
+    let removed = before - keep_titles.len();
+    if removed == 0 {
+        return Ok(0);
+    }
+
+    // Reload graph, re-save with filtered knowledge
+    let graph = load_hdf5(h5_path)?;
+    let communities = crate::cluster::cluster(&graph);
+    save_hdf5_with_knowledge(
+        &graph,
+        &communities,
+        h5_path,
+        &keep_titles,
+        &keep_types,
+        &keep_descriptions,
+        &keep_confidences,
+        &keep_observations,
+        &keep_related,
+        &keep_tags,
+    )?;
+
+    Ok(removed)
+}
+
+/// Remove a project's code nodes/edges from the global h5.
+pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Result<usize> {
+    if !h5_path.exists() {
+        return Ok(0);
+    }
+
+    let graph = load_hdf5(h5_path)?;
+    let before = graph.node_count();
+
+    // Find nodes belonging to this project
+    let to_remove: Vec<String> = graph
+        .node_ids()
+        .filter(|id| {
+            graph
+                .get_node(id)
+                .map(|n| n.source_file.starts_with(project_path))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+
+    // Rebuild graph without those nodes
+    let extraction = crate::types::ExtractionResult {
+        nodes: graph
+            .node_ids()
+            .filter(|id| !to_remove.contains(id))
+            .filter_map(|id| graph.get_node(id).cloned())
+            .collect(),
+        edges: graph
+            .edges()
+            .filter(|(src, tgt, _)| {
+                !to_remove.contains(&src.to_string()) && !to_remove.contains(&tgt.to_string())
+            })
+            .map(|(_, _, e)| e.clone())
+            .collect(),
+        ..Default::default()
+    };
+
+    let new_graph = crate::graph::build_from_extraction(&extraction);
+    let communities = crate::cluster::cluster(&new_graph);
+
+    // Preserve knowledge
+    let knowledge = load_knowledge_entries(h5_path).unwrap_or_default();
+    let (kt, kty, kd, kc, ko, kr, ktg): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+        knowledge.into_iter().fold(
+            (vec![], vec![], vec![], vec![], vec![], vec![], vec![]),
+            |(mut t, mut ty, mut d, mut c, mut o, mut r, mut tg), entry| {
+                t.push(entry.0);
+                ty.push(entry.1);
+                d.push(entry.2);
+                c.push(entry.3);
+                o.push(entry.4);
+                r.push(entry.5);
+                tg.push(entry.6);
+                (t, ty, d, c, o, r, tg)
+            },
+        );
+
+    save_hdf5_with_knowledge(
+        &new_graph,
+        &communities,
+        h5_path,
+        &kt,
+        &kty,
+        &kd,
+        &kc,
+        &ko,
+        &kr,
+        &ktg,
+    )?;
+
+    Ok(before - new_graph.node_count())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

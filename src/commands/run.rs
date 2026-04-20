@@ -1,7 +1,13 @@
 use std::path::{Path, PathBuf};
 
 pub fn run_pipeline(path: &Path) {
-    println!("kodex: analyzing {}", path.display());
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let project_name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    println!("kodex: analyzing {} ({project_name})", path.display());
 
     let detection = kodex::detect::detect(path, false);
     println!(
@@ -28,7 +34,30 @@ pub fn run_pipeline(path: &Path) {
             kodex::types::ExtractionResult::default()
         } else {
             println!("  extracting {} code files...", code_paths.len());
-            let result = kodex::extract::extract(&code_paths, Some(path));
+            let mut result = kodex::extract::extract(&code_paths, Some(path));
+            // Tag nodes with project name for multi-project support
+            for node in &mut result.nodes {
+                if !node.source_file.starts_with(project_name) {
+                    node.source_file = format!(
+                        "{project_name}/{}",
+                        node.source_file
+                            .strip_prefix(path.to_str().unwrap_or(""))
+                            .unwrap_or(&node.source_file)
+                            .trim_start_matches('/')
+                    );
+                }
+            }
+            for edge in &mut result.edges {
+                if !edge.source_file.starts_with(project_name) {
+                    edge.source_file = format!(
+                        "{project_name}/{}",
+                        edge.source_file
+                            .strip_prefix(path.to_str().unwrap_or(""))
+                            .unwrap_or(&edge.source_file)
+                            .trim_start_matches('/')
+                    );
+                }
+            }
             println!(
                 "  extracted {} nodes, {} edges",
                 result.nodes.len(),
@@ -40,10 +69,11 @@ pub fn run_pipeline(path: &Path) {
 
     #[cfg(not(feature = "extract"))]
     let extraction = {
-        println!("  extract feature not enabled, skipping AST extraction");
+        println!("  extract feature not enabled");
         kodex::types::ExtractionResult::default()
     };
 
+    // Build graph
     let graph = kodex::graph::build_from_extraction(&extraction);
     println!(
         "  built graph: {} nodes, {} edges",
@@ -54,20 +84,49 @@ pub fn run_pipeline(path: &Path) {
     let communities = kodex::cluster::cluster(&graph);
     println!("  detected {} communities", communities.len());
 
+    // Save to global h5
+    let h5_path = kodex::registry::global_h5();
+    let _ = std::fs::create_dir_all(kodex::registry::kodex_home());
+
+    // If global h5 exists, remove old project nodes first, then merge
+    if h5_path.exists() {
+        let _ = kodex::storage::forget_project(&h5_path, project_name);
+    }
+
+    // For fresh file or after cleanup, save
+    if let Err(e) = kodex::storage::save_hdf5(&graph, &communities, &h5_path) {
+        eprintln!("  HDF5 error: {e}");
+    } else {
+        println!("  saved to {}", h5_path.display());
+    }
+
+    // Register project
+    match kodex::registry::register(path) {
+        Ok(key) => println!("  registered as '{key}'"),
+        Err(e) => eprintln!("  registry: {e}"),
+    }
+
+    // Generate optional outputs in CWD
+    let out_dir = path.join("kodex-out");
+    let _ = std::fs::create_dir_all(&out_dir);
+
+    // HTML visualization
+    let labels = super::community_labels(&graph, &communities);
+    match kodex::export::to_html(
+        &graph,
+        &communities,
+        &out_dir.join("graph.html"),
+        Some(&labels),
+    ) {
+        Ok(()) => println!("  exported graph.html"),
+        Err(e) => eprintln!("  HTML: {e}"),
+    }
+
+    // Report
     let cohesion = kodex::cluster::score_all(&graph, &communities);
     let gods = kodex::analyze::god_nodes(&graph, 10);
     let surprises = kodex::analyze::surprising_connections(&graph, Some(&communities), 5);
     let questions = kodex::analyze::suggest_questions(&graph, Some(&communities), 7);
-    let labels = super::community_labels(&graph, &communities);
-
-    let out_dir = path.join("kodex-out");
-    let vault_dir = out_dir.join("vault");
-    let _ = std::fs::create_dir_all(&out_dir);
-    let _ = std::fs::create_dir_all(&vault_dir);
-
-    super::export_all(&graph, &communities, &labels, &out_dir);
-    println!("  exported kodex.h5, graph.html");
-
     let report = kodex::report::generate(
         &graph,
         &communities,
@@ -82,28 +141,11 @@ pub fn run_pipeline(path: &Path) {
         Some(&questions),
     );
     let _ = std::fs::write(out_dir.join("GRAPH_REPORT.md"), &report);
-    let _ = std::fs::write(vault_dir.join("GRAPH_REPORT.md"), &report);
-
-    match kodex::export::to_obsidian(
-        &graph,
-        &communities,
-        &vault_dir,
-        Some(&labels),
-        Some(&cohesion),
-    ) {
-        Ok(count) => println!("  vault: {count} notes in {}", vault_dir.display()),
-        Err(e) => eprintln!("  vault error: {e}"),
-    }
-
-    // Register in global workspace
-    match kodex::registry::register(path) {
-        Ok(key) => println!("  registered as '{key}' in ~/.kodex/"),
-        Err(e) => eprintln!("  registry warning: {e}"),
-    }
+    println!("  exported GRAPH_REPORT.md");
 
     println!(
-        "  done! Data: {} | Vault: {}",
-        out_dir.display(),
-        vault_dir.display()
+        "  done! Knowledge: {} | View: {}",
+        h5_path.display(),
+        out_dir.display()
     );
 }

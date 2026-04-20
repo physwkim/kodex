@@ -152,12 +152,12 @@ fn process_request(input: &str) -> String {
     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
 
     // Resolve project h5 path from params or CWD
-    let project_dir = params
+    let _project_dir = params
         .get("project_dir")
         .and_then(|v| v.as_str())
         .unwrap_or(".");
-    let h5_path = std::path::Path::new(project_dir).join("kodex-out/kodex.h5");
-    let ws_h5 = crate::registry::workspace_h5();
+    let h5_path = crate::registry::global_h5();
+    // global h5 is the single source
 
     let result = match method {
         "query_graph" => {
@@ -235,8 +235,6 @@ fn process_request(input: &str) -> String {
             let kt = parse_knowledge_type(kt_str);
             match crate::learn::learn(&h5_path, kt, title, desc, &related, &tags) {
                 Ok(()) => {
-                    // Sync to workspace
-                    let _ = crate::registry::register(std::path::Path::new(project_dir));
                     serde_json::json!({"status": "learned", "title": title})
                 }
                 Err(e) => serde_json::json!({"error": e.to_string()}),
@@ -245,14 +243,7 @@ fn process_request(input: &str) -> String {
         "recall" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
-            let mut results = crate::learn::query_knowledge(&h5_path, query, type_filter);
-            if ws_h5.exists() {
-                for r in crate::learn::query_knowledge(&ws_h5, query, type_filter) {
-                    if !results.iter().any(|existing| existing.title == r.title) {
-                        results.push(r);
-                    }
-                }
-            }
+            let results = crate::learn::query_knowledge(&h5_path, query, type_filter);
             let items: Vec<serde_json::Value> = results
                 .iter()
                 .map(|k| {
@@ -271,16 +262,16 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(20) as usize;
-            let local = crate::learn::knowledge_context(&h5_path, max);
-            let global = if ws_h5.exists() {
-                crate::learn::knowledge_context(&ws_h5, max)
-            } else {
-                String::new()
-            };
-            if global.is_empty() {
-                serde_json::json!(local)
-            } else {
-                serde_json::json!(format!("{local}\n\n## Global Knowledge\n\n{global}"))
+            serde_json::json!(crate::learn::knowledge_context(&h5_path, max))
+        }
+        "forget" => {
+            let title = params.get("title").and_then(|v| v.as_str());
+            let ktype = params.get("type").and_then(|v| v.as_str());
+            let project = params.get("project").and_then(|v| v.as_str());
+            let below = params.get("below_confidence").and_then(|v| v.as_f64());
+            match crate::storage::forget_knowledge(&h5_path, title, ktype, project, below) {
+                Ok(n) => serde_json::json!({"status": "forgot", "removed": n}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),

@@ -102,6 +102,21 @@ enum Commands {
     },
     /// List registered projects
     List,
+    /// Forget (delete) knowledge
+    Forget {
+        /// Title to match (substring)
+        #[arg(long)]
+        title: Option<String>,
+        /// Knowledge type to match
+        #[arg(long, name = "type")]
+        ktype: Option<String>,
+        /// Project name to match
+        #[arg(long)]
+        project: Option<String>,
+        /// Remove entries below this confidence
+        #[arg(long)]
+        below: Option<f64>,
+    },
     /// Run actor daemon (internal, started by serve)
     Actor,
 }
@@ -170,10 +185,28 @@ fn main() {
             } else {
                 println!("Registered projects ({}):", entries.len());
                 for (key, entry) in &entries {
-                    let exists = if entry.h5_path.exists() { "✓" } else { "✗" };
-                    println!("  {exists} {key}: {}", entry.path.display());
+                    println!("  {key}: {}", entry.path.display());
                 }
-                println!("\nWorkspace: {}", kodex::registry::workspace_h5().display());
+                println!("\nKnowledge: {}", kodex::registry::global_h5().display());
+            }
+        }
+        Some(Commands::Forget {
+            title,
+            ktype,
+            project,
+            below,
+        }) => {
+            let h5 = kodex::registry::global_h5();
+            match kodex::storage::forget_knowledge(
+                &h5,
+                title.as_deref(),
+                ktype.as_deref(),
+                project.as_deref(),
+                below,
+            ) {
+                Ok(0) => println!("No matching knowledge found."),
+                Ok(n) => println!("Removed {n} knowledge entries."),
+                Err(e) => eprintln!("Error: {e}"),
             }
         }
         Some(Commands::Actor) => kodex::actor::run_actor(),
