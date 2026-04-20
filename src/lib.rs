@@ -11,6 +11,7 @@ pub mod fingerprint;
 pub mod graph;
 pub mod hooks;
 pub mod id;
+pub mod import;
 pub mod ingest;
 pub mod install;
 pub mod knowledge;
