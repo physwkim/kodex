@@ -274,97 +274,206 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 // Staleness detection
 // ---------------------------------------------------------------------------
 
-/// Check knowledge entries for staleness and mark them.
-/// A knowledge is stale if all linked node UUIDs no longer exist.
-/// Returns count of entries marked as needs_review.
+/// Staleness report for a single knowledge entry.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StaleInfo {
+    pub uuid: String,
+    pub title: String,
+    pub reason: String,
+    /// 0.0 = fully valid, 1.0 = completely stale
+    pub staleness: f64,
+    pub action: String,
+}
+
+/// Check knowledge entries for staleness. Graduated assessment:
+/// - All linked nodes gone → needs_review (staleness 1.0)
+/// - Some linked nodes gone → partial staleness (0.3-0.7)
+/// - Linked nodes exist but body_hash changed → tentative (0.2)
+/// - No validation for a long time → age decay
+///
+/// Returns list of stale entries with details.
 pub fn detect_stale_knowledge(h5_path: &Path) -> crate::error::Result<usize> {
+    let results = detect_stale_detailed(h5_path)?;
+    Ok(results.len())
+}
+
+/// Detailed staleness detection with graduated scoring.
+pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleInfo>> {
     let mut data = crate::storage::load(h5_path)?;
 
-    let valid_node_uuids: std::collections::HashSet<&str> = data
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Build node lookup: uuid → (exists, body_hash)
+    let node_info: HashMap<String, Option<String>> = data
         .extraction
         .nodes
         .iter()
-        .filter_map(|n| n.uuid.as_deref())
+        .filter_map(|n| {
+            n.uuid
+                .as_ref()
+                .map(|u| (u.clone(), n.body_hash.clone()))
+        })
         .collect();
 
-    let mut stale_count = 0;
+    let valid_node_uuids: std::collections::HashSet<&str> =
+        node_info.keys().map(|s| s.as_str()).collect();
+
+    let mut stale_entries = Vec::new();
+    let mut changed = false;
 
     for entry in &mut data.knowledge {
-        if entry.status == "obsolete" || entry.status == "needs_review" {
+        if entry.status == "obsolete" {
             continue;
         }
 
-        // Find node-only links for this knowledge (skip knowledge↔knowledge)
-        let linked_node_uuids: Vec<&str> = data
+        // Find node-only links
+        let linked: Vec<&str> = data
             .links
             .iter()
             .filter(|l| l.knowledge_uuid == entry.uuid && !l.is_knowledge_link())
             .map(|l| l.node_uuid.as_str())
             .collect();
 
-        if linked_node_uuids.is_empty() {
-            continue; // No node links — can't be stale by node reference
+        if linked.is_empty() {
+            // Age-based decay: if no validation for 90+ days
+            if entry.last_validated_at > 0 && now > entry.last_validated_at {
+                let age_days = (now - entry.last_validated_at) / 86400;
+                if age_days > 90 && entry.status != "needs_review" {
+                    entry.status = "needs_review".to_string();
+                    stale_entries.push(StaleInfo {
+                        uuid: entry.uuid.clone(),
+                        title: entry.title.clone(),
+                        reason: format!("Not validated for {age_days} days"),
+                        staleness: 0.3,
+                        action: "validate or refresh".into(),
+                    });
+                    changed = true;
+                }
+            }
+            continue;
         }
 
-        // Check if ALL linked nodes are gone
-        let all_gone = linked_node_uuids
+        let alive = linked
             .iter()
-            .all(|uuid| !valid_node_uuids.contains(uuid));
+            .filter(|u| valid_node_uuids.contains(*u))
+            .count();
+        let total = linked.len();
+        let gone = total - alive;
 
-        if all_gone {
-            entry.status = "needs_review".to_string();
-            // Decay confidence slightly
-            entry.confidence *= 0.9;
-            stale_count += 1;
+        if gone == total {
+            // All nodes gone
+            if entry.status != "needs_review" {
+                entry.status = "needs_review".to_string();
+                entry.confidence *= 0.9;
+                stale_entries.push(StaleInfo {
+                    uuid: entry.uuid.clone(),
+                    title: entry.title.clone(),
+                    reason: format!("All {total} linked nodes deleted"),
+                    staleness: 1.0,
+                    action: "review: nodes may have been refactored or removed".into(),
+                });
+                changed = true;
+            }
+        } else if gone > 0 {
+            // Partial staleness
+            let ratio = gone as f64 / total as f64;
+            if ratio > 0.5 && entry.status == "active" {
+                entry.status = "needs_review".to_string();
+                entry.confidence *= 0.95;
+                stale_entries.push(StaleInfo {
+                    uuid: entry.uuid.clone(),
+                    title: entry.title.clone(),
+                    reason: format!("{gone}/{total} linked nodes deleted"),
+                    staleness: ratio * 0.7,
+                    action: "review: partial node loss".into(),
+                });
+                changed = true;
+            }
         }
     }
 
-    if stale_count > 0 {
-        // Clean dead node links (keep knowledge↔knowledge links)
+    if changed {
+        // Clean fully dead node links (keep partial + knowledge links)
         data.links.retain(|l| {
             l.is_knowledge_link() || valid_node_uuids.contains(l.node_uuid.as_str())
         });
         crate::storage::save(h5_path, &data)?;
     }
 
-    Ok(stale_count)
+    Ok(stale_entries)
 }
 
 // ---------------------------------------------------------------------------
 // Knowledge relevance scoring
 // ---------------------------------------------------------------------------
 
+/// Scoring context for relevance computation.
+struct ScoringContext<'a> {
+    touched_files: &'a [String],
+    node_uuids: &'a std::collections::HashSet<String>,
+    query_tokens: &'a [String],
+    now: u64,
+    /// Filenames extracted from touched_files (cached)
+    touched_filenames: Vec<&'a str>,
+}
+
+impl<'a> ScoringContext<'a> {
+    fn new(
+        touched_files: &'a [String],
+        node_uuids: &'a std::collections::HashSet<String>,
+        query_tokens: &'a [String],
+    ) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let touched_filenames = touched_files
+            .iter()
+            .map(|f| f.rsplit('/').next().unwrap_or(f.as_str()))
+            .collect();
+        Self {
+            touched_files,
+            node_uuids,
+            query_tokens,
+            now,
+            touched_filenames,
+        }
+    }
+}
+
 /// Score a knowledge entry's relevance to the current task context.
 fn relevance_score(
     k: &Knowledge,
-    touched_files: &[String],
-    related_node_uuids: &std::collections::HashSet<String>,
-    query_tokens: &[String],
+    entry: &crate::types::KnowledgeEntry,
+    ctx: &ScoringContext<'_>,
 ) -> f64 {
     let mut score = 0.0;
 
-    // Base confidence weight (0-30 points)
-    score += k.confidence * 30.0;
+    // 1. Confidence weight (0-20 points)
+    score += k.confidence * 20.0;
 
-    // Observation frequency (0-15 points, log scale)
-    score += (k.observations as f64).ln().min(3.0) * 5.0;
+    // 2. Observation frequency (0-10 points, log scale)
+    score += (k.observations as f64).ln().min(3.0) * 3.3;
 
-    // Node link overlap (0-25 points)
-    if !related_node_uuids.is_empty() {
+    // 3. Node link overlap (0-30 points) — strongest signal
+    if !ctx.node_uuids.is_empty() {
         let linked: std::collections::HashSet<&str> =
             k.related_nodes.iter().map(|s| s.as_str()).collect();
-        let overlap = related_node_uuids
+        let overlap = ctx
+            .node_uuids
             .iter()
             .filter(|u| linked.contains(u.as_str()))
             .count();
         if overlap > 0 {
-            score += 25.0 * (overlap as f64 / related_node_uuids.len().max(1) as f64).min(1.0);
+            score += 30.0 * (overlap as f64 / ctx.node_uuids.len().max(1) as f64).min(1.0);
         }
     }
 
-    // File mention in description/tags (0-20 points)
-    for file in touched_files {
-        let filename = file.rsplit('/').next().unwrap_or(file);
+    // 4. File mention in title/description/tags (0-20 points)
+    for filename in &ctx.touched_filenames {
         if k.title.contains(filename)
             || k.description.contains(filename)
             || k.tags.iter().any(|t| t.contains(filename))
@@ -374,15 +483,67 @@ fn relevance_score(
         }
     }
 
-    // Query keyword match (0-10 points)
-    if !query_tokens.is_empty() {
+    // 5. Scope match (0-10 points)
+    if !entry.scope.is_empty() && !ctx.touched_files.is_empty() {
+        let scope = &entry.scope;
+        // File-scoped knowledge gets a boost when editing that file
+        if scope == "file" || scope == "node" {
+            score += 10.0;
+        } else if scope == "module" {
+            score += 5.0;
+        }
+    }
+
+    // 6. applies_when match (0-15 points)
+    if !entry.applies_when.is_empty() && !ctx.query_tokens.is_empty() {
+        let aw_lower = entry.applies_when.to_lowercase();
+        let aw_matches = ctx
+            .query_tokens
+            .iter()
+            .filter(|t| aw_lower.contains(t.as_str()))
+            .count();
+        if aw_matches > 0 {
+            score += 15.0 * (aw_matches as f64 / ctx.query_tokens.len() as f64);
+        }
+    }
+
+    // 7. Query keyword match (0-10 points)
+    if !ctx.query_tokens.is_empty() {
         let title_lower = k.title.to_lowercase();
         let desc_lower = k.description.to_lowercase();
-        let matches = query_tokens
+        let matches = ctx
+            .query_tokens
             .iter()
             .filter(|t| title_lower.contains(t.as_str()) || desc_lower.contains(t.as_str()))
             .count();
-        score += 10.0 * (matches as f64 / query_tokens.len() as f64);
+        score += 10.0 * (matches as f64 / ctx.query_tokens.len() as f64);
+    }
+
+    // 8. Knowledge type priority (0-5 points)
+    // Immediately actionable types rank higher
+    match entry.knowledge_type.as_str() {
+        "bug_pattern" | "convention" | "coupling" => score += 5.0,
+        "pattern" | "decision" | "lesson" => score += 3.0,
+        "architecture" | "domain" => score += 2.0,
+        _ => {}
+    }
+
+    // 9. Recency bonus (0-10 points)
+    // Recently validated knowledge is more trustworthy
+    if entry.last_validated_at > 0 && ctx.now > entry.last_validated_at {
+        let age_days = (ctx.now - entry.last_validated_at) / 86400;
+        if age_days < 7 {
+            score += 10.0;
+        } else if age_days < 30 {
+            score += 5.0;
+        } else if age_days < 90 {
+            score += 2.0;
+        }
+    }
+
+    // 10. Penalty: needs_review status
+    if entry.status == "needs_review" {
+        score *= 0.5;
     }
 
     score
@@ -414,9 +575,8 @@ pub fn recall_for_task(
         .map(String::from)
         .collect();
 
-    let node_uuid_set: std::collections::HashSet<String> =
-        node_uuids.iter().cloned().collect();
-
+    let node_uuid_set: std::collections::HashSet<String> = node_uuids.iter().cloned().collect();
+    let ctx = ScoringContext::new(touched_files, &node_uuid_set, &query_tokens);
     let links = &data.links;
 
     let mut scored: Vec<(f64, Knowledge)> = data
@@ -441,7 +601,7 @@ pub fn recall_for_task(
                 first_seen: 0,
                 last_seen: 0,
             };
-            let score = relevance_score(&knowledge, touched_files, &node_uuid_set, &query_tokens);
+            let score = relevance_score(&knowledge, k, &ctx);
             (score, knowledge)
         })
         .collect();
@@ -627,6 +787,228 @@ pub fn clear_knowledge_links(
         crate::storage::save(h5_path, &data)?;
     }
     Ok(removed)
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge deduplication
+// ---------------------------------------------------------------------------
+
+/// A pair of similar knowledge entries that may be duplicates.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DuplicateCandidate {
+    pub uuid_a: String,
+    pub title_a: String,
+    pub uuid_b: String,
+    pub title_b: String,
+    pub similarity: f64,
+    pub reason: String,
+}
+
+/// Find knowledge entries that are likely duplicates.
+/// Uses title similarity + description overlap + same type.
+pub fn find_duplicates(h5_path: &Path, threshold: f64) -> Vec<DuplicateCandidate> {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let threshold = if threshold <= 0.0 { 0.6 } else { threshold };
+    let mut candidates = Vec::new();
+
+    let entries: Vec<&crate::types::KnowledgeEntry> = data
+        .knowledge
+        .iter()
+        .filter(|k| k.status != "obsolete")
+        .collect();
+
+    for i in 0..entries.len() {
+        for j in (i + 1)..entries.len() {
+            let a = entries[i];
+            let b = entries[j];
+
+            let sim = knowledge_similarity(a, b);
+            if sim >= threshold {
+                let reason = if a.title.to_lowercase() == b.title.to_lowercase() {
+                    "identical title".into()
+                } else if a.knowledge_type == b.knowledge_type {
+                    format!("similar content ({:.0}%), same type", sim * 100.0)
+                } else {
+                    format!("similar content ({:.0}%)", sim * 100.0)
+                };
+                candidates.push(DuplicateCandidate {
+                    uuid_a: a.uuid.clone(),
+                    title_a: a.title.clone(),
+                    uuid_b: b.uuid.clone(),
+                    title_b: b.title.clone(),
+                    similarity: sim,
+                    reason,
+                });
+            }
+        }
+    }
+
+    candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    candidates
+}
+
+/// Compute similarity between two knowledge entries (0.0-1.0).
+fn knowledge_similarity(
+    a: &crate::types::KnowledgeEntry,
+    b: &crate::types::KnowledgeEntry,
+) -> f64 {
+    let mut score = 0.0;
+    let mut max_score = 0.0;
+
+    // Title similarity (token overlap)
+    max_score += 40.0;
+    let a_tokens: Vec<String> = a
+        .title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 1)
+        .map(String::from)
+        .collect();
+    let b_tokens: Vec<String> = b
+        .title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 1)
+        .map(String::from)
+        .collect();
+    if !a_tokens.is_empty() && !b_tokens.is_empty() {
+        let common = a_tokens.iter().filter(|t| b_tokens.contains(t)).count();
+        let total = a_tokens.len().max(b_tokens.len());
+        score += 40.0 * (common as f64 / total as f64);
+    }
+
+    // Same type
+    max_score += 20.0;
+    if a.knowledge_type == b.knowledge_type {
+        score += 20.0;
+    }
+
+    // Description token overlap (first 200 chars)
+    max_score += 30.0;
+    let a_desc: Vec<String> = a
+        .description
+        .to_lowercase()
+        .chars()
+        .take(200)
+        .collect::<String>()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .map(String::from)
+        .collect();
+    let b_desc: Vec<String> = b
+        .description
+        .to_lowercase()
+        .chars()
+        .take(200)
+        .collect::<String>()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .map(String::from)
+        .collect();
+    if !a_desc.is_empty() && !b_desc.is_empty() {
+        let common = a_desc.iter().filter(|t| b_desc.contains(t)).count();
+        let total = a_desc.len().max(b_desc.len());
+        score += 30.0 * (common as f64 / total as f64);
+    }
+
+    // Tag overlap
+    max_score += 10.0;
+    if !a.tags.is_empty() && !b.tags.is_empty() {
+        let common = a.tags.iter().filter(|t| b.tags.contains(t)).count();
+        let total = a.tags.len().max(b.tags.len());
+        score += 10.0 * (common as f64 / total as f64);
+    }
+
+    if max_score == 0.0 {
+        return 0.0;
+    }
+    score / max_score
+}
+
+/// Merge two knowledge entries: keep the higher-confidence one, absorb the other.
+/// The absorbed entry is marked obsolete and superseded.
+pub fn merge_knowledge(
+    h5_path: &Path,
+    uuid_keep: &str,
+    uuid_absorb: &str,
+) -> crate::error::Result<()> {
+    let mut data = crate::storage::load(h5_path)?;
+
+    let keep_idx = data
+        .knowledge
+        .iter()
+        .position(|k| k.uuid == uuid_keep)
+        .ok_or_else(|| {
+            crate::error::KodexError::Other(format!("UUID not found: {uuid_keep}"))
+        })?;
+    let absorb_idx = data
+        .knowledge
+        .iter()
+        .position(|k| k.uuid == uuid_absorb)
+        .ok_or_else(|| {
+            crate::error::KodexError::Other(format!("UUID not found: {uuid_absorb}"))
+        })?;
+
+    // Absorb observations and tags
+    let absorb_obs = data.knowledge[absorb_idx].observations;
+    let absorb_tags = data.knowledge[absorb_idx].tags.clone();
+    let absorb_desc = data.knowledge[absorb_idx].description.clone();
+
+    let keep = &mut data.knowledge[keep_idx];
+    keep.observations += absorb_obs;
+    keep.confidence = 1.0 - (1.0 - keep.confidence) * 0.8_f64.powi(absorb_obs as i32);
+    for tag in absorb_tags {
+        if !keep.tags.contains(&tag) {
+            keep.tags.push(tag);
+        }
+    }
+    // Append description if different
+    if !absorb_desc.is_empty() && !keep.description.contains(&absorb_desc) {
+        keep.description = format!("{}\n---\n{}", keep.description, absorb_desc);
+    }
+
+    // Transfer node links from absorbed to keeper
+    let keep_uuid = uuid_keep.to_string();
+    for link in &mut data.links {
+        if link.knowledge_uuid == uuid_absorb && !link.is_knowledge_link() {
+            link.knowledge_uuid = keep_uuid.clone();
+        }
+    }
+    // Deduplicate links
+    let mut seen = std::collections::HashSet::new();
+    data.links.retain(|l| {
+        let key = (
+            l.knowledge_uuid.clone(),
+            l.node_uuid.clone(),
+            l.relation.clone(),
+        );
+        seen.insert(key)
+    });
+
+    // Mark absorbed as obsolete
+    data.knowledge[absorb_idx].status = "obsolete".to_string();
+    data.knowledge[absorb_idx].superseded_by = uuid_keep.to_string();
+
+    // Add supersedes link
+    let already_linked = data.links.iter().any(|l| {
+        l.knowledge_uuid == uuid_keep
+            && l.node_uuid == uuid_absorb
+            && l.relation == "supersedes"
+    });
+    if !already_linked {
+        data.links.push(crate::types::KnowledgeLink {
+            knowledge_uuid: uuid_keep.to_string(),
+            node_uuid: uuid_absorb.to_string(),
+            relation: "supersedes".to_string(),
+            target_type: "knowledge".to_string(),
+        });
+    }
+
+    crate::storage::save(h5_path, &data)
 }
 
 /// Remove a specific link by knowledge_uuid + target_uuid + relation.

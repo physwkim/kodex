@@ -134,9 +134,13 @@ pub fn match_score(old: &Node, new: &Node) -> f64 {
 
     // Body hash match (strong signal — only counted when both sides have one)
     if old.body_hash.is_some() && new.body_hash.is_some() {
-        max_score += 20.0;
+        max_score += 25.0;
         if old.body_hash == new.body_hash {
-            score += 20.0;
+            score += 25.0;
+        } else {
+            // Bodies differ — actively penalize to prevent false matches.
+            // Same file + similar position but different body = different entity.
+            score -= 15.0;
         }
     }
 

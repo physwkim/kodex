@@ -485,8 +485,35 @@ fn process_request(input: &str) -> String {
             }
         }
         "detect_stale" => {
-            match crate::learn::detect_stale_knowledge(&h5_path) {
-                Ok(n) => serde_json::json!({"status": "checked", "stale_count": n}),
+            let detailed = params.get("detailed").and_then(|v| v.as_bool()).unwrap_or(false);
+            if detailed {
+                match crate::learn::detect_stale_detailed(&h5_path) {
+                    Ok(entries) => serde_json::json!(entries),
+                    Err(e) => serde_json::json!({"error": e.to_string()}),
+                }
+            } else {
+                match crate::learn::detect_stale_knowledge(&h5_path) {
+                    Ok(n) => serde_json::json!({"status": "checked", "stale_count": n}),
+                    Err(e) => serde_json::json!({"error": e.to_string()}),
+                }
+            }
+        }
+        "find_duplicates" => {
+            let threshold = params.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.6);
+            let candidates = crate::learn::find_duplicates(&h5_path, threshold);
+            serde_json::json!(candidates)
+        }
+        "merge_knowledge" => {
+            let keep = match params.get("keep_uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "keep_uuid required"),
+            };
+            let absorb = match params.get("absorb_uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "absorb_uuid required"),
+            };
+            match crate::learn::merge_knowledge(&h5_path, keep, absorb) {
+                Ok(()) => serde_json::json!({"status": "merged", "kept": keep, "absorbed": absorb}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
