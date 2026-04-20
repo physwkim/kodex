@@ -67,14 +67,18 @@ pub fn serve(_graph_path: &Path) {
                 }
                 // Check if this is an MCP protocol message we handle locally
                 if let Some(response) = handle_mcp_protocol(trimmed) {
-                    println!("{response}");
-                    let _ = std::io::stdout().flush();
+                    if !response.is_empty() {
+                        println!("{response}");
+                        let _ = std::io::stdout().flush();
+                    }
                     continue;
                 }
                 // Rewrite tools/call → direct method call for actor
                 let forwarded = rewrite_tools_call(trimmed);
                 let enriched = inject_project_dir(&forwarded, &cwd);
-                if writeln!(actor_writer, "{enriched}").is_err() {
+                if let Err(e) = writeln!(actor_writer, "{enriched}") {
+                    eprintln!("[kodex-serve] actor write failed: {e}");
+
                     break;
                 }
                 let _ = actor_writer.flush();
@@ -118,9 +122,9 @@ fn handle_mcp_protocol(input: &str) -> Option<String> {
             });
             Some(format_response(&id, &result))
         }
-        "notifications/initialized" => {
-            // No response needed for notifications
-            None
+        "notifications/initialized" | "notifications/cancelled" => {
+            // Notifications: no response, don't forward to actor
+            Some(String::new())
         }
         "tools/list" => {
             let result = serde_json::json!({ "tools": mcp_tool_definitions() });

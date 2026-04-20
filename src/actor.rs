@@ -87,6 +87,8 @@ pub fn run_actor() {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
+                // Accepted streams must be blocking for BufReader::lines()
+                stream.set_nonblocking(false).ok();
                 *last_activity.lock().unwrap() = std::time::Instant::now();
                 let la = last_activity.clone();
                 let ac = active_connections.clone();
