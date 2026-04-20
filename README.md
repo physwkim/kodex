@@ -102,13 +102,13 @@ kodex run ./my-project
   ├─ register in ~/.kodex/registry.json
   └─ generate graph.html + GRAPH_REPORT.md
 
-kodex serve (MCP)
-  ├─ learn → knowledge entry with UUID → kodex.h5
-  ├─ learn(context_uuid=K1) → auto-chain: K1 →leads_to→ K2
-  ├─ recall_for_task → ranked by relevance to current files/nodes
-  ├─ thought_chain → trace reasoning: root → ... → leaf
-  ├─ knowledge_graph → BFS multi-hop over knowledge network
-  ├─ link_knowledge → connect knowledge ↔ knowledge
+kodex serve (MCP — 35+ tools)
+  ├─ learn → knowledge with UUID, chain of thought
+  ├─ recall_for_task → 10-signal scoring + graph reasoning + diversity
+  ├─ recall_for_diff → git diff → affected knowledge ranking
+  ├─ get_task_context → briefing with recommendations + warnings + conflicts
+  ├─ knowledge_graph → BFS multi-hop + confidence propagation
+  ├─ review queue → stale/conflict/duplicate auto-triage
   └─ query_graph → BFS/DFS over code graph
 ```
 
@@ -252,15 +252,16 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 ### Knowledge lifecycle
 | Tool | Description |
 |------|-------------|
-| `learn` | Store/reinforce knowledge (returns UUID). Pass `context_uuid` to auto-chain. |
+| `learn` | Store/reinforce knowledge (returns UUID). `context_uuid` for chain of thought. |
 | `recall` | Search by keyword/type |
-| `recall_for_task` | Ranked retrieval (question + files + nodes), diversity-collapsed |
-| `recall_for_task_structured` | Same as above + full `ScoreBreakdown` per item |
-| `get_task_context` | Full briefing (markdown or `format=json` for structured `TaskContext`) |
+| `recall_for_task` | 10-signal ranked retrieval + graph reasoning + diversity collapse |
+| `recall_for_task_structured` | Same + full `ScoreBreakdown` per item |
+| `recall_for_diff` | Git diff text → affected knowledge ranked with +20pt boost |
+| `get_task_context` | Briefing with recommendations. `format=json` for `TaskContext`. `task_type` for action-oriented recs. |
 | `knowledge_context` | Session bootstrap (all knowledge) |
 | `update_knowledge` | Update status/scope/applies_when/superseded_by |
-| `validate_knowledge` | Mark as valid, refresh link snapshots, log evidence |
-| `mark_obsolete` | Mark as obsolete with reason |
+| `validate_knowledge` | Mark valid, refresh link snapshots, log evidence |
+| `mark_obsolete` | Mark obsolete with reason |
 | `forget` | Delete knowledge |
 
 ### Knowledge graph
@@ -277,11 +278,19 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 ### Quality management
 | Tool | Description |
 |------|-------------|
-| `detect_stale` | Find stale knowledge (graduated: deleted nodes, drift, age). `detailed=true` for full report. |
-| `find_duplicates` | Detect similar knowledge entries (title + description + type + tags) |
-| `merge_knowledge` | Merge duplicate: absorb observations/tags/evidence/links/scope |
-| `detect_conflicts` | Find contradictions, superseded-but-active, scope overlaps |
-| `knowledge_health` | Health metrics: status counts, orphans, duplicates, overdue, recency |
+| `detect_stale` | Graduated staleness: deleted nodes, body drift, age. `detailed=true` for full report. |
+| `find_duplicates` | Similar entries by title + description + type + tags |
+| `merge_knowledge` | Absorb observations/tags/evidence/links/scope. Evidence + applies_when merge rules. |
+| `detect_conflicts` | Contradictions, superseded-but-active, scope overlaps |
+| `knowledge_health` | Status counts, orphans, duplicates, overdue, recency trends |
+| `reason` | Graph reasoning: confidence propagation through supports/contradicts/supersedes |
+
+### Review queue
+| Tool | Description |
+|------|-------------|
+| `refresh_review_queue` | Auto-enqueue stale + conflict + duplicate items |
+| `get_review_queue` | Pending items sorted by priority |
+| `complete_review` | Mark item as reviewed |
 
 ### Code graph
 | Tool | Description |
@@ -439,6 +448,66 @@ When merging duplicate knowledge (`merge_knowledge`):
 | scope | Keep narrower (node > file > module > project > repo) |
 | links | Transfer all (node + knowledge), remove self-referential |
 
+## Diff-Aware Recall
+
+```
+recall_for_diff(diff="<git diff output>", max_items=10)
+
+→ {
+    "analysis": {
+      "hunks_count": 2,
+      "changed_files": ["src/auth.py"],
+      "changed_node_uuids": ["node-auth"],
+      "affected_knowledge_uuids": ["k-jwt"]
+    },
+    "relevant_knowledge": [
+      {"knowledge": {"title": "JWT Auth"}, "score": {"total": 95, "reasons": ["directly affected by diff"]}}
+    ]
+  }
+```
+
+- Parses unified diff → hunks → maps to node UUIDs via source_location
+- Tracks both new-side (additions) and old-side (deletions/renames)
+- Affected knowledge gets +20pt boost, re-ranked after scoring
+
+## Action-Oriented Context
+
+```
+get_task_context(task_type="bugfix", format="json")
+```
+
+Produces task-specific recommendations:
+| task_type | Recommendations |
+|-----------|----------------|
+| `coding` | conventions, architecture constraints |
+| `bugfix` | bug_pattern warnings + "add test" recommendations |
+| `refactor` | respect decisions + tech_debt opportunities |
+| `review` | bug_pattern + coupling checks |
+
+Categories: `rule`, `hazard`, `test`, `coupling`, `constraint`, `opportunity`, `conflict`
+
+## Graph Reasoning
+
+Confidence propagation through knowledge links:
+
+```
+reason(uuids=["k-jwt"], depth=3)
+
+→ {
+    "adjustments": {"k-session": -0.25},
+    "paths": [{"from": "k-jwt", "to": "k-session", "relation": "contradicts", "effect": -0.25}]
+  }
+```
+
+| Relation | Effect | Decay |
+|----------|--------|-------|
+| `supports` | +boost to target | 0.7x per hop |
+| `contradicts` | -penalty to target | 0.7x per hop |
+| `supersedes` | -penalty to superseded | 0.7x per hop |
+| `depends_on` | penalty if dependency is weak | conditional |
+
+Adjustments clamped to +-0.3. Applied as +-10pt in recall scoring.
+
 ### Retrieval Quality
 
 `recall_for_task` applies:
@@ -446,12 +515,13 @@ When merging duplicate knowledge (`merge_knowledge`):
 2. **Diversity collapse**: entries with >60% title overlap are deduplicated in top-N
 3. **Score breakdown**: `recall_for_task_structured` returns `ScoreBreakdown` with reasons per item
 
-`get_task_context(format="json")` returns structured `TaskContext`:
+`get_task_context(format="json", task_type="bugfix")` returns structured `TaskContext`:
 ```json
 {
-  "relevant": [{"knowledge": {...}, "score": {"total": 75, "reasons": ["linked to code in scope"]}}],
+  "relevant": [{"knowledge": {...}, "score": {"total": 75, "reasons": ["linked to code in scope", "graph reasoning: +3.2"]}}],
   "warnings": [{"uuid": "...", "reason": "linked nodes may have changed"}],
-  "conflicts": [{"uuid_a": "...", "uuid_b": "...", "description": "..."}]
+  "conflicts": [{"uuid_a": "...", "uuid_b": "...", "description": "..."}],
+  "recommendations": [{"action": "Add test for: Off-by-one", "category": "test", "priority": 8}]
 }
 ```
 
