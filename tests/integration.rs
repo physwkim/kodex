@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 /// Helper: run the full pipeline on a directory and return node/edge counts.
+#[cfg(feature = "lang-python")]
 fn run_pipeline(dir: &std::path::Path) -> (usize, usize) {
     let detection = kodex::detect::detect(dir, false);
     let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();

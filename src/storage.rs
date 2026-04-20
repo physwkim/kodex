@@ -69,10 +69,24 @@ pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     Ok(data)
 }
 
+/// Parse version string into (major, minor, patch) for safe comparison.
+fn parse_version(v: &str) -> (u32, u32, u32) {
+    let parts: Vec<u32> = v.split('.').filter_map(|p| p.parse().ok()).collect();
+    (
+        parts.first().copied().unwrap_or(0),
+        parts.get(1).copied().unwrap_or(0),
+        parts.get(2).copied().unwrap_or(0),
+    )
+}
+
+fn version_below(from: &str, target: &str) -> bool {
+    parse_version(from) < parse_version(target)
+}
+
 /// Migrate data from an older version to current.
 fn migrate(data: &mut KodexData, from_version: &str) {
     // v0.1.0 → v0.2.0: no uuid/fingerprint/logical_key on nodes
-    if from_version == "0.1.0" {
+    if version_below(from_version, "0.2.0") {
         for node in &mut data.extraction.nodes {
             if node.uuid.is_none() {
                 node.uuid = Some(uuid::Uuid::new_v4().to_string());
@@ -96,7 +110,7 @@ fn migrate(data: &mut KodexData, from_version: &str) {
     }
 
     // v0.1.0/v0.2.0 → v0.3.0: knowledge entries need uuid
-    if from_version == "0.1.0" || from_version == "0.2.0" {
+    if version_below(from_version, "0.3.0") {
         for entry in &mut data.knowledge {
             if entry.uuid.is_empty() {
                 entry.uuid = uuid::Uuid::new_v4().to_string();
@@ -105,7 +119,7 @@ fn migrate(data: &mut KodexData, from_version: &str) {
     }
 
     // v0.3.0 → v0.4.0: knowledge entries get new metadata fields (defaulted)
-    if from_version < "0.4.0" {
+    if version_below(from_version, "0.4.0") {
         for entry in &mut data.knowledge {
             if entry.status.is_empty() {
                 entry.status = "active".to_string();
