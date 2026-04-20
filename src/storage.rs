@@ -1,23 +1,6 @@
-//! HDF5-based graph storage — the default persistence format.
+//! HDF5 storage — single file for code graph + knowledge.
 //!
-//! File layout:
-//! ```text
-//! kodex.h5
-//! ├── /nodes/
-//! │   ├── id          [vlen string]
-//! │   ├── label       [vlen string]
-//! │   ├── file_type   [vlen string]
-//! │   ├── source_file [vlen string]
-//! │   ├── confidence  [vlen string]
-//! │   └── community   [u32 1D]
-//! ├── /edges/
-//! │   ├── source      [vlen string]
-//! │   ├── target      [vlen string]
-//! │   ├── relation    [vlen string]
-//! │   ├── confidence  [vlen string]
-//! │   └── weight      [f64 1D]
-//! └── metadata (attrs: node_count, edge_count, version)
-//! ```
+//! All read/write goes through KodexData.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,138 +8,76 @@ use std::path::Path;
 use rust_hdf5::file::H5File;
 
 use crate::graph::KodexGraph;
-use crate::types::{Confidence, ExtractionResult, FileType};
+use crate::types::{
+    Confidence, ExtractionResult, FileType, KnowledgeEntry, KnowledgeLink, KodexData,
+};
 
-/// Save a graph to HDF5 format (no knowledge).
-pub fn save_hdf5(
-    graph: &KodexGraph,
-    communities: &HashMap<usize, Vec<String>>,
-    path: &Path,
-) -> crate::error::Result<()> {
-    save_hdf5_with_knowledge(
-        graph,
-        communities,
-        path,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    )
+// Core API
+
+pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = H5File::create(path)
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
+    let graph = crate::graph::build_from_extraction(&data.extraction);
+    let communities = crate::cluster::cluster(&graph);
+    file.set_attr_string("version", "0.2.0").ok();
+    file.set_attr_numeric("node_count", &(graph.node_count() as u64))
+        .ok();
+    file.set_attr_numeric("edge_count", &(graph.edge_count() as u64))
+        .ok();
+    write_nodes(&file, &graph, &communities)?;
+    write_edges(&file, &graph)?;
+    write_knowledge(&file, &data.knowledge)?;
+    write_links(&file, &data.links)?;
+    file.close()
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
+    Ok(())
 }
 
-/// Load a graph from HDF5 format.
-pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
+pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
-
-    let ids = read_vlen(&file, "nodes/id")?;
-    let labels = read_vlen(&file, "nodes/label")?;
-    let file_types = read_vlen(&file, "nodes/file_type")?;
-    let source_files = read_vlen(&file, "nodes/source_file")?;
-    let confidences = read_vlen(&file, "nodes/confidence")?;
-    let source_locations = read_vlen(&file, "nodes/source_location").unwrap_or_default();
-    let uuids = read_vlen(&file, "nodes/uuid").unwrap_or_default();
-    let fingerprints = read_vlen(&file, "nodes/fingerprint").unwrap_or_default();
-    let logical_keys = read_vlen(&file, "nodes/logical_key").unwrap_or_default();
-
-    let community_ids: Vec<u32> = file
-        .dataset("nodes/community")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-
-    let mut extraction = ExtractionResult::default();
-
-    for (i, id) in ids.iter().enumerate() {
-        let loc = source_locations.get(i).cloned().unwrap_or_default();
-        extraction.nodes.push(crate::types::Node {
-            id: id.clone(),
-            label: labels.get(i).cloned().unwrap_or_default(),
-            file_type: FileType::from_str_loose(
-                file_types.get(i).map(|s| s.as_str()).unwrap_or("code"),
-            )
-            .unwrap_or(FileType::Code),
-            source_file: source_files.get(i).cloned().unwrap_or_default(),
-            source_location: if loc.is_empty() { None } else { Some(loc) },
-            confidence: Confidence::from_str_loose(
-                confidences
-                    .get(i)
-                    .map(|s| s.as_str())
-                    .unwrap_or("EXTRACTED"),
-            ),
-            confidence_score: None,
-            community: community_ids.get(i).map(|&c| c as usize),
-            norm_label: None,
-            degree: None,
-            uuid: {
-                let v = uuids.get(i).cloned().unwrap_or_default();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            },
-            fingerprint: {
-                let v = fingerprints.get(i).cloned().unwrap_or_default();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            },
-            logical_key: {
-                let v = logical_keys.get(i).cloned().unwrap_or_default();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            },
-        });
-    }
-
-    let e_src = read_vlen(&file, "edges/source")?;
-    let e_tgt = read_vlen(&file, "edges/target")?;
-    let e_rel = read_vlen(&file, "edges/relation")?;
-    let e_conf = read_vlen(&file, "edges/confidence")?;
-    let e_src_files = read_vlen(&file, "edges/source_file").unwrap_or_default();
-    let e_src_locs = read_vlen(&file, "edges/source_location").unwrap_or_default();
-    let e_weight: Vec<f64> = file
-        .dataset("edges/weight")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-
-    for i in 0..e_src.len() {
-        let confidence =
-            Confidence::from_str_loose(e_conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"))
-                .unwrap_or(Confidence::EXTRACTED);
-        let sf = e_src_files.get(i).cloned().unwrap_or_default();
-        let sl = e_src_locs.get(i).cloned().unwrap_or_default();
-
-        extraction.edges.push(crate::types::Edge {
-            source: e_src[i].clone(),
-            target: e_tgt[i].clone(),
-            relation: e_rel.get(i).cloned().unwrap_or_default(),
-            confidence,
-            source_file: sf,
-            source_location: if sl.is_empty() { None } else { Some(sl) },
-            confidence_score: Some(confidence.default_score()),
-            weight: e_weight.get(i).copied().unwrap_or(1.0),
-            original_src: None,
-            original_tgt: None,
-        });
-    }
-
-    Ok(crate::graph::build_from_extraction(&extraction))
+    Ok(KodexData {
+        extraction: read_extraction(&file)?,
+        knowledge: read_knowledge(&file)?,
+        links: read_links(&file)?,
+    })
 }
 
-/// Append a knowledge entry to an existing HDF5 file.
-///
-/// Knowledge entries have their own UUID (knowledge_uuid).
-/// Links between knowledge and code nodes are stored in /links/ group.
+pub fn load_graph(path: &Path) -> crate::error::Result<KodexGraph> {
+    let data = load(path)?;
+    Ok(crate::graph::build_from_extraction(&data.extraction))
+}
+
+pub fn save_hdf5(
+    graph: &KodexGraph,
+    _communities: &HashMap<usize, Vec<String>>,
+    path: &Path,
+) -> crate::error::Result<()> {
+    let extraction = graph_to_extraction(graph);
+    let existing = if path.exists() { load(path).ok() } else { None };
+    let data = KodexData {
+        extraction,
+        knowledge: existing
+            .as_ref()
+            .map(|d| d.knowledge.clone())
+            .unwrap_or_default(),
+        links: existing
+            .as_ref()
+            .map(|d| d.links.clone())
+            .unwrap_or_default(),
+    };
+    save(path, &data)
+}
+
+pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
+    load_graph(path)
+}
+
+// Knowledge operations
+
 #[allow(clippy::too_many_arguments)]
 pub fn append_knowledge(
     h5_path: &Path,
@@ -164,434 +85,502 @@ pub fn append_knowledge(
     knowledge_type: &str,
     description: &str,
     confidence: f64,
-    observations: u32,
+    _observations: u32,
     related_nodes: &[String],
     tags: &[String],
 ) -> crate::error::Result<()> {
-    if !h5_path.exists() {
+    let mut data = if h5_path.exists() {
+        load(h5_path)?
+    } else {
         return Err(crate::error::KodexError::Other(
             "HDF5 file does not exist. Run `kodex run` first.".to_string(),
         ));
-    }
-
-    // Load existing knowledge
-    let (
-        mut k_uuids,
-        mut titles,
-        mut types,
-        mut descriptions,
-        mut confidences,
-        mut obs,
-        mut tag_list,
-        mut link_k_uuids,
-        mut link_n_uuids,
-        mut link_relations,
-    ) = {
-        let file = H5File::open(h5_path)
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
-
-        let ku = read_vlen(&file, "knowledge/uuid").unwrap_or_default();
-        let t = read_vlen(&file, "knowledge/titles").unwrap_or_default();
-        let ty = read_vlen(&file, "knowledge/types").unwrap_or_default();
-        let d = read_vlen(&file, "knowledge/descriptions").unwrap_or_default();
-        let c: Vec<f64> = file
-            .dataset("knowledge/confidence")
-            .and_then(|ds| ds.read_raw())
-            .unwrap_or_default();
-        let o: Vec<u32> = file
-            .dataset("knowledge/observations")
-            .and_then(|ds| ds.read_raw())
-            .unwrap_or_default();
-        let tl = read_vlen(&file, "knowledge/tags").unwrap_or_default();
-        let lk = read_vlen(&file, "links/knowledge_uuid").unwrap_or_default();
-        let ln = read_vlen(&file, "links/node_uuid").unwrap_or_default();
-        let lr = read_vlen(&file, "links/relation").unwrap_or_default();
-        (ku, t, ty, d, c, o, tl, lk, ln, lr)
     };
-
-    // Check if exists — reinforce by title match
-    let existing_idx = titles.iter().position(|t| t == title);
-    let knowledge_uuid = if let Some(idx) = existing_idx {
-        obs[idx] += 1;
-        confidences[idx] = 1.0 - (1.0 - confidences[idx]) * 0.8;
-        if !description.is_empty() && descriptions[idx] != description {
-            descriptions[idx] = format!("{}\n---\n{}", descriptions[idx], description);
+    let existing = data.knowledge.iter_mut().find(|k| k.title == title);
+    let k_uuid = if let Some(entry) = existing {
+        entry.observations += 1;
+        entry.confidence = 1.0 - (1.0 - entry.confidence) * 0.8;
+        if !description.is_empty() && entry.description != description {
+            entry.description = format!("{}\n---\n{}", entry.description, description);
         }
-        // Merge tags
-        let existing_tags: Vec<&str> = tag_list[idx].split(',').filter(|s| !s.is_empty()).collect();
-        let mut merged_tags: Vec<String> = existing_tags.iter().map(|s| s.to_string()).collect();
         for tag in tags {
-            if !merged_tags.contains(tag) {
-                merged_tags.push(tag.clone());
+            if !entry.tags.contains(tag) {
+                entry.tags.push(tag.clone());
             }
         }
-        tag_list[idx] = merged_tags.join(",");
-        k_uuids[idx].clone()
+        entry.uuid.clone()
     } else {
-        // New knowledge entry
         let new_uuid = uuid::Uuid::new_v4().to_string();
-        k_uuids.push(new_uuid.clone());
-        titles.push(title.to_string());
-        types.push(knowledge_type.to_string());
-        descriptions.push(description.to_string());
-        confidences.push(confidence);
-        obs.push(observations);
-        tag_list.push(tags.join(","));
+        data.knowledge.push(KnowledgeEntry {
+            uuid: new_uuid.clone(),
+            title: title.to_string(),
+            knowledge_type: knowledge_type.to_string(),
+            description: description.to_string(),
+            confidence,
+            observations: 1,
+            tags: tags.to_vec(),
+        });
         new_uuid
     };
-
-    // Add links: knowledge_uuid → node_uuid (use node id as fallback for node_uuid)
     for node_ref in related_nodes {
-        if !link_k_uuids
+        if !data
+            .links
             .iter()
-            .zip(link_n_uuids.iter())
-            .any(|(k, n)| k == &knowledge_uuid && n == node_ref)
+            .any(|l| l.knowledge_uuid == k_uuid && l.node_uuid == *node_ref)
         {
-            link_k_uuids.push(knowledge_uuid.clone());
-            link_n_uuids.push(node_ref.clone());
-            link_relations.push("related_to".to_string());
+            data.links.push(KnowledgeLink {
+                knowledge_uuid: k_uuid.clone(),
+                node_uuid: node_ref.clone(),
+                relation: "related_to".to_string(),
+            });
         }
     }
-
-    // Rewrite knowledge group (open_rw can't delete existing datasets, so recreate file knowledge section)
-    // For now: reload full file, replace knowledge, save
-    let graph = load_hdf5(h5_path)?;
-    let communities = crate::cluster::cluster(&graph);
-
-    // Save with knowledge (related moved to /links/ group)
-    let empty_related: Vec<String> = Vec::new();
-    save_hdf5_with_knowledge(
-        &graph,
-        &communities,
-        h5_path,
-        &k_uuids,
-        &titles,
-        &types,
-        &descriptions,
-        &confidences,
-        &obs,
-        &empty_related,
-        &tag_list,
-    )?;
-
-    // Save links separately by reopening
-    save_links(h5_path, &link_k_uuids, &link_n_uuids, &link_relations)
+    save(h5_path, &data)
 }
 
-/// Load knowledge entries from HDF5.
 #[allow(clippy::type_complexity)]
 pub fn load_knowledge_entries(
     h5_path: &Path,
 ) -> crate::error::Result<Vec<(String, String, String, f64, u32, String, String)>> {
-    let file = H5File::open(h5_path)
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
-
-    let titles = read_vlen(&file, "knowledge/titles").unwrap_or_default();
-    let types = read_vlen(&file, "knowledge/types").unwrap_or_default();
-    let descriptions = read_vlen(&file, "knowledge/descriptions").unwrap_or_default();
-    let confidences: Vec<f64> = file
-        .dataset("knowledge/confidence")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let obs: Vec<u32> = file
-        .dataset("knowledge/observations")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let related = read_vlen(&file, "knowledge/related").unwrap_or_default();
-    let tag_list = read_vlen(&file, "knowledge/tags").unwrap_or_default();
-
-    let mut entries = Vec::new();
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..titles.len() {
-        entries.push((
-            titles[i].clone(),
-            types.get(i).cloned().unwrap_or_default(),
-            descriptions.get(i).cloned().unwrap_or_default(),
-            confidences.get(i).copied().unwrap_or(0.5),
-            obs.get(i).copied().unwrap_or(1),
-            related.get(i).cloned().unwrap_or_default(),
-            tag_list.get(i).cloned().unwrap_or_default(),
-        ));
-    }
-    Ok(entries)
-}
-
-/// Public wrapper for save_hdf5_with_knowledge.
-#[allow(clippy::too_many_arguments)]
-pub fn save_hdf5_with_knowledge_pub(
-    graph: &KodexGraph,
-    communities: &HashMap<usize, Vec<String>>,
-    path: &Path,
-    k_titles: &[String],
-    k_types: &[String],
-    k_descriptions: &[String],
-    k_confidences: &[f64],
-    k_observations: &[u32],
-    k_related: &[String],
-    k_tags: &[String],
-) -> crate::error::Result<()> {
-    save_hdf5_with_knowledge(
-        graph,
-        communities,
-        path,
-        &[], // k_uuids — pub wrapper doesn't have them, auto-generated on save
-        k_titles,
-        k_types,
-        k_descriptions,
-        k_confidences,
-        k_observations,
-        k_related,
-        k_tags,
-    )
-}
-
-/// Save graph + knowledge to HDF5.
-#[allow(clippy::too_many_arguments)]
-fn save_hdf5_with_knowledge(
-    graph: &KodexGraph,
-    communities: &HashMap<usize, Vec<String>>,
-    path: &Path,
-    k_uuids: &[String],
-    k_titles: &[String],
-    k_types: &[String],
-    k_descriptions: &[String],
-    k_confidences: &[f64],
-    k_observations: &[u32],
-    k_related: &[String],
-    k_tags: &[String],
-) -> crate::error::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let file = H5File::create(path)
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
-
-    file.set_attr_string("version", "0.1.0").ok();
-    file.set_attr_numeric("node_count", &(graph.node_count() as u64))
-        .ok();
-    file.set_attr_numeric("edge_count", &(graph.edge_count() as u64))
-        .ok();
-
-    let comm_map = crate::export::node_community_map(communities);
-
-    // --- Nodes ---
-    let (
-        ids,
-        labels,
-        file_types,
-        source_files,
-        confidences,
-        source_locations,
-        uuids,
-        fingerprints,
-        logical_keys,
-        community_ids,
-    ) = collect_node_data(graph, &comm_map);
-
-    let nodes_grp = file
-        .create_group("nodes")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-
-    write_vlen(&nodes_grp, "id", &ids)?;
-    write_vlen(&nodes_grp, "label", &labels)?;
-    write_vlen(&nodes_grp, "file_type", &file_types)?;
-    write_vlen(&nodes_grp, "source_file", &source_files)?;
-    write_vlen(&nodes_grp, "confidence", &confidences)?;
-    write_vlen(&nodes_grp, "source_location", &source_locations)?;
-    write_vlen(&nodes_grp, "uuid", &uuids)?;
-    write_vlen(&nodes_grp, "fingerprint", &fingerprints)?;
-    write_vlen(&nodes_grp, "logical_key", &logical_keys)?;
-
-    if !community_ids.is_empty() {
-        nodes_grp
-            .new_dataset::<u32>()
-            .shape([community_ids.len()])
-            .create("community")
-            .and_then(|ds| ds.write_raw(&community_ids))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-
-    // --- Edges ---
-    let (e_src, e_tgt, e_rel, e_conf, e_src_files, e_src_locs, e_weight) = collect_edge_data(graph);
-
-    let edges_grp = file
-        .create_group("edges")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-
-    write_vlen(&edges_grp, "source", &e_src)?;
-    write_vlen(&edges_grp, "target", &e_tgt)?;
-    write_vlen(&edges_grp, "relation", &e_rel)?;
-    write_vlen(&edges_grp, "confidence", &e_conf)?;
-    write_vlen(&edges_grp, "source_file", &e_src_files)?;
-    write_vlen(&edges_grp, "source_location", &e_src_locs)?;
-
-    if !e_weight.is_empty() {
-        edges_grp
-            .new_dataset::<f64>()
-            .shape([e_weight.len()])
-            .create("weight")
-            .and_then(|ds| ds.write_raw(&e_weight))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-
-    // --- Knowledge ---
-    if !k_titles.is_empty() {
-        let k_grp = file
-            .create_group("knowledge")
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-
-        // Auto-generate UUIDs if not provided
-        let auto_uuids: Vec<String>;
-        let uuids_to_write = if k_uuids.len() == k_titles.len() {
-            k_uuids
-        } else {
-            auto_uuids = (0..k_titles.len())
-                .map(|_| uuid::Uuid::new_v4().to_string())
+    let data = load(h5_path)?;
+    Ok(data
+        .knowledge
+        .iter()
+        .map(|k| {
+            let related: Vec<&str> = data
+                .links
+                .iter()
+                .filter(|l| l.knowledge_uuid == k.uuid)
+                .map(|l| l.node_uuid.as_str())
                 .collect();
-            &auto_uuids
-        };
-        write_vlen(&k_grp, "uuid", uuids_to_write)?;
-        write_vlen(&k_grp, "titles", k_titles)?;
-        write_vlen(&k_grp, "types", k_types)?;
-        write_vlen(&k_grp, "descriptions", k_descriptions)?;
-        write_vlen(&k_grp, "related", k_related)?;
-        write_vlen(&k_grp, "tags", k_tags)?;
-
-        k_grp
-            .new_dataset::<f64>()
-            .shape([k_confidences.len()])
-            .create("confidence")
-            .and_then(|ds| ds.write_raw(k_confidences))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-
-        k_grp
-            .new_dataset::<u32>()
-            .shape([k_observations.len()])
-            .create("observations")
-            .and_then(|ds| ds.write_raw(k_observations))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-
-    file.close()
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    Ok(())
+            (
+                k.title.clone(),
+                k.knowledge_type.clone(),
+                k.description.clone(),
+                k.confidence,
+                k.observations,
+                related.join(","),
+                k.tags.join(","),
+            )
+        })
+        .collect())
 }
 
-#[allow(clippy::type_complexity)]
-fn collect_node_data(
-    graph: &KodexGraph,
-    comm_map: &HashMap<String, usize>,
-) -> (
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<u32>,
-) {
-    let mut ids = Vec::new();
-    let mut labels = Vec::new();
-    let mut file_types = Vec::new();
-    let mut source_files = Vec::new();
-    let mut uuids = Vec::new();
-    let mut fingerprints = Vec::new();
-    let mut logical_keys = Vec::new();
-    let mut confidences = Vec::new();
-    let mut source_locations = Vec::new();
-    let mut community_ids: Vec<u32> = Vec::new();
-
-    for id in graph.node_ids() {
-        if let Some(node) = graph.get_node(id) {
-            ids.push(id.clone());
-            labels.push(node.label.clone());
-            file_types.push(node.file_type.to_string());
-            source_files.push(node.source_file.clone());
-            confidences.push(
-                node.confidence
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "EXTRACTED".to_string()),
-            );
-            source_locations.push(node.source_location.clone().unwrap_or_default());
-            uuids.push(node.uuid.clone().unwrap_or_default());
-            fingerprints.push(node.fingerprint.clone().unwrap_or_default());
-            logical_keys.push(node.logical_key.clone().unwrap_or_default());
-            community_ids.push(comm_map.get(id).copied().unwrap_or(0) as u32);
-        }
+pub fn forget_knowledge(
+    h5_path: &Path,
+    title_match: Option<&str>,
+    type_match: Option<&str>,
+    project_match: Option<&str>,
+    below_confidence: Option<f64>,
+) -> crate::error::Result<usize> {
+    if !h5_path.exists() {
+        return Ok(0);
     }
-
-    (
-        ids,
-        labels,
-        file_types,
-        source_files,
-        confidences,
-        source_locations,
-        uuids,
-        fingerprints,
-        logical_keys,
-        community_ids,
-    )
+    let mut data = load(h5_path)?;
+    let before = data.knowledge.len();
+    let remove_uuids: Vec<String> = data
+        .knowledge
+        .iter()
+        .filter(|k| {
+            title_match.map(|m| k.title.contains(m)).unwrap_or(false)
+                || type_match.map(|m| k.knowledge_type == m).unwrap_or(false)
+                || project_match
+                    .map(|m| k.description.contains(m))
+                    .unwrap_or(false)
+                || below_confidence.map(|c| k.confidence < c).unwrap_or(false)
+        })
+        .map(|k| k.uuid.clone())
+        .collect();
+    if remove_uuids.is_empty() {
+        return Ok(0);
+    }
+    data.knowledge.retain(|k| !remove_uuids.contains(&k.uuid));
+    data.links
+        .retain(|l| !remove_uuids.contains(&l.knowledge_uuid));
+    save(h5_path, &data)?;
+    Ok(before - data.knowledge.len())
 }
 
+// Project operations
+
+pub fn merge_project(
+    h5_path: &Path,
+    project_name: &str,
+    new_extraction: &ExtractionResult,
+) -> crate::error::Result<()> {
+    let mut data = if h5_path.exists() {
+        load(h5_path)?
+    } else {
+        KodexData::default()
+    };
+    data.extraction
+        .nodes
+        .retain(|n| !n.source_file.starts_with(project_name));
+    data.extraction
+        .edges
+        .retain(|e| !e.source_file.starts_with(project_name));
+    let mut new_nodes = new_extraction.nodes.clone();
+    crate::fingerprint::assign_stable_ids(&data.extraction.nodes, &mut new_nodes);
+    data.extraction.nodes.extend(new_nodes);
+    data.extraction.edges.extend(new_extraction.edges.clone());
+    save(h5_path, &data)
+}
+
+pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Result<usize> {
+    if !h5_path.exists() {
+        return Ok(0);
+    }
+    let mut data = load(h5_path)?;
+    let before = data.extraction.nodes.len();
+    data.extraction
+        .nodes
+        .retain(|n| !n.source_file.starts_with(project_path));
+    data.extraction
+        .edges
+        .retain(|e| !e.source_file.starts_with(project_path));
+    save(h5_path, &data)?;
+    Ok(before - data.extraction.nodes.len())
+}
+
+// Backward-compat aliases
+
 #[allow(clippy::type_complexity)]
-fn collect_edge_data(
-    graph: &KodexGraph,
+pub fn unpack_knowledge(
+    entries: Vec<(String, String, String, f64, u32, String, String)>,
 ) -> (
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
     Vec<String>,
     Vec<String>,
     Vec<String>,
     Vec<f64>,
+    Vec<u32>,
+    Vec<String>,
+    Vec<String>,
 ) {
-    let mut e_src = Vec::new();
-    let mut e_tgt = Vec::new();
-    let mut e_rel = Vec::new();
-    let mut e_conf = Vec::new();
-    let mut e_src_files = Vec::new();
-    let mut e_src_locs = Vec::new();
-    let mut e_weight: Vec<f64> = Vec::new();
-
-    for (src, tgt, edge) in graph.edges() {
-        e_src.push(src.to_string());
-        e_tgt.push(tgt.to_string());
-        e_rel.push(edge.relation.clone());
-        e_conf.push(edge.confidence.to_string());
-        e_src_files.push(edge.source_file.clone());
-        e_src_locs.push(edge.source_location.clone().unwrap_or_default());
-        e_weight.push(edge.weight);
+    let (mut t, mut ty, mut d, mut c, mut o, mut r, mut tg) =
+        (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    for e in entries {
+        t.push(e.0);
+        ty.push(e.1);
+        d.push(e.2);
+        c.push(e.3);
+        o.push(e.4);
+        r.push(e.5);
+        tg.push(e.6);
     }
+    (t, ty, d, c, o, r, tg)
+}
 
-    (
-        e_src,
-        e_tgt,
-        e_rel,
-        e_conf,
-        e_src_files,
-        e_src_locs,
-        e_weight,
+#[allow(clippy::too_many_arguments)]
+pub fn save_hdf5_with_knowledge_pub(
+    graph: &KodexGraph,
+    _communities: &HashMap<usize, Vec<String>>,
+    path: &Path,
+    k_titles: &[String],
+    k_types: &[String],
+    k_descriptions: &[String],
+    k_confidences: &[f64],
+    k_observations: &[u32],
+    _k_related: &[String],
+    k_tags: &[String],
+) -> crate::error::Result<()> {
+    let extraction = graph_to_extraction(graph);
+    let knowledge: Vec<KnowledgeEntry> = (0..k_titles.len())
+        .map(|i| KnowledgeEntry {
+            uuid: uuid::Uuid::new_v4().to_string(),
+            title: k_titles[i].clone(),
+            knowledge_type: k_types.get(i).cloned().unwrap_or_default(),
+            description: k_descriptions.get(i).cloned().unwrap_or_default(),
+            confidence: k_confidences.get(i).copied().unwrap_or(0.5),
+            observations: k_observations.get(i).copied().unwrap_or(1),
+            tags: k_tags
+                .get(i)
+                .map(|t| {
+                    t.split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect();
+    save(
+        path,
+        &KodexData {
+            extraction,
+            knowledge,
+            links: vec![],
+        },
     )
 }
 
-/// Save knowledge↔node links. Stored in /knowledge/related for now.
-fn save_links(
-    _h5_path: &Path,
-    _k_uuids: &[String],
-    _n_uuids: &[String],
-    _relations: &[String],
+// HDF5 internals
+
+fn write_nodes(
+    file: &H5File,
+    graph: &KodexGraph,
+    communities: &HashMap<usize, Vec<String>>,
 ) -> crate::error::Result<()> {
-    // Links currently stored as comma-separated refs in /knowledge/related.
-    // Separate /links/ group pending rust-hdf5 open_rw group creation.
+    let comm_map = crate::export::node_community_map(communities);
+    let grp = file
+        .create_group("nodes")
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    let (mut ids, mut labels, mut ft, mut sf, mut conf, mut sl, mut uu, mut fp, mut lk) = (
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    );
+    let mut cids: Vec<u32> = vec![];
+    for id in graph.node_ids() {
+        if let Some(n) = graph.get_node(id) {
+            ids.push(id.clone());
+            labels.push(n.label.clone());
+            ft.push(n.file_type.to_string());
+            sf.push(n.source_file.clone());
+            conf.push(
+                n.confidence
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "EXTRACTED".to_string()),
+            );
+            sl.push(n.source_location.clone().unwrap_or_default());
+            uu.push(n.uuid.clone().unwrap_or_default());
+            fp.push(n.fingerprint.clone().unwrap_or_default());
+            lk.push(n.logical_key.clone().unwrap_or_default());
+            cids.push(comm_map.get(id).copied().unwrap_or(0) as u32);
+        }
+    }
+    write_vlen(&grp, "id", &ids)?;
+    write_vlen(&grp, "label", &labels)?;
+    write_vlen(&grp, "file_type", &ft)?;
+    write_vlen(&grp, "source_file", &sf)?;
+    write_vlen(&grp, "confidence", &conf)?;
+    write_vlen(&grp, "source_location", &sl)?;
+    write_vlen(&grp, "uuid", &uu)?;
+    write_vlen(&grp, "fingerprint", &fp)?;
+    write_vlen(&grp, "logical_key", &lk)?;
+    if !cids.is_empty() {
+        grp.new_dataset::<u32>()
+            .shape([cids.len()])
+            .create("community")
+            .and_then(|ds| ds.write_raw(&cids))
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    }
     Ok(())
 }
 
-// --- Helpers ---
+fn write_edges(file: &H5File, graph: &KodexGraph) -> crate::error::Result<()> {
+    let grp = file
+        .create_group("edges")
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    let (mut s, mut t, mut r, mut c, mut sf, mut sl) =
+        (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let mut w: Vec<f64> = vec![];
+    for (src, tgt, edge) in graph.edges() {
+        s.push(src.to_string());
+        t.push(tgt.to_string());
+        r.push(edge.relation.clone());
+        c.push(edge.confidence.to_string());
+        sf.push(edge.source_file.clone());
+        sl.push(edge.source_location.clone().unwrap_or_default());
+        w.push(edge.weight);
+    }
+    write_vlen(&grp, "source", &s)?;
+    write_vlen(&grp, "target", &t)?;
+    write_vlen(&grp, "relation", &r)?;
+    write_vlen(&grp, "confidence", &c)?;
+    write_vlen(&grp, "source_file", &sf)?;
+    write_vlen(&grp, "source_location", &sl)?;
+    if !w.is_empty() {
+        grp.new_dataset::<f64>()
+            .shape([w.len()])
+            .create("weight")
+            .and_then(|ds| ds.write_raw(&w))
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    }
+    Ok(())
+}
+
+fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error::Result<()> {
+    if knowledge.is_empty() {
+        return Ok(());
+    }
+    let grp = file
+        .create_group("knowledge")
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    let uu: Vec<String> = knowledge.iter().map(|k| k.uuid.clone()).collect();
+    let ti: Vec<String> = knowledge.iter().map(|k| k.title.clone()).collect();
+    let ty: Vec<String> = knowledge.iter().map(|k| k.knowledge_type.clone()).collect();
+    let de: Vec<String> = knowledge.iter().map(|k| k.description.clone()).collect();
+    let tg: Vec<String> = knowledge.iter().map(|k| k.tags.join(",")).collect();
+    let co: Vec<f64> = knowledge.iter().map(|k| k.confidence).collect();
+    let ob: Vec<u32> = knowledge.iter().map(|k| k.observations).collect();
+    write_vlen(&grp, "uuid", &uu)?;
+    write_vlen(&grp, "titles", &ti)?;
+    write_vlen(&grp, "types", &ty)?;
+    write_vlen(&grp, "descriptions", &de)?;
+    write_vlen(&grp, "tags", &tg)?;
+    grp.new_dataset::<f64>()
+        .shape([co.len()])
+        .create("confidence")
+        .and_then(|ds| ds.write_raw(&co))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    grp.new_dataset::<u32>()
+        .shape([ob.len()])
+        .create("observations")
+        .and_then(|ds| ds.write_raw(&ob))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    Ok(())
+}
+
+fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<()> {
+    if links.is_empty() {
+        return Ok(());
+    }
+    let grp = file
+        .create_group("links")
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    let ku: Vec<String> = links.iter().map(|l| l.knowledge_uuid.clone()).collect();
+    let nu: Vec<String> = links.iter().map(|l| l.node_uuid.clone()).collect();
+    let re: Vec<String> = links.iter().map(|l| l.relation.clone()).collect();
+    write_vlen(&grp, "knowledge_uuid", &ku)?;
+    write_vlen(&grp, "node_uuid", &nu)?;
+    write_vlen(&grp, "relation", &re)?;
+    Ok(())
+}
+
+fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
+    let ids = read_vlen(file, "nodes/id")?;
+    let labels = read_vlen(file, "nodes/label")?;
+    let ft = read_vlen(file, "nodes/file_type")?;
+    let sf = read_vlen(file, "nodes/source_file")?;
+    let conf = read_vlen(file, "nodes/confidence")?;
+    let sl = read_vlen(file, "nodes/source_location").unwrap_or_default();
+    let uu = read_vlen(file, "nodes/uuid").unwrap_or_default();
+    let fp = read_vlen(file, "nodes/fingerprint").unwrap_or_default();
+    let lk = read_vlen(file, "nodes/logical_key").unwrap_or_default();
+    let cids: Vec<u32> = file
+        .dataset("nodes/community")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let opt =
+        |v: &[String], i: usize| -> Option<String> { v.get(i).cloned().filter(|s| !s.is_empty()) };
+    let mut ext = ExtractionResult::default();
+    for (i, id) in ids.iter().enumerate() {
+        ext.nodes.push(crate::types::Node {
+            id: id.clone(),
+            label: labels.get(i).cloned().unwrap_or_default(),
+            file_type: FileType::from_str_loose(ft.get(i).map(|s| s.as_str()).unwrap_or("code"))
+                .unwrap_or(FileType::Code),
+            source_file: sf.get(i).cloned().unwrap_or_default(),
+            source_location: opt(&sl, i),
+            confidence: Confidence::from_str_loose(
+                conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"),
+            ),
+            confidence_score: None,
+            community: cids.get(i).map(|&c| c as usize),
+            norm_label: None,
+            degree: None,
+            uuid: opt(&uu, i),
+            fingerprint: opt(&fp, i),
+            logical_key: opt(&lk, i),
+        });
+    }
+    let es = read_vlen(file, "edges/source")?;
+    let et = read_vlen(file, "edges/target")?;
+    let er = read_vlen(file, "edges/relation")?;
+    let ec = read_vlen(file, "edges/confidence")?;
+    let esf = read_vlen(file, "edges/source_file").unwrap_or_default();
+    let esl = read_vlen(file, "edges/source_location").unwrap_or_default();
+    let ew: Vec<f64> = file
+        .dataset("edges/weight")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    for i in 0..es.len() {
+        let c = Confidence::from_str_loose(ec.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"))
+            .unwrap_or(Confidence::EXTRACTED);
+        ext.edges.push(crate::types::Edge {
+            source: es[i].clone(),
+            target: et[i].clone(),
+            relation: er.get(i).cloned().unwrap_or_default(),
+            confidence: c,
+            source_file: esf.get(i).cloned().unwrap_or_default(),
+            source_location: opt(&esl, i),
+            confidence_score: Some(c.default_score()),
+            weight: ew.get(i).copied().unwrap_or(1.0),
+            original_src: None,
+            original_tgt: None,
+        });
+    }
+    Ok(ext)
+}
+
+fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
+    let uu = read_vlen(file, "knowledge/uuid").unwrap_or_default();
+    let ti = read_vlen(file, "knowledge/titles").unwrap_or_default();
+    let ty = read_vlen(file, "knowledge/types").unwrap_or_default();
+    let de = read_vlen(file, "knowledge/descriptions").unwrap_or_default();
+    let tg = read_vlen(file, "knowledge/tags").unwrap_or_default();
+    let co: Vec<f64> = file
+        .dataset("knowledge/confidence")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let ob: Vec<u32> = file
+        .dataset("knowledge/observations")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    Ok((0..ti.len())
+        .map(|i| KnowledgeEntry {
+            uuid: uu
+                .get(i)
+                .cloned()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            title: ti[i].clone(),
+            knowledge_type: ty.get(i).cloned().unwrap_or_default(),
+            description: de.get(i).cloned().unwrap_or_default(),
+            confidence: co.get(i).copied().unwrap_or(0.5),
+            observations: ob.get(i).copied().unwrap_or(1),
+            tags: tg
+                .get(i)
+                .map(|t| {
+                    t.split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect())
+}
+
+fn read_links(file: &H5File) -> crate::error::Result<Vec<KnowledgeLink>> {
+    let ku = read_vlen(file, "links/knowledge_uuid").unwrap_or_default();
+    let nu = read_vlen(file, "links/node_uuid").unwrap_or_default();
+    let re = read_vlen(file, "links/relation").unwrap_or_default();
+    Ok((0..ku.len())
+        .map(|i| KnowledgeLink {
+            knowledge_uuid: ku[i].clone(),
+            node_uuid: nu.get(i).cloned().unwrap_or_default(),
+            relation: re.get(i).cloned().unwrap_or_default(),
+        })
+        .collect())
+}
+
+fn graph_to_extraction(graph: &KodexGraph) -> ExtractionResult {
+    ExtractionResult {
+        nodes: graph
+            .node_ids()
+            .filter_map(|id| graph.get_node(id).cloned())
+            .collect(),
+        edges: graph.edges().map(|(_, _, e)| e.clone()).collect(),
+        ..Default::default()
+    }
+}
 
 fn write_vlen(
     group: &rust_hdf5::group::H5Group,
@@ -608,423 +597,100 @@ fn write_vlen(
 }
 
 fn read_vlen(file: &H5File, path: &str) -> crate::error::Result<Vec<String>> {
-    let ds = match file.dataset(path) {
-        Ok(ds) => ds,
-        Err(_) => return Ok(Vec::new()),
-    };
-    ds.read_vlen_strings()
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}")))
-}
-
-/// Remove knowledge entries matching a filter.
-/// Returns how many were removed.
-pub fn forget_knowledge(
-    h5_path: &Path,
-    title_match: Option<&str>,
-    type_match: Option<&str>,
-    project_match: Option<&str>,
-    below_confidence: Option<f64>,
-) -> crate::error::Result<usize> {
-    if !h5_path.exists() {
-        return Ok(0);
+    match file.dataset(path) {
+        Ok(ds) => ds
+            .read_vlen_strings()
+            .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}"))),
+        Err(_) => Ok(Vec::new()),
     }
-
-    let entries = load_knowledge_entries(h5_path)?;
-    let before = entries.len();
-
-    let mut keep_titles = Vec::new();
-    let mut keep_types = Vec::new();
-    let mut keep_descriptions = Vec::new();
-    let mut keep_confidences: Vec<f64> = Vec::new();
-    let mut keep_observations: Vec<u32> = Vec::new();
-    let mut keep_related: Vec<String> = Vec::new();
-    let mut keep_tags = Vec::new();
-
-    for (title, ktype, desc, conf, obs, related, tags) in &entries {
-        let should_remove = title_match.map(|m| title.contains(m)).unwrap_or(false)
-            || type_match.map(|m| ktype == m).unwrap_or(false)
-            || project_match.map(|m| related.contains(m)).unwrap_or(false)
-            || below_confidence.map(|c| *conf < c).unwrap_or(false);
-
-        if !should_remove {
-            keep_titles.push(title.clone());
-            keep_types.push(ktype.clone());
-            keep_descriptions.push(desc.clone());
-            keep_confidences.push(*conf);
-            keep_observations.push(*obs);
-            keep_related.push(related.clone());
-            keep_tags.push(tags.clone());
-        }
-    }
-
-    let removed = before - keep_titles.len();
-    if removed == 0 {
-        return Ok(0);
-    }
-
-    // Reload graph, re-save with filtered knowledge
-    let graph = load_hdf5(h5_path)?;
-    let communities = crate::cluster::cluster(&graph);
-    save_hdf5_with_knowledge(
-        &graph,
-        &communities,
-        h5_path,
-        &[], // k_uuids will be re-read from titles
-        &keep_titles,
-        &keep_types,
-        &keep_descriptions,
-        &keep_confidences,
-        &keep_observations,
-        &keep_related,
-        &keep_tags,
-    )?;
-
-    Ok(removed)
-}
-
-/// Remove a project's code nodes/edges from the global h5.
-pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Result<usize> {
-    if !h5_path.exists() {
-        return Ok(0);
-    }
-
-    let graph = load_hdf5(h5_path)?;
-    let before = graph.node_count();
-
-    // Find nodes belonging to this project
-    let to_remove: Vec<String> = graph
-        .node_ids()
-        .filter(|id| {
-            graph
-                .get_node(id)
-                .map(|n| n.source_file.starts_with(project_path))
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect();
-
-    // Rebuild graph without those nodes
-    let extraction = crate::types::ExtractionResult {
-        nodes: graph
-            .node_ids()
-            .filter(|id| !to_remove.contains(id))
-            .filter_map(|id| graph.get_node(id).cloned())
-            .collect(),
-        edges: graph
-            .edges()
-            .filter(|(src, tgt, _)| {
-                !to_remove.contains(&src.to_string()) && !to_remove.contains(&tgt.to_string())
-            })
-            .map(|(_, _, e)| e.clone())
-            .collect(),
-        ..Default::default()
-    };
-
-    let new_graph = crate::graph::build_from_extraction(&extraction);
-    let communities = crate::cluster::cluster(&new_graph);
-
-    // Preserve knowledge
-    let knowledge = load_knowledge_entries(h5_path).unwrap_or_default();
-    let (kt, kty, kd, kc, ko, kr, ktg): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-        knowledge.into_iter().fold(
-            (vec![], vec![], vec![], vec![], vec![], vec![], vec![]),
-            |(mut t, mut ty, mut d, mut c, mut o, mut r, mut tg), entry| {
-                t.push(entry.0);
-                ty.push(entry.1);
-                d.push(entry.2);
-                c.push(entry.3);
-                o.push(entry.4);
-                r.push(entry.5);
-                tg.push(entry.6);
-                (t, ty, d, c, o, r, tg)
-            },
-        );
-
-    save_hdf5_with_knowledge(
-        &new_graph,
-        &communities,
-        h5_path,
-        &[],
-        &kt,
-        &kty,
-        &kd,
-        &kc,
-        &ko,
-        &kr,
-        &ktg,
-    )?;
-
-    Ok(before - new_graph.node_count())
-}
-
-/// Merge a project's extraction into the global h5.
-/// Loads existing, removes old project nodes, adds new ones, re-saves.
-pub fn merge_project(
-    h5_path: &Path,
-    project_name: &str,
-    new_extraction: &ExtractionResult,
-) -> crate::error::Result<()> {
-    let _ = std::fs::create_dir_all(h5_path.parent().unwrap_or(Path::new(".")));
-
-    // Load existing graph (if any)
-    let mut existing_extraction = if h5_path.exists() {
-        // Load as extraction (preserves all fields)
-        let file = H5File::open(h5_path)
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
-
-        let mut ext = load_extraction_from_file(&file)?;
-
-        // Remove nodes/edges belonging to this project
-        ext.nodes
-            .retain(|n| !n.source_file.starts_with(project_name));
-        ext.edges
-            .retain(|e| !e.source_file.starts_with(project_name));
-
-        ext
-    } else {
-        ExtractionResult::default()
-    };
-
-    // Preserve knowledge from existing file
-    let knowledge = if h5_path.exists() {
-        load_knowledge_entries(h5_path).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    // Assign stable IDs to new nodes (match against existing by fingerprint/score)
-    let mut new_nodes = new_extraction.nodes.clone();
-    crate::fingerprint::assign_stable_ids(&existing_extraction.nodes, &mut new_nodes);
-
-    // Merge
-    existing_extraction.nodes.extend(new_nodes);
-    existing_extraction
-        .edges
-        .extend(new_extraction.edges.clone());
-
-    // Build unified graph
-    let graph = crate::graph::build_from_extraction(&existing_extraction);
-    let communities = crate::cluster::cluster(&graph);
-
-    // Unpack knowledge
-    let (kt, kty, kd, kc, ko, kr, ktg) = unpack_knowledge(knowledge);
-
-    save_hdf5_with_knowledge(
-        &graph,
-        &communities,
-        h5_path,
-        &[],
-        &kt,
-        &kty,
-        &kd,
-        &kc,
-        &ko,
-        &kr,
-        &ktg,
-    )
-}
-
-/// Load raw extraction data from an open HDF5 file (preserving all fields).
-fn load_extraction_from_file(file: &H5File) -> crate::error::Result<ExtractionResult> {
-    let ids = read_vlen(file, "nodes/id")?;
-    let labels = read_vlen(file, "nodes/label")?;
-    let file_types = read_vlen(file, "nodes/file_type")?;
-    let source_files = read_vlen(file, "nodes/source_file")?;
-    let confidences = read_vlen(file, "nodes/confidence")?;
-    let source_locations = read_vlen(file, "nodes/source_location").unwrap_or_default();
-    let uuids = read_vlen(file, "nodes/uuid").unwrap_or_default();
-    let fingerprints = read_vlen(file, "nodes/fingerprint").unwrap_or_default();
-    let logical_keys = read_vlen(file, "nodes/logical_key").unwrap_or_default();
-    let community_ids: Vec<u32> = file
-        .dataset("nodes/community")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-
-    let mut ext = ExtractionResult::default();
-
-    for (i, id) in ids.iter().enumerate() {
-        let loc = source_locations.get(i).cloned().unwrap_or_default();
-        ext.nodes.push(crate::types::Node {
-            id: id.clone(),
-            label: labels.get(i).cloned().unwrap_or_default(),
-            file_type: FileType::from_str_loose(
-                file_types.get(i).map(|s| s.as_str()).unwrap_or("code"),
-            )
-            .unwrap_or(FileType::Code),
-            source_file: source_files.get(i).cloned().unwrap_or_default(),
-            source_location: if loc.is_empty() { None } else { Some(loc) },
-            confidence: Confidence::from_str_loose(
-                confidences
-                    .get(i)
-                    .map(|s| s.as_str())
-                    .unwrap_or("EXTRACTED"),
-            ),
-            confidence_score: None,
-            community: community_ids.get(i).map(|&c| c as usize),
-            norm_label: None,
-            degree: None,
-            uuid: {
-                let v = uuids.get(i).cloned().unwrap_or_default();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            },
-            fingerprint: {
-                let v = fingerprints.get(i).cloned().unwrap_or_default();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            },
-            logical_key: {
-                let v = logical_keys.get(i).cloned().unwrap_or_default();
-                if v.is_empty() {
-                    None
-                } else {
-                    Some(v)
-                }
-            },
-        });
-    }
-
-    let e_src = read_vlen(file, "edges/source")?;
-    let e_tgt = read_vlen(file, "edges/target")?;
-    let e_rel = read_vlen(file, "edges/relation")?;
-    let e_conf = read_vlen(file, "edges/confidence")?;
-    let e_src_files = read_vlen(file, "edges/source_file").unwrap_or_default();
-    let e_src_locs = read_vlen(file, "edges/source_location").unwrap_or_default();
-    let e_weight: Vec<f64> = file
-        .dataset("edges/weight")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-
-    for i in 0..e_src.len() {
-        let confidence =
-            Confidence::from_str_loose(e_conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"))
-                .unwrap_or(Confidence::EXTRACTED);
-        let sf = e_src_files.get(i).cloned().unwrap_or_default();
-        let sl = e_src_locs.get(i).cloned().unwrap_or_default();
-
-        ext.edges.push(crate::types::Edge {
-            source: e_src[i].clone(),
-            target: e_tgt[i].clone(),
-            relation: e_rel.get(i).cloned().unwrap_or_default(),
-            confidence,
-            source_file: sf,
-            source_location: if sl.is_empty() { None } else { Some(sl) },
-            confidence_score: Some(confidence.default_score()),
-            weight: e_weight.get(i).copied().unwrap_or(1.0),
-            original_src: None,
-            original_tgt: None,
-        });
-    }
-
-    Ok(ext)
-}
-
-#[allow(clippy::type_complexity)]
-pub fn unpack_knowledge(
-    entries: Vec<(String, String, String, f64, u32, String, String)>,
-) -> (
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<f64>,
-    Vec<u32>,
-    Vec<String>,
-    Vec<String>,
-) {
-    let mut t = Vec::new();
-    let mut ty = Vec::new();
-    let mut d = Vec::new();
-    let mut c = Vec::new();
-    let mut o = Vec::new();
-    let mut r = Vec::new();
-    let mut tg = Vec::new();
-    for (title, ktype, desc, conf, obs, related, tags) in entries {
-        t.push(title);
-        ty.push(ktype);
-        d.push(desc);
-        c.push(conf);
-        o.push(obs);
-        r.push(related);
-        tg.push(tags);
-    }
-    (t, ty, d, c, o, r, tg)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
     #[test]
     fn test_hdf5_round_trip() {
         let dir = TempDir::new().unwrap();
-        let h5_path = dir.path().join("test.h5");
-
-        let extraction = ExtractionResult {
-            nodes: vec![
-                crate::types::Node {
-                    id: "a".to_string(),
-                    label: "Alpha".to_string(),
-                    file_type: FileType::Code,
-                    source_file: "a.py".to_string(),
-                    source_location: None,
-                    confidence: Some(Confidence::EXTRACTED),
+        let h5 = dir.path().join("test.h5");
+        let data = KodexData {
+            extraction: ExtractionResult {
+                nodes: vec![
+                    crate::types::Node {
+                        id: "a".into(),
+                        label: "Alpha".into(),
+                        file_type: FileType::Code,
+                        source_file: "a.py".into(),
+                        source_location: Some("L1".into()),
+                        confidence: Some(Confidence::EXTRACTED),
+                        confidence_score: Some(1.0),
+                        community: None,
+                        norm_label: None,
+                        degree: None,
+                        uuid: Some("uuid-a".into()),
+                        fingerprint: Some("fp-a".into()),
+                        logical_key: Some("a.py::Alpha".into()),
+                    },
+                    crate::types::Node {
+                        id: "b".into(),
+                        label: "Beta".into(),
+                        file_type: FileType::Code,
+                        source_file: "b.py".into(),
+                        source_location: None,
+                        confidence: Some(Confidence::INFERRED),
+                        confidence_score: None,
+                        community: None,
+                        norm_label: None,
+                        degree: None,
+                        uuid: None,
+                        fingerprint: None,
+                        logical_key: None,
+                    },
+                ],
+                edges: vec![crate::types::Edge {
+                    source: "a".into(),
+                    target: "b".into(),
+                    relation: "imports".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "a.py".into(),
+                    source_location: Some("L2".into()),
                     confidence_score: Some(1.0),
-                    community: None,
-                    norm_label: None,
-                    degree: None,
-                    uuid: None,
-                    fingerprint: None,
-                    logical_key: None,
-                },
-                crate::types::Node {
-                    id: "b".to_string(),
-                    label: "Beta".to_string(),
-                    file_type: FileType::Code,
-                    source_file: "b.py".to_string(),
-                    source_location: None,
-                    confidence: Some(Confidence::INFERRED),
-                    confidence_score: Some(0.5),
-                    community: None,
-                    norm_label: None,
-                    degree: None,
-                    uuid: None,
-                    fingerprint: None,
-                    logical_key: None,
-                },
-            ],
-            edges: vec![crate::types::Edge {
-                source: "a".to_string(),
-                target: "b".to_string(),
-                relation: "imports".to_string(),
-                confidence: Confidence::EXTRACTED,
-                source_file: "a.py".to_string(),
-                source_location: None,
-                confidence_score: Some(1.0),
-                weight: 1.0,
-                original_src: None,
-                original_tgt: None,
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                }],
+                ..Default::default()
+            },
+            knowledge: vec![KnowledgeEntry {
+                uuid: "k-1".into(),
+                title: "Test Pattern".into(),
+                knowledge_type: "pattern".into(),
+                description: "A test".into(),
+                confidence: 0.6,
+                observations: 1,
+                tags: vec!["test".into()],
             }],
-            ..Default::default()
+            links: vec![KnowledgeLink {
+                knowledge_uuid: "k-1".into(),
+                node_uuid: "uuid-a".into(),
+                relation: "related_to".into(),
+            }],
         };
-
-        let graph = crate::graph::build_from_extraction(&extraction);
-        let communities = crate::cluster::cluster(&graph);
-
-        save_hdf5(&graph, &communities, &h5_path).unwrap();
-        assert!(h5_path.exists());
-
-        let loaded = load_hdf5(&h5_path).unwrap();
-        assert_eq!(loaded.node_count(), 2);
-        assert_eq!(loaded.edge_count(), 1);
-        assert!(loaded.get_node("a").is_some());
-        assert_eq!(loaded.get_node("a").unwrap().label, "Alpha");
-        assert!(loaded.get_node("b").is_some());
+        save(&h5, &data).unwrap();
+        let loaded = load(&h5).unwrap();
+        assert_eq!(loaded.extraction.nodes.len(), 2);
+        assert_eq!(loaded.extraction.edges.len(), 1);
+        assert_eq!(loaded.knowledge.len(), 1);
+        assert_eq!(loaded.knowledge[0].title, "Test Pattern");
+        assert_eq!(loaded.links.len(), 1);
+        let na = loaded
+            .extraction
+            .nodes
+            .iter()
+            .find(|n| n.id == "a")
+            .unwrap();
+        assert_eq!(na.uuid.as_deref(), Some("uuid-a"));
+        assert_eq!(na.source_location.as_deref(), Some("L1"));
+        assert_eq!(loaded.extraction.edges[0].source_file, "a.py");
     }
 }
