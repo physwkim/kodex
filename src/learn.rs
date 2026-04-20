@@ -170,7 +170,7 @@ pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -
         .map(|k| {
             let related: Vec<String> = links
                 .iter()
-                .filter(|l| l.knowledge_uuid == k.uuid)
+                .filter(|l| l.knowledge_uuid == k.uuid && !l.is_knowledge_link())
                 .map(|l| l.node_uuid.clone())
                 .collect();
             Knowledge {
@@ -294,20 +294,20 @@ pub fn detect_stale_knowledge(h5_path: &Path) -> crate::error::Result<usize> {
             continue;
         }
 
-        // Find links for this knowledge
-        let linked_uuids: Vec<&str> = data
+        // Find node-only links for this knowledge (skip knowledge↔knowledge)
+        let linked_node_uuids: Vec<&str> = data
             .links
             .iter()
-            .filter(|l| l.knowledge_uuid == entry.uuid)
+            .filter(|l| l.knowledge_uuid == entry.uuid && !l.is_knowledge_link())
             .map(|l| l.node_uuid.as_str())
             .collect();
 
-        if linked_uuids.is_empty() {
-            continue; // Unlinked knowledge can't be stale by node reference
+        if linked_node_uuids.is_empty() {
+            continue; // No node links — can't be stale by node reference
         }
 
         // Check if ALL linked nodes are gone
-        let all_gone = linked_uuids
+        let all_gone = linked_node_uuids
             .iter()
             .all(|uuid| !valid_node_uuids.contains(uuid));
 
@@ -422,7 +422,7 @@ pub fn recall_for_task(
         .map(|k| {
             let related: Vec<String> = links
                 .iter()
-                .filter(|l| l.knowledge_uuid == k.uuid)
+                .filter(|l| l.knowledge_uuid == k.uuid && !l.is_knowledge_link())
                 .map(|l| l.node_uuid.clone())
                 .collect();
             let knowledge = Knowledge {
@@ -1183,5 +1183,112 @@ mod tests {
         assert!(ctx.contains("Observer"));
         assert!(ctx.contains("Functional Style"));
         assert!(ctx.contains("Knowledge Index"));
+    }
+
+    #[test]
+    fn test_knowledge_links_exclude_knowledge_targets() {
+        let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
+
+        // Create two knowledge entries
+        let k1 = learn_with_uuid(
+            &h5, None, KnowledgeType::Pattern, "Pattern A", "desc",
+            Some(&["node-1".to_string()]), &[], None,
+        ).unwrap();
+        let k2 = learn_with_uuid(
+            &h5, None, KnowledgeType::Pattern, "Pattern B", "desc",
+            Some(&["node-2".to_string()]), &[], None,
+        ).unwrap();
+
+        // Link knowledge ↔ knowledge
+        link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", true).unwrap();
+
+        // query_knowledge should only return node UUIDs in related_nodes
+        let items = query_knowledge(&h5, "", None);
+        for item in &items {
+            // related_nodes should never contain a knowledge UUID
+            assert!(!item.related_nodes.contains(&k1), "k1 UUID leaked into related_nodes");
+            assert!(!item.related_nodes.contains(&k2), "k2 UUID leaked into related_nodes");
+        }
+        let a = items.iter().find(|k| k.title == "Pattern A").unwrap();
+        assert_eq!(a.related_nodes, vec!["node-1"]);
+        let b = items.iter().find(|k| k.title == "Pattern B").unwrap();
+        assert_eq!(b.related_nodes, vec!["node-2"]);
+    }
+
+    #[test]
+    fn test_stale_detection_ignores_knowledge_links() {
+        let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
+
+        // K1 has only knowledge↔knowledge links (no node links)
+        let k1 = learn_with_uuid(
+            &h5, None, KnowledgeType::Pattern, "Pure Knowledge", "no nodes",
+            None, &[], None,
+        ).unwrap();
+        let k2 = learn_with_uuid(
+            &h5, None, KnowledgeType::Decision, "Another", "also no nodes",
+            None, &[], None,
+        ).unwrap();
+        link_knowledge_to_knowledge(&h5, &k1, &k2, "depends_on", false).unwrap();
+
+        // Stale detection should NOT mark these as needs_review
+        let stale = detect_stale_knowledge(&h5).unwrap();
+        assert_eq!(stale, 0, "knowledge-only entries should not be marked stale");
+
+        let items = query_knowledge(&h5, "Pure Knowledge", None);
+        assert_eq!(items[0].uuid, k1);
+        // status should still be active (not needs_review)
+    }
+
+    #[test]
+    fn test_thought_chain_formation() {
+        let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
+
+        let k1 = learn_with_uuid(
+            &h5, None, KnowledgeType::Pattern, "Step 1", "first",
+            None, &[], None,
+        ).unwrap();
+        let k2 = learn_with_uuid(
+            &h5, None, KnowledgeType::Decision, "Step 2", "second",
+            None, &[], Some(&k1),
+        ).unwrap();
+        let k3 = learn_with_uuid(
+            &h5, None, KnowledgeType::Convention, "Step 3", "third",
+            None, &[], Some(&k2),
+        ).unwrap();
+
+        // Chain from any node should give all 3 steps in order
+        let chain = thought_chain(&h5, &k2);
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0].uuid, k1);
+        assert_eq!(chain[1].uuid, k2);
+        assert_eq!(chain[2].uuid, k3);
+        assert_eq!(chain[0].relation_to_next.as_deref(), Some("leads_to"));
+        assert_eq!(chain[1].relation_to_next.as_deref(), Some("leads_to"));
+        assert!(chain[2].relation_to_next.is_none());
+    }
+
+    #[test]
+    fn test_load_knowledge_entries_node_only() {
+        let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
+
+        let k1 = learn_with_uuid(
+            &h5, None, KnowledgeType::Pattern, "Mixed", "has both link types",
+            Some(&["node-x".to_string()]), &[], None,
+        ).unwrap();
+        let k2 = learn_with_uuid(
+            &h5, None, KnowledgeType::Decision, "Other", "target",
+            None, &[], None,
+        ).unwrap();
+        link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", false).unwrap();
+
+        let entries = crate::storage::load_knowledge_entries(&h5).unwrap();
+        let mixed = entries.iter().find(|e| e.0 == "Mixed").unwrap();
+        // related field (index 5) should only contain "node-x", not k2's UUID
+        assert_eq!(mixed.5, "node-x");
+        assert!(!mixed.5.contains(&k2));
     }
 }

@@ -265,7 +265,7 @@ pub fn load_knowledge_entries(
             let related: Vec<&str> = data
                 .links
                 .iter()
-                .filter(|l| l.knowledge_uuid == k.uuid)
+                .filter(|l| l.knowledge_uuid == k.uuid && !l.is_knowledge_link())
                 .map(|l| l.node_uuid.as_str())
                 .collect();
             (
