@@ -495,13 +495,41 @@ fn test_forget_knowledge_and_logic() {
         kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
     }
 
-    kodex::learn::learn(&h5, kodex::learn::KnowledgeType::Pattern, "Foo Pattern", "desc", &[], &[]).unwrap();
-    kodex::learn::learn(&h5, kodex::learn::KnowledgeType::Decision, "Bar Decision", "desc", &[], &[]).unwrap();
-    kodex::learn::learn(&h5, kodex::learn::KnowledgeType::Pattern, "Baz Pattern", "desc", &[], &[]).unwrap();
+    kodex::learn::learn(
+        &h5,
+        kodex::learn::KnowledgeType::Pattern,
+        "Foo Pattern",
+        "desc",
+        &[],
+        &[],
+    )
+    .unwrap();
+    kodex::learn::learn(
+        &h5,
+        kodex::learn::KnowledgeType::Decision,
+        "Bar Decision",
+        "desc",
+        &[],
+        &[],
+    )
+    .unwrap();
+    kodex::learn::learn(
+        &h5,
+        kodex::learn::KnowledgeType::Pattern,
+        "Baz Pattern",
+        "desc",
+        &[],
+        &[],
+    )
+    .unwrap();
 
     // forget with title + type should AND: only "Foo Pattern" matches both
-    let removed = kodex::storage::forget_knowledge(&h5, Some("Foo"), Some("pattern"), None, None).unwrap();
-    assert_eq!(removed, 1, "AND logic: only Foo Pattern matches title=Foo AND type=pattern");
+    let removed =
+        kodex::storage::forget_knowledge(&h5, Some("Foo"), Some("pattern"), None, None).unwrap();
+    assert_eq!(
+        removed, 1,
+        "AND logic: only Foo Pattern matches title=Foo AND type=pattern"
+    );
 
     let remaining = kodex::learn::query_knowledge(&h5, "", None);
     assert_eq!(remaining.len(), 2);
@@ -574,7 +602,9 @@ fn test_knowledge_graph_scenario() {
                 source_location: Some("L10".into()),
                 confidence: Some(kodex::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
-                community: None, norm_label: None, degree: None,
+                community: None,
+                norm_label: None,
+                degree: None,
                 uuid: Some("node-auth".into()),
                 fingerprint: Some("fp-auth".into()),
                 logical_key: Some("project/auth.py::AuthHandler".into()),
@@ -588,7 +618,9 @@ fn test_knowledge_graph_scenario() {
                 source_location: Some("L5".into()),
                 confidence: Some(kodex::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
-                community: None, norm_label: None, degree: None,
+                community: None,
+                norm_label: None,
+                degree: None,
                 uuid: Some("node-repo".into()),
                 fingerprint: Some("fp-repo".into()),
                 logical_key: Some("project/repo.py::UserRepo".into()),
@@ -596,13 +628,16 @@ fn test_knowledge_graph_scenario() {
             },
         ],
         edges: vec![kodex::types::Edge {
-            source: "auth_handler".into(), target: "user_repo".into(),
+            source: "auth_handler".into(),
+            target: "user_repo".into(),
             relation: "calls".into(),
             confidence: kodex::types::Confidence::EXTRACTED,
             source_file: "project/auth.py".into(),
             source_location: Some("L15".into()),
-            confidence_score: Some(1.0), weight: 1.0,
-            original_src: None, original_tgt: None,
+            confidence_score: Some(1.0),
+            weight: 1.0,
+            original_src: None,
+            original_tgt: None,
         }],
         ..Default::default()
     };
@@ -616,22 +651,40 @@ fn test_knowledge_graph_scenario() {
 
     // 2. Agent learns knowledge and links to code nodes
     let k1 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "Repository Pattern", "All data access through repo classes",
-        Some(&["node-repo".to_string()]), &["architecture".into()], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Repository Pattern",
+        "All data access through repo classes",
+        Some(&["node-repo".to_string()]),
+        &["architecture".into()],
+        None,
+    )
+    .unwrap();
 
     let k2 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Decision,
-        "JWT Auth", "Chose JWT for stateless auth",
-        Some(&["node-auth".to_string()]), &["auth".into()], Some(&k1),
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Decision,
+        "JWT Auth",
+        "Chose JWT for stateless auth",
+        Some(&["node-auth".to_string()]),
+        &["auth".into()],
+        Some(&k1),
+    )
+    .unwrap();
 
     let k3 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Convention,
-        "Always validate tokens", "Every endpoint must validate",
-        Some(&["node-auth".to_string()]), &[], Some(&k2),
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Convention,
+        "Always validate tokens",
+        "Every endpoint must validate",
+        Some(&["node-auth".to_string()]),
+        &[],
+        Some(&k2),
+    )
+    .unwrap();
 
     // 3. Link knowledge ↔ knowledge (beyond chain)
     kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", true).unwrap();
@@ -646,27 +699,49 @@ fn test_knowledge_graph_scenario() {
     let all = kodex::learn::query_knowledge(&h5, "", None);
     for item in &all {
         for r in &item.related_nodes {
-            assert!(r.starts_with("node-"), "related_nodes should be node UUIDs, got: {r}");
+            assert!(
+                r.starts_with("node-"),
+                "related_nodes should be node UUIDs, got: {r}"
+            );
         }
     }
 
     // 6. Task context — auth.py is being edited
     let ctx = kodex::learn::get_task_context(&h5, "auth token", &["project/auth.py".into()], 10);
-    assert!(ctx.contains("JWT Auth"), "Should surface JWT knowledge for auth file");
-    assert!(ctx.contains("validate tokens"), "Should surface validation convention");
+    assert!(
+        ctx.contains("JWT Auth"),
+        "Should surface JWT knowledge for auth file"
+    );
+    assert!(
+        ctx.contains("validate tokens"),
+        "Should surface validation convention"
+    );
 
     // 7. recall_for_task — repo.py is being edited
     let results = kodex::learn::recall_for_task(
-        &h5, "data access", &["project/repo.py".into()], &["node-repo".into()], 5,
+        &h5,
+        "data access",
+        &["project/repo.py".into()],
+        &["node-repo".into()],
+        5,
     );
     assert!(!results.is_empty());
-    assert_eq!(results[0].title, "Repository Pattern", "Repo pattern should rank first for repo.py");
+    assert_eq!(
+        results[0].title, "Repository Pattern",
+        "Repo pattern should rank first for repo.py"
+    );
 
     // 8. Knowledge graph traversal
     let graph_nodes = kodex::learn::traverse_knowledge_graph(&h5, Some(&k1), 2);
-    assert!(graph_nodes.len() >= 2, "Should reach k2 from k1 within 2 hops");
+    assert!(
+        graph_nodes.len() >= 2,
+        "Should reach k2 from k1 within 2 hops"
+    );
     let k1_node = graph_nodes.iter().find(|n| n.uuid == k1).unwrap();
-    assert!(!k1_node.links_out.is_empty(), "k1 should have outgoing knowledge links");
+    assert!(
+        !k1_node.links_out.is_empty(),
+        "k1 should have outgoing knowledge links"
+    );
     assert!(!k1_node.node_links.is_empty(), "k1 should have node links");
     assert_eq!(k1_node.node_links[0].target_title, "UserRepo");
 
@@ -676,12 +751,18 @@ fn test_knowledge_graph_scenario() {
 
     // 10. Simulate node deletion (re-save without auth node)
     let mut data2 = kodex::storage::load(&h5).unwrap();
-    data2.extraction.nodes.retain(|n| n.uuid.as_deref() != Some("node-auth"));
+    data2
+        .extraction
+        .nodes
+        .retain(|n| n.uuid.as_deref() != Some("node-auth"));
     kodex::storage::save(&h5, &data2).unwrap();
 
     // k2 and k3 linked to node-auth should now be stale
     let stale = kodex::learn::detect_stale_knowledge(&h5).unwrap();
-    assert!(stale >= 1, "Should detect stale knowledge after node deletion");
+    assert!(
+        stale >= 1,
+        "Should detect stale knowledge after node deletion"
+    );
 
     // k1 linked to node-repo should NOT be stale
     let k1_entry = kodex::learn::query_knowledge(&h5, "Repository Pattern", None);
@@ -689,12 +770,17 @@ fn test_knowledge_graph_scenario() {
     // k1 should still be queryable and active (not needs_review)
 
     // 11. update_knowledge — mark k3 as validated
-    kodex::learn::update_knowledge(&h5, &k3, &kodex::learn::KnowledgeUpdates {
-        status: Some("active".into()),
-        applies_when: Some("any endpoint modification".into()),
-        validate: true,
-        ..Default::default()
-    }).unwrap();
+    kodex::learn::update_knowledge(
+        &h5,
+        &k3,
+        &kodex::learn::KnowledgeUpdates {
+            status: Some("active".into()),
+            applies_when: Some("any endpoint modification".into()),
+            validate: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let data3 = kodex::storage::load(&h5).unwrap();
     let k3_entry = data3.knowledge.iter().find(|k| k.uuid == k3).unwrap();
@@ -705,11 +791,17 @@ fn test_knowledge_graph_scenario() {
     // 12. Selective link removal
     kodex::learn::remove_link(&h5, &k1, &k2, Some("supports")).unwrap();
     let neighbors = kodex::learn::knowledge_neighbors(&h5, &k1);
-    let support_links: Vec<_> = neighbors.iter().filter(|(_, r, _)| r == "supports").collect();
+    let support_links: Vec<_> = neighbors
+        .iter()
+        .filter(|(_, r, _)| r == "supports")
+        .collect();
     assert!(support_links.is_empty(), "supports link should be removed");
     // leads_to chain should still exist
     let chain_after = kodex::learn::thought_chain(&h5, &k1);
-    assert!(chain_after.len() >= 2, "Chain should survive supports link removal");
+    assert!(
+        chain_after.len() >= 2,
+        "Chain should survive supports link removal"
+    );
 
     // 13. Markdown rendering
     let md = kodex::learn::render_thought_chain(&chain);
@@ -736,8 +828,12 @@ fn test_rename_preserves_knowledge_links() {
         source_location: Some("L42".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
-        uuid: None, fingerprint: None, logical_key: None,
+        community: None,
+        norm_label: None,
+        degree: None,
+        uuid: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("abcd1234abcd1234".into()),
     });
     kodex::storage::merge_project(&h5, "project", &extraction).unwrap();
@@ -748,10 +844,16 @@ fn test_rename_preserves_knowledge_links() {
 
     // Learn knowledge linked to this node
     kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "JWT Auth Pattern", "Token-based auth",
-        Some(std::slice::from_ref(&node_uuid)), &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "JWT Auth Pattern",
+        "Token-based auth",
+        Some(std::slice::from_ref(&node_uuid)),
+        &[],
+        None,
+    )
+    .unwrap();
 
     // Session 2: rename authenticate() → verify_token(), same body_hash
     let mut extraction2 = kodex::types::ExtractionResult::default();
@@ -763,25 +865,36 @@ fn test_rename_preserves_knowledge_links() {
         source_location: Some("L42".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
-        uuid: None, fingerprint: None, logical_key: None,
+        community: None,
+        norm_label: None,
+        degree: None,
+        uuid: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("abcd1234abcd1234".into()), // same body
     });
     kodex::storage::merge_project(&h5, "project", &extraction2).unwrap();
 
     // Verify UUID was preserved through rename
     let data2 = kodex::storage::load(&h5).unwrap();
-    let new_node_uuid = data2.extraction.nodes.iter()
+    let new_node_uuid = data2
+        .extraction
+        .nodes
+        .iter()
         .find(|n| n.label == "verify_token()")
         .unwrap()
-        .uuid.clone().unwrap();
+        .uuid
+        .clone()
+        .unwrap();
     assert_eq!(new_node_uuid, node_uuid, "Rename should preserve UUID");
 
     // Knowledge link should still work
     let knowledge = kodex::learn::query_knowledge(&h5, "JWT", None);
     assert_eq!(knowledge.len(), 1);
-    assert!(knowledge[0].related_nodes.contains(&node_uuid),
-        "Knowledge should still link to the renamed node");
+    assert!(
+        knowledge[0].related_nodes.contains(&node_uuid),
+        "Knowledge should still link to the renamed node"
+    );
 
     // No staleness — node exists with same UUID
     let stale = kodex::learn::detect_stale_knowledge(&h5).unwrap();
@@ -798,13 +911,16 @@ fn test_migration_preserves_data() {
     let data = kodex::types::KodexData {
         extraction: kodex::types::ExtractionResult {
             nodes: vec![kodex::types::Node {
-                id: "a".into(), label: "Alpha".into(),
+                id: "a".into(),
+                label: "Alpha".into(),
                 file_type: kodex::types::FileType::Code,
                 source_file: "a.py".into(),
                 source_location: Some("L1".into()),
                 confidence: Some(kodex::types::Confidence::EXTRACTED),
                 confidence_score: Some(1.0),
-                community: None, norm_label: None, degree: None,
+                community: None,
+                norm_label: None,
+                degree: None,
                 uuid: Some("node-a".into()),
                 fingerprint: Some("fp-a".into()),
                 logical_key: Some("a.py::Alpha".into()),
@@ -873,15 +989,27 @@ fn test_duplicate_merge_preserves_links() {
 
     // Create two similar knowledge entries
     let k1 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "Repository Pattern", "All data access through repos",
-        Some(&["node-a".to_string()]), &["arch".into()], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Repository Pattern",
+        "All data access through repos",
+        Some(&["node-a".to_string()]),
+        &["arch".into()],
+        None,
+    )
+    .unwrap();
     let k2 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "Repository Pattern Design", "Data access via repository classes",
-        Some(&["node-b".to_string()]), &["arch".into(), "design".into()], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Repository Pattern Design",
+        "Data access via repository classes",
+        Some(&["node-b".to_string()]),
+        &["arch".into(), "design".into()],
+        None,
+    )
+    .unwrap();
 
     // Should detect as duplicate
     let dupes = kodex::learn::find_duplicates(&h5, 0.4);
@@ -894,7 +1022,10 @@ fn test_duplicate_merge_preserves_links() {
     let data = kodex::storage::load(&h5).unwrap();
     let kept = data.knowledge.iter().find(|k| k.uuid == k1).unwrap();
     assert!(kept.observations >= 2, "Should absorb observations");
-    assert!(kept.tags.contains(&"design".to_string()), "Should absorb tags");
+    assert!(
+        kept.tags.contains(&"design".to_string()),
+        "Should absorb tags"
+    );
 
     // k2 should be obsolete
     let absorbed = data.knowledge.iter().find(|k| k.uuid == k2).unwrap();
@@ -902,7 +1033,9 @@ fn test_duplicate_merge_preserves_links() {
     assert_eq!(absorbed.superseded_by, k1);
 
     // k1 should now have links to both node-a and node-b
-    let k1_links: Vec<_> = data.links.iter()
+    let k1_links: Vec<_> = data
+        .links
+        .iter()
         .filter(|l| l.knowledge_uuid == k1 && !l.is_knowledge_link())
         .map(|l| l.node_uuid.as_str())
         .collect();
@@ -910,9 +1043,10 @@ fn test_duplicate_merge_preserves_links() {
     assert!(k1_links.contains(&"node-b"), "Should absorb merged link");
 
     // Supersedes link should exist
-    let supersedes = data.links.iter().any(|l|
-        l.knowledge_uuid == k1 && l.node_uuid == k2 && l.relation == "supersedes"
-    );
+    let supersedes = data
+        .links
+        .iter()
+        .any(|l| l.knowledge_uuid == k1 && l.node_uuid == k2 && l.relation == "supersedes");
     assert!(supersedes, "Should have supersedes link");
 }
 
@@ -925,14 +1059,19 @@ fn test_multi_project_recall() {
     // Project A
     let mut ext_a = kodex::types::ExtractionResult::default();
     ext_a.nodes.push(kodex::types::Node {
-        id: "a_handler".into(), label: "AuthHandler".into(),
+        id: "a_handler".into(),
+        label: "AuthHandler".into(),
         file_type: kodex::types::FileType::Code,
         source_file: "project-a/auth.py".into(),
         source_location: Some("L10".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
-        uuid: None, fingerprint: None, logical_key: None,
+        community: None,
+        norm_label: None,
+        degree: None,
+        uuid: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("aaaa".into()),
     });
     kodex::storage::merge_project(&h5, "project-a", &ext_a).unwrap();
@@ -942,36 +1081,59 @@ fn test_multi_project_recall() {
 
     // Learn knowledge for project A
     kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "Auth Pattern A", "JWT auth in project A",
-        Some(std::slice::from_ref(&uuid_a)), &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Auth Pattern A",
+        "JWT auth in project A",
+        Some(std::slice::from_ref(&uuid_a)),
+        &[],
+        None,
+    )
+    .unwrap();
 
     // Project B
     let mut ext_b = kodex::types::ExtractionResult::default();
     ext_b.nodes.push(kodex::types::Node {
-        id: "b_handler".into(), label: "PaymentHandler".into(),
+        id: "b_handler".into(),
+        label: "PaymentHandler".into(),
         file_type: kodex::types::FileType::Code,
         source_file: "project-b/payment.py".into(),
         source_location: Some("L5".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
-        uuid: None, fingerprint: None, logical_key: None,
+        community: None,
+        norm_label: None,
+        degree: None,
+        uuid: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("bbbb".into()),
     });
     kodex::storage::merge_project(&h5, "project-b", &ext_b).unwrap();
 
     let data_b = kodex::storage::load(&h5).unwrap();
-    let uuid_b = data_b.extraction.nodes.iter()
+    let uuid_b = data_b
+        .extraction
+        .nodes
+        .iter()
         .find(|n| n.label == "PaymentHandler")
-        .unwrap().uuid.clone().unwrap();
+        .unwrap()
+        .uuid
+        .clone()
+        .unwrap();
 
     kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Convention,
-        "Payment Validation", "Always validate amounts",
-        Some(std::slice::from_ref(&uuid_b)), &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Convention,
+        "Payment Validation",
+        "Always validate amounts",
+        Some(std::slice::from_ref(&uuid_b)),
+        &[],
+        None,
+    )
+    .unwrap();
 
     // Both projects coexist
     let data = kodex::storage::load(&h5).unwrap();
@@ -979,18 +1141,27 @@ fn test_multi_project_recall() {
     assert_eq!(data.knowledge.len(), 2);
 
     // Recall for auth.py should prioritize Auth Pattern
-    let results = kodex::learn::recall_for_task(
-        &h5, "auth", &["project-a/auth.py".into()], &[uuid_a], 5,
-    );
+    let results =
+        kodex::learn::recall_for_task(&h5, "auth", &["project-a/auth.py".into()], &[uuid_a], 5);
     assert!(!results.is_empty());
-    assert_eq!(results[0].title, "Auth Pattern A", "Auth knowledge should rank first for auth file");
+    assert_eq!(
+        results[0].title, "Auth Pattern A",
+        "Auth knowledge should rank first for auth file"
+    );
 
     // Recall for payment.py should prioritize Payment Validation
     let results = kodex::learn::recall_for_task(
-        &h5, "payment", &["project-b/payment.py".into()], &[uuid_b], 5,
+        &h5,
+        "payment",
+        &["project-b/payment.py".into()],
+        &[uuid_b],
+        5,
     );
     assert!(!results.is_empty());
-    assert_eq!(results[0].title, "Payment Validation", "Payment knowledge should rank first for payment file");
+    assert_eq!(
+        results[0].title, "Payment Validation",
+        "Payment knowledge should rank first for payment file"
+    );
 }
 
 /// Test: merge preserves knowledge↔knowledge links
@@ -1007,17 +1178,38 @@ fn test_merge_preserves_knowledge_links() {
 
     // K1 depends_on K2. K3 supports K2. Then merge K2 into K1.
     let k1 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "Auth Pattern", "desc", None, &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Auth Pattern",
+        "desc",
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
     let k2 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Decision,
-        "JWT Decision", "desc", None, &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Decision,
+        "JWT Decision",
+        "desc",
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
     let k3 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Convention,
-        "Token Convention", "desc", None, &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Convention,
+        "Token Convention",
+        "desc",
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
 
     // K1 depends_on K2
     kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "depends_on", false).unwrap();
@@ -1030,21 +1222,29 @@ fn test_merge_preserves_knowledge_links() {
     let data = kodex::storage::load(&h5).unwrap();
 
     // K3's "supports" link should now point to K1 (not K2)
-    let k3_supports: Vec<_> = data.links.iter()
+    let k3_supports: Vec<_> = data
+        .links
+        .iter()
         .filter(|l| l.knowledge_uuid == k3 && l.relation == "supports" && l.is_knowledge_link())
         .collect();
     assert_eq!(k3_supports.len(), 1);
-    assert_eq!(k3_supports[0].node_uuid, k1,
-        "Incoming knowledge link should be rewritten to keeper UUID");
+    assert_eq!(
+        k3_supports[0].node_uuid, k1,
+        "Incoming knowledge link should be rewritten to keeper UUID"
+    );
 
     // K1's outgoing "depends_on" to K2 should be gone (self-referential after merge)
     // or rewritten — it was K1→K2, and K2 is now absorbed into K1
-    let k1_deps: Vec<_> = data.links.iter()
+    let k1_deps: Vec<_> = data
+        .links
+        .iter()
         .filter(|l| l.knowledge_uuid == k1 && l.relation == "depends_on" && l.is_knowledge_link())
         .collect();
     // The old K1→K2 link got rewritten: K1→K1 is self-referential and was skipped
-    assert!(k1_deps.is_empty() || k1_deps.iter().all(|l| l.node_uuid != k2),
-        "Self-referential link should not exist after merge");
+    assert!(
+        k1_deps.is_empty() || k1_deps.iter().all(|l| l.node_uuid != k2),
+        "Self-referential link should not exist after merge"
+    );
 }
 
 /// Test: update_knowledge sets updated_at
@@ -1060,9 +1260,16 @@ fn test_update_knowledge_timestamps() {
     }
 
     let k = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "Test", "desc", None, &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "Test",
+        "desc",
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
 
     let data1 = kodex::storage::load(&h5).unwrap();
     let entry1 = data1.knowledge.iter().find(|e| e.uuid == k).unwrap();
@@ -1070,15 +1277,23 @@ fn test_update_knowledge_timestamps() {
     let created = entry1.created_at;
 
     // Update
-    kodex::learn::update_knowledge(&h5, &k, &kodex::learn::KnowledgeUpdates {
-        scope: Some("module".into()),
-        ..Default::default()
-    }).unwrap();
+    kodex::learn::update_knowledge(
+        &h5,
+        &k,
+        &kodex::learn::KnowledgeUpdates {
+            scope: Some("module".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let data2 = kodex::storage::load(&h5).unwrap();
     let entry2 = data2.knowledge.iter().find(|e| e.uuid == k).unwrap();
     assert_eq!(entry2.created_at, created, "created_at should not change");
-    assert!(entry2.updated_at >= created, "updated_at should be set after update");
+    assert!(
+        entry2.updated_at >= created,
+        "updated_at should be set after update"
+    );
     assert_eq!(entry2.scope, "module");
 }
 
@@ -1091,42 +1306,65 @@ fn test_reasoning_affects_ranking() {
     // Create a graph with one node
     let mut ext = kodex::types::ExtractionResult::default();
     ext.nodes.push(kodex::types::Node {
-        id: "auth".into(), label: "AuthHandler".into(),
+        id: "auth".into(),
+        label: "AuthHandler".into(),
         file_type: kodex::types::FileType::Code,
         source_file: "project/auth.py".into(),
         source_location: Some("L10".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
+        community: None,
+        norm_label: None,
+        degree: None,
         uuid: Some("node-auth".into()),
-        fingerprint: None, logical_key: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("aaaa".into()),
     });
     let data = kodex::types::KodexData {
-        extraction: ext, knowledge: vec![], links: vec![], review_queue: vec![],
+        extraction: ext,
+        knowledge: vec![],
+        links: vec![],
+        review_queue: vec![],
     };
     kodex::storage::save(&h5, &data).unwrap();
 
     // K1: directly linked to node-auth (high base relevance)
     let k1 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "JWT Auth", "Token-based auth", Some(std::slice::from_ref(&"node-auth".to_string())),
-        &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "JWT Auth",
+        "Token-based auth",
+        Some(std::slice::from_ref(&"node-auth".to_string())),
+        &[],
+        None,
+    )
+    .unwrap();
 
     // K2: NOT linked to any node (low base relevance)
     let k2 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Decision,
-        "Session Config", "Session settings",
-        None, &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Decision,
+        "Session Config",
+        "Session settings",
+        None,
+        &[],
+        None,
+    )
+    .unwrap();
 
     // K1 supports K2 — reasoning should boost K2
     kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", false).unwrap();
 
     // Recall with node-auth context — K1 scores high, K2 gets reasoning boost
     let results = kodex::learn::recall_for_task_structured(
-        &h5, "", &["project/auth.py".into()], &["node-auth".into()], 10,
+        &h5,
+        "",
+        &["project/auth.py".into()],
+        &["node-auth".into()],
+        10,
     );
 
     assert!(results.len() >= 2, "Should return both entries");
@@ -1134,8 +1372,13 @@ fn test_reasoning_affects_ranking() {
     // K2 should have a reasoning boost in its score
     let k2_result = results.iter().find(|r| r.knowledge.uuid == k2).unwrap();
     assert!(
-        k2_result.score.reasons.iter().any(|r| r.contains("graph reasoning")),
-        "K2 should have graph reasoning in its reasons: {:?}", k2_result.score.reasons
+        k2_result
+            .score
+            .reasons
+            .iter()
+            .any(|r| r.contains("graph reasoning")),
+        "K2 should have graph reasoning in its reasons: {:?}",
+        k2_result.score.reasons
     );
 }
 
@@ -1153,47 +1396,79 @@ fn test_task_type_recommendations() {
 
     // Create a bug_pattern knowledge
     kodex::learn::learn(
-        &h5, kodex::learn::KnowledgeType::BugPattern,
-        "Off-by-one in pagination", "Page count wrong by 1",
-        &[], &[],
-    ).unwrap();
+        &h5,
+        kodex::learn::KnowledgeType::BugPattern,
+        "Off-by-one in pagination",
+        "Page count wrong by 1",
+        &[],
+        &[],
+    )
+    .unwrap();
 
     // Create a convention knowledge
     kodex::learn::learn(
-        &h5, kodex::learn::KnowledgeType::Convention,
-        "Always validate input", "All endpoints must validate",
-        &[], &[],
-    ).unwrap();
+        &h5,
+        kodex::learn::KnowledgeType::Convention,
+        "Always validate input",
+        "All endpoints must validate",
+        &[],
+        &[],
+    )
+    .unwrap();
 
     // Create a tech_debt knowledge
     kodex::learn::learn(
-        &h5, kodex::learn::KnowledgeType::TechDebt,
-        "Legacy auth module", "Needs rewrite",
-        &[], &[],
-    ).unwrap();
+        &h5,
+        kodex::learn::KnowledgeType::TechDebt,
+        "Legacy auth module",
+        "Needs rewrite",
+        &[],
+        &[],
+    )
+    .unwrap();
 
     // bugfix context: should recommend test for bug_pattern
-    let bugfix_ctx = kodex::learn::get_task_context_json(
-        &h5, "pagination", &[], 10, "bugfix",
+    let bugfix_ctx = kodex::learn::get_task_context_json(&h5, "pagination", &[], 10, "bugfix");
+    let has_test_rec = bugfix_ctx
+        .recommendations
+        .iter()
+        .any(|r| r.category == "test");
+    assert!(
+        has_test_rec,
+        "bugfix should produce test recommendations: {:?}",
+        bugfix_ctx
+            .recommendations
+            .iter()
+            .map(|r| &r.category)
+            .collect::<Vec<_>>()
     );
-    let has_test_rec = bugfix_ctx.recommendations.iter().any(|r| r.category == "test");
-    assert!(has_test_rec, "bugfix should produce test recommendations: {:?}",
-        bugfix_ctx.recommendations.iter().map(|r| &r.category).collect::<Vec<_>>());
 
     // refactor context: should recommend opportunity for tech_debt
-    let refactor_ctx = kodex::learn::get_task_context_json(
-        &h5, "auth", &[], 10, "refactor",
+    let refactor_ctx = kodex::learn::get_task_context_json(&h5, "auth", &[], 10, "refactor");
+    let has_opportunity = refactor_ctx
+        .recommendations
+        .iter()
+        .any(|r| r.category == "opportunity");
+    assert!(
+        has_opportunity,
+        "refactor should produce opportunity recommendations: {:?}",
+        refactor_ctx
+            .recommendations
+            .iter()
+            .map(|r| &r.category)
+            .collect::<Vec<_>>()
     );
-    let has_opportunity = refactor_ctx.recommendations.iter().any(|r| r.category == "opportunity");
-    assert!(has_opportunity, "refactor should produce opportunity recommendations: {:?}",
-        refactor_ctx.recommendations.iter().map(|r| &r.category).collect::<Vec<_>>());
 
     // coding context: should NOT produce test or opportunity recs for these types
-    let coding_ctx = kodex::learn::get_task_context_json(
-        &h5, "pagination", &[], 10, "coding",
+    let coding_ctx = kodex::learn::get_task_context_json(&h5, "pagination", &[], 10, "coding");
+    let has_test_in_coding = coding_ctx
+        .recommendations
+        .iter()
+        .any(|r| r.category == "test");
+    assert!(
+        !has_test_in_coding,
+        "coding should not produce test recommendations from bug_pattern"
     );
-    let has_test_in_coding = coding_ctx.recommendations.iter().any(|r| r.category == "test");
-    assert!(!has_test_in_coding, "coding should not produce test recommendations from bug_pattern");
 }
 
 /// Gen3 test: recall_for_diff boosts affected knowledge
@@ -1205,47 +1480,70 @@ fn test_recall_for_diff_boost() {
     // Create graph with two nodes in different files
     let mut ext = kodex::types::ExtractionResult::default();
     ext.nodes.push(kodex::types::Node {
-        id: "auth_fn".into(), label: "authenticate()".into(),
+        id: "auth_fn".into(),
+        label: "authenticate()".into(),
         file_type: kodex::types::FileType::Code,
         source_file: "project/auth.py".into(),
         source_location: Some("L10".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
+        community: None,
+        norm_label: None,
+        degree: None,
         uuid: Some("node-auth".into()),
-        fingerprint: None, logical_key: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("aaaa".into()),
     });
     ext.nodes.push(kodex::types::Node {
-        id: "payment_fn".into(), label: "process_payment()".into(),
+        id: "payment_fn".into(),
+        label: "process_payment()".into(),
         file_type: kodex::types::FileType::Code,
         source_file: "project/payment.py".into(),
         source_location: Some("L20".into()),
         confidence: Some(kodex::types::Confidence::EXTRACTED),
         confidence_score: Some(1.0),
-        community: None, norm_label: None, degree: None,
+        community: None,
+        norm_label: None,
+        degree: None,
         uuid: Some("node-pay".into()),
-        fingerprint: None, logical_key: None,
+        fingerprint: None,
+        logical_key: None,
         body_hash: Some("bbbb".into()),
     });
     let data = kodex::types::KodexData {
-        extraction: ext, knowledge: vec![], links: vec![], review_queue: vec![],
+        extraction: ext,
+        knowledge: vec![],
+        links: vec![],
+        review_queue: vec![],
     };
     kodex::storage::save(&h5, &data).unwrap();
 
     // K1: linked to auth node
     let k1 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Pattern,
-        "JWT Auth Pattern", "Token auth",
-        Some(std::slice::from_ref(&"node-auth".to_string())), &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Pattern,
+        "JWT Auth Pattern",
+        "Token auth",
+        Some(std::slice::from_ref(&"node-auth".to_string())),
+        &[],
+        None,
+    )
+    .unwrap();
 
     // K2: linked to payment node
     let _k2 = kodex::learn::learn_with_uuid(
-        &h5, None, kodex::learn::KnowledgeType::Convention,
-        "Payment Validation", "Always validate amounts",
-        Some(std::slice::from_ref(&"node-pay".to_string())), &[], None,
-    ).unwrap();
+        &h5,
+        None,
+        kodex::learn::KnowledgeType::Convention,
+        "Payment Validation",
+        "Always validate amounts",
+        Some(std::slice::from_ref(&"node-pay".to_string())),
+        &[],
+        None,
+    )
+    .unwrap();
 
     // Diff that changes auth.py only
     let diff = r#"diff --git a/project/auth.py b/project/auth.py
@@ -1259,19 +1557,32 @@ fn test_recall_for_diff_boost() {
     let (analysis, results) = kodex::learn::recall_for_diff(&h5, diff, 10);
 
     // Analysis should find auth.py changed
-    assert!(analysis.changed_files.iter().any(|f| f.contains("auth")),
-        "Should detect auth.py change");
+    assert!(
+        analysis.changed_files.iter().any(|f| f.contains("auth")),
+        "Should detect auth.py change"
+    );
 
     // K1 should be affected (linked to node-auth which is in auth.py)
-    assert!(analysis.affected_knowledge_uuids.contains(&k1),
-        "K1 should be in affected list");
+    assert!(
+        analysis.affected_knowledge_uuids.contains(&k1),
+        "K1 should be in affected list"
+    );
 
     // K1 should rank first (affected by diff + linked to changed node)
     assert!(!results.is_empty());
-    assert_eq!(results[0].knowledge.uuid, k1,
-        "JWT Auth should rank first for auth.py diff");
+    assert_eq!(
+        results[0].knowledge.uuid, k1,
+        "JWT Auth should rank first for auth.py diff"
+    );
 
     // K1 should have "directly affected by diff" in reasons
-    assert!(results[0].score.reasons.iter().any(|r| r.contains("affected by diff")),
-        "Should have diff boost reason: {:?}", results[0].score.reasons);
+    assert!(
+        results[0]
+            .score
+            .reasons
+            .iter()
+            .any(|r| r.contains("affected by diff")),
+        "Should have diff boost reason: {:?}",
+        results[0].score.reasons
+    );
 }

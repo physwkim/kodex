@@ -95,7 +95,11 @@ pub fn diff_to_node_uuids(hunks: &[DiffHunk], data: &crate::types::KodexData) ->
         let old_filename = hunk.old_file.rsplit('/').next().unwrap_or(&hunk.old_file);
 
         for node in &data.extraction.nodes {
-            let node_filename = node.source_file.rsplit('/').next().unwrap_or(&node.source_file);
+            let node_filename = node
+                .source_file
+                .rsplit('/')
+                .next()
+                .unwrap_or(&node.source_file);
 
             if let Some(loc) = &node.source_location {
                 let node_line: u32 = loc.trim_start_matches('L').parse().unwrap_or(0);
@@ -126,10 +130,7 @@ pub fn diff_to_node_uuids(hunks: &[DiffHunk], data: &crate::types::KodexData) ->
 
 /// Detect which existing knowledge may be affected by a diff.
 /// Returns node UUIDs that changed + files that changed.
-pub fn analyze_diff(
-    diff_text: &str,
-    h5_path: &Path,
-) -> crate::error::Result<DiffAnalysis> {
+pub fn analyze_diff(diff_text: &str, h5_path: &Path) -> crate::error::Result<DiffAnalysis> {
     let hunks = parse_diff(diff_text);
     let data = crate::storage::load(h5_path)?;
 
@@ -147,9 +148,7 @@ pub fn analyze_diff(
     let stale_candidates: Vec<String> = data
         .links
         .iter()
-        .filter(|l| {
-            !l.is_knowledge_link() && changed_node_uuids.contains(&l.node_uuid)
-        })
+        .filter(|l| !l.is_knowledge_link() && changed_node_uuids.contains(&l.node_uuid))
         .map(|l| l.knowledge_uuid.clone())
         .collect::<HashSet<_>>()
         .into_iter()

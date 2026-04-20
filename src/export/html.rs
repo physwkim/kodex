@@ -94,8 +94,10 @@ pub fn to_html(
         }));
     }
 
-    let nodes_json = js_safe(&serde_json::to_string(&vis_nodes).unwrap_or_else(|_| "[]".to_string()));
-    let edges_json = js_safe(&serde_json::to_string(&vis_edges).unwrap_or_else(|_| "[]".to_string()));
+    let nodes_json =
+        js_safe(&serde_json::to_string(&vis_nodes).unwrap_or_else(|_| "[]".to_string()));
+    let edges_json =
+        js_safe(&serde_json::to_string(&vis_edges).unwrap_or_else(|_| "[]".to_string()));
     let legend_json = js_safe(&serde_json::to_string(&legend).unwrap_or_else(|_| "[]".to_string()));
     let hyperedges_json =
         js_safe(&serde_json::to_string(&graph.hyperedges).unwrap_or_else(|_| "[]".to_string()));

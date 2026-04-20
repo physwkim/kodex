@@ -282,46 +282,86 @@ mod tests {
             h.update(normalized.as_bytes());
             format!("{:x}", h.finalize())[..16].to_string()
         });
-        n.fingerprint = Some(compute_fingerprint(label, "code", file, Some(loc), n.body_hash.as_deref()));
+        n.fingerprint = Some(compute_fingerprint(
+            label,
+            "code",
+            file,
+            Some(loc),
+            n.body_hash.as_deref(),
+        ));
         n
     }
 
     #[test]
     fn test_rename_same_body_preserves_uuid() {
         // Rename: authenticate() → verify_token() but body stays the same
-        let old = make_node_with_body("authenticate()", "auth.py", "L42", "if token.valid { Ok(user) }");
-        let mut new_nodes = vec![make_node_with_body("verify_token()", "auth.py", "L42", "if token.valid { Ok(user) }")];
+        let old = make_node_with_body(
+            "authenticate()",
+            "auth.py",
+            "L42",
+            "if token.valid { Ok(user) }",
+        );
+        let mut new_nodes = vec![make_node_with_body(
+            "verify_token()",
+            "auth.py",
+            "L42",
+            "if token.valid { Ok(user) }",
+        )];
         new_nodes[0].uuid = None;
         new_nodes[0].fingerprint = None;
 
         assign_stable_ids(std::slice::from_ref(&old), &mut new_nodes);
-        assert_eq!(new_nodes[0].uuid, old.uuid, "Rename with same body should preserve UUID");
+        assert_eq!(
+            new_nodes[0].uuid, old.uuid,
+            "Rename with same body should preserve UUID"
+        );
     }
 
     #[test]
     fn test_move_same_body_preserves_uuid() {
         // Move: auth.py → security/auth.py, same body + same filename
-        let old = make_node_with_body("authenticate()", "project/auth.py", "L42", "validate(token)");
-        let mut new_nodes = vec![make_node_with_body("authenticate()", "project/security/auth.py", "L42", "validate(token)")];
+        let old = make_node_with_body(
+            "authenticate()",
+            "project/auth.py",
+            "L42",
+            "validate(token)",
+        );
+        let mut new_nodes = vec![make_node_with_body(
+            "authenticate()",
+            "project/security/auth.py",
+            "L42",
+            "validate(token)",
+        )];
         new_nodes[0].uuid = None;
         new_nodes[0].fingerprint = None;
 
         assign_stable_ids(std::slice::from_ref(&old), &mut new_nodes);
         // same filename(15) + same line(15) + same type(10) + same label(15+10) + same body(25) = 90/135 = 0.67 > 0.4
-        assert_eq!(new_nodes[0].uuid, old.uuid, "Move with same body should preserve UUID");
+        assert_eq!(
+            new_nodes[0].uuid, old.uuid,
+            "Move with same body should preserve UUID"
+        );
     }
 
     #[test]
     fn test_different_body_same_position_new_uuid() {
         // Delete foo() and create bar() at same line — different entity
         let old = make_node_with_body("foo()", "utils.py", "L10", "return x + y");
-        let mut new_nodes = vec![make_node_with_body("bar()", "utils.py", "L10", "return a * b")];
+        let mut new_nodes = vec![make_node_with_body(
+            "bar()",
+            "utils.py",
+            "L10",
+            "return a * b",
+        )];
         new_nodes[0].uuid = None;
         new_nodes[0].fingerprint = None;
 
         assign_stable_ids(std::slice::from_ref(&old), &mut new_nodes);
         // same file(25) + same line(15) + same type(10) - body_mismatch(15) = 35/135 = 0.26 < 0.4
-        assert_ne!(new_nodes[0].uuid, old.uuid, "Different body at same position should get new UUID");
+        assert_ne!(
+            new_nodes[0].uuid, old.uuid,
+            "Different body at same position should get new UUID"
+        );
     }
 
     #[test]
@@ -340,9 +380,18 @@ mod tests {
         assign_stable_ids(std::slice::from_ref(&old), &mut new_nodes);
         // Both should get new UUIDs — split = new entities
         // process_a: same file(25) + same line(15) + same type(10) - body_mismatch(15) = 35/135 = 0.26 < 0.4
-        assert_ne!(new_nodes[0].uuid, old.uuid, "Split part A should get new UUID");
-        assert_ne!(new_nodes[1].uuid, old.uuid, "Split part B should get new UUID");
-        assert_ne!(new_nodes[0].uuid, new_nodes[1].uuid, "Split parts should have different UUIDs");
+        assert_ne!(
+            new_nodes[0].uuid, old.uuid,
+            "Split part A should get new UUID"
+        );
+        assert_ne!(
+            new_nodes[1].uuid, old.uuid,
+            "Split part B should get new UUID"
+        );
+        assert_ne!(
+            new_nodes[0].uuid, new_nodes[1].uuid,
+            "Split parts should have different UUIDs"
+        );
     }
 
     #[test]

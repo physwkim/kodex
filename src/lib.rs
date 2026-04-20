@@ -1,10 +1,10 @@
 pub mod actor;
 pub mod analyze;
-pub mod diff;
 pub mod benchmark;
 pub mod cache;
 pub mod cluster;
 pub mod detect;
+pub mod diff;
 pub mod error;
 pub mod export;
 pub mod extract;

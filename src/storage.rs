@@ -41,7 +41,6 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
 /// Current storage format version.
 const CURRENT_VERSION: &str = "0.5.0";
 
-
 pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
@@ -183,7 +182,14 @@ pub fn append_knowledge(
         Some(related_nodes)
     };
     append_knowledge_with_uuid(
-        h5_path, None, title, knowledge_type, description, confidence, nodes, tags,
+        h5_path,
+        None,
+        title,
+        knowledge_type,
+        description,
+        confidence,
+        nodes,
+        tags,
     )
     .map(|_| ())
 }
@@ -464,8 +470,6 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
     Ok(before - data.extraction.nodes.len())
 }
 
-
-
 // HDF5 internals
 
 fn write_nodes(
@@ -642,7 +646,10 @@ fn write_hyperedges(
     let ids: Vec<String> = hyperedges.iter().map(|h| h.id.clone()).collect();
     let labels: Vec<String> = hyperedges.iter().map(|h| h.label.clone()).collect();
     let nodes: Vec<String> = hyperedges.iter().map(|h| h.nodes.join(",")).collect();
-    let conf: Vec<String> = hyperedges.iter().map(|h| h.confidence.to_string()).collect();
+    let conf: Vec<String> = hyperedges
+        .iter()
+        .map(|h| h.confidence.to_string())
+        .collect();
     let sf: Vec<String> = hyperedges
         .iter()
         .map(|h| h.source_file.clone().unwrap_or_default())
@@ -731,9 +738,7 @@ fn write_review_queue(
     Ok(())
 }
 
-fn read_review_queue(
-    file: &H5File,
-) -> crate::error::Result<Vec<crate::types::ReviewQueueItem>> {
+fn read_review_queue(file: &H5File) -> crate::error::Result<Vec<crate::types::ReviewQueueItem>> {
     let ku = read_vlen(file, "review_queue/knowledge_uuid").unwrap_or_default();
     let re = read_vlen(file, "review_queue/reason").unwrap_or_default();
     let co = read_vlen(file, "review_queue/completed").unwrap_or_default();
@@ -917,7 +922,11 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
             scope: s(&sc, i),
             status: {
                 let val = s(&st, i);
-                if val.is_empty() { "active".to_string() } else { val }
+                if val.is_empty() {
+                    "active".to_string()
+                } else {
+                    val
+                }
             },
             source: s(&sr, i),
             last_validated_at: lv.get(i).copied().unwrap_or(0),
@@ -1126,7 +1135,14 @@ mod tests {
 
         // Update with None for related_nodes → links should be untouched
         append_knowledge_with_uuid(
-            &h5, Some("k-1"), "Pattern", "pattern", "more info", 0.6, None, &[],
+            &h5,
+            Some("k-1"),
+            "Pattern",
+            "pattern",
+            "more info",
+            0.6,
+            None,
+            &[],
         )
         .unwrap();
         let loaded = load(&h5).unwrap();

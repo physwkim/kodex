@@ -375,11 +375,7 @@ fn walk(
                 function_body_ranges.push((class_nid.clone(), body.start_byte(), body.end_byte()));
             } else {
                 // Fallback: use entire class node range
-                function_body_ranges.push((
-                    class_nid.clone(),
-                    node.start_byte(),
-                    node.end_byte(),
-                ));
+                function_body_ranges.push((class_nid.clone(), node.start_byte(), node.end_byte()));
             }
 
             // Recurse into class body with class as container

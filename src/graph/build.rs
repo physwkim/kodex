@@ -102,7 +102,7 @@ mod tests {
                     uuid: None,
                     fingerprint: None,
                     logical_key: None,
-                body_hash: None,
+                    body_hash: None,
                 },
                 Node {
                     id: "main_foo".to_string(),
@@ -118,7 +118,7 @@ mod tests {
                     uuid: None,
                     fingerprint: None,
                     logical_key: None,
-                body_hash: None,
+                    body_hash: None,
                 },
             ],
             edges: vec![Edge {

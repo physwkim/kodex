@@ -94,8 +94,17 @@ pub fn learn(
     } else {
         Some(related_nodes)
     };
-    learn_with_uuid(h5_path, None, knowledge_type, title, description, nodes, tags, None)
-        .map(|_| ())
+    learn_with_uuid(
+        h5_path,
+        None,
+        knowledge_type,
+        title,
+        description,
+        nodes,
+        tags,
+        None,
+    )
+    .map(|_| ())
 }
 
 /// Learn with explicit UUID. Returns the UUID of the created/updated entry.
@@ -311,11 +320,7 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
         .extraction
         .nodes
         .iter()
-        .filter_map(|n| {
-            n.uuid
-                .as_ref()
-                .map(|u| (u.clone(), n.body_hash.clone()))
-        })
+        .filter_map(|n| n.uuid.as_ref().map(|u| (u.clone(), n.body_hash.clone())))
         .collect();
 
     let valid_node_uuids: std::collections::HashSet<&str> =
@@ -414,7 +419,8 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
                     }
                 }
                 if drifted_count > 0 {
-                    let staleness = 0.2 + 0.3 * (drifted_count as f64 / checked_count.max(1) as f64);
+                    let staleness =
+                        0.2 + 0.3 * (drifted_count as f64 / checked_count.max(1) as f64);
                     stale_entries.push(StaleInfo {
                         uuid: entry.uuid.clone(),
                         title: entry.title.clone(),
@@ -432,9 +438,8 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
 
     if changed {
         // Clean fully dead node links (keep partial + knowledge links)
-        data.links.retain(|l| {
-            l.is_knowledge_link() || valid_node_uuids.contains(l.node_uuid.as_str())
-        });
+        data.links
+            .retain(|l| l.is_knowledge_link() || valid_node_uuids.contains(l.node_uuid.as_str()));
         crate::storage::save(h5_path, &data)?;
     }
 
@@ -617,8 +622,15 @@ fn relevance_score_detailed(
     }
 
     // Sum
-    b.total = b.confidence + b.observations + b.node_overlap + b.file_mention
-        + b.scope_match + b.applies_when + b.keyword_match + b.type_priority + b.recency;
+    b.total = b.confidence
+        + b.observations
+        + b.node_overlap
+        + b.file_mention
+        + b.scope_match
+        + b.applies_when
+        + b.keyword_match
+        + b.type_priority
+        + b.recency;
 
     // 10. Penalty
     if entry.status == "needs_review" {
@@ -633,7 +645,6 @@ fn relevance_score_detailed(
 
     b
 }
-
 
 /// A recall result with score breakdown.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -709,9 +720,9 @@ pub fn recall_for_task_structured(
                 let reasoning_pts = adj * 33.0; // ±0.3 → ±10
                 score.total += reasoning_pts;
                 if reasoning_pts.abs() > 0.5 {
-                    score.reasons.push(format!(
-                        "graph reasoning: {reasoning_pts:+.1}"
-                    ));
+                    score
+                        .reasons
+                        .push(format!("graph reasoning: {reasoning_pts:+.1}"));
                 }
             }
             RecallResult { knowledge, score }
@@ -817,8 +828,13 @@ pub fn get_task_context_json(
         .filter_map(|n| n.uuid.clone())
         .collect();
 
-    let relevant =
-        recall_for_task_structured(h5_path, question, touched_files, &file_node_uuids, max_items);
+    let relevant = recall_for_task_structured(
+        h5_path,
+        question,
+        touched_files,
+        &file_node_uuids,
+        max_items,
+    );
 
     // Warnings
     let warned_uuids: Vec<&str> = data
@@ -858,7 +874,11 @@ pub fn get_task_context_json(
         })
         .collect();
 
-    let tt = if task_type.is_empty() { "coding" } else { task_type };
+    let tt = if task_type.is_empty() {
+        "coding"
+    } else {
+        task_type
+    };
     let recommendations = crate::recommend::compute_recommendations(&relevant, &conflicts, tt);
 
     TaskContext {
@@ -897,7 +917,10 @@ pub fn get_task_context_md(
     let mut ctx = String::new();
 
     // Relevant knowledge with reasons
-    ctx.push_str(&format!("## Relevant Knowledge ({} items)\n\n", tc.relevant.len()));
+    ctx.push_str(&format!(
+        "## Relevant Knowledge ({} items)\n\n",
+        tc.relevant.len()
+    ));
     for r in &tc.relevant {
         let k = &r.knowledge;
         let conf = (k.confidence * 100.0) as u32;
@@ -945,7 +968,10 @@ pub fn get_task_context_md(
     if !tc.conflicts.is_empty() {
         ctx.push_str("## Conflicts\n\n");
         for c in &tc.conflicts {
-            ctx.push_str(&format!("- {} vs {} — {}\n", c.title_a, c.title_b, c.description));
+            ctx.push_str(&format!(
+                "- {} vs {} — {}\n",
+                c.title_a, c.title_b, c.description
+            ));
         }
         ctx.push('\n');
     }
@@ -1148,10 +1174,7 @@ pub fn link_knowledge_to_nodes(
 }
 
 /// Clear all links for a given knowledge entry.
-pub fn clear_knowledge_links(
-    h5_path: &Path,
-    knowledge_uuid: &str,
-) -> crate::error::Result<usize> {
+pub fn clear_knowledge_links(h5_path: &Path, knowledge_uuid: &str) -> crate::error::Result<usize> {
     let mut data = crate::storage::load(h5_path)?;
     let before = data.links.len();
     data.links.retain(|l| l.knowledge_uuid != knowledge_uuid);
@@ -1220,15 +1243,16 @@ pub fn find_duplicates(h5_path: &Path, threshold: f64) -> Vec<DuplicateCandidate
         }
     }
 
-    candidates.sort_by(|a, b| b.similarity.partial_cmp(&a.similarity).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     candidates
 }
 
 /// Compute similarity between two knowledge entries (0.0-1.0).
-fn knowledge_similarity(
-    a: &crate::types::KnowledgeEntry,
-    b: &crate::types::KnowledgeEntry,
-) -> f64 {
+fn knowledge_similarity(a: &crate::types::KnowledgeEntry, b: &crate::types::KnowledgeEntry) -> f64 {
     let mut score = 0.0;
     let mut max_score = 0.0;
 
@@ -1315,16 +1339,12 @@ pub fn merge_knowledge(
         .knowledge
         .iter()
         .position(|k| k.uuid == uuid_keep)
-        .ok_or_else(|| {
-            crate::error::KodexError::Other(format!("UUID not found: {uuid_keep}"))
-        })?;
+        .ok_or_else(|| crate::error::KodexError::Other(format!("UUID not found: {uuid_keep}")))?;
     let absorb_idx = data
         .knowledge
         .iter()
         .position(|k| k.uuid == uuid_absorb)
-        .ok_or_else(|| {
-            crate::error::KodexError::Other(format!("UUID not found: {uuid_absorb}"))
-        })?;
+        .ok_or_else(|| crate::error::KodexError::Other(format!("UUID not found: {uuid_absorb}")))?;
 
     // Absorb metadata from absorbed into keeper
     let absorb = data.knowledge[absorb_idx].clone();
@@ -1413,9 +1433,7 @@ pub fn merge_knowledge(
 
     // Add supersedes link
     let already_linked = data.links.iter().any(|l| {
-        l.knowledge_uuid == uuid_keep
-            && l.node_uuid == uuid_absorb
-            && l.relation == "supersedes"
+        l.knowledge_uuid == uuid_keep && l.node_uuid == uuid_absorb && l.relation == "supersedes"
     });
     if !already_linked {
         let now = std::time::SystemTime::now()
@@ -1868,7 +1886,11 @@ pub fn render_knowledge_graph(nodes: &[KnowledgeGraphNode]) -> String {
             }
         }
         if !node.node_links.is_empty() {
-            let labels: Vec<&str> = node.node_links.iter().map(|e| e.target_title.as_str()).collect();
+            let labels: Vec<&str> = node
+                .node_links
+                .iter()
+                .map(|e| e.target_title.as_str())
+                .collect();
             out.push_str(&format!("  code: {}\n", labels.join(", ")));
         }
         out.push('\n');
@@ -1907,7 +1929,11 @@ pub fn detect_conflicts(h5_path: &Path) -> Vec<KnowledgeConflict> {
     // 1. Superseded but not obsolete
     for entry in &data.knowledge {
         if !entry.superseded_by.is_empty() && entry.status != "obsolete" {
-            if let Some(successor) = data.knowledge.iter().find(|k| k.uuid == entry.superseded_by) {
+            if let Some(successor) = data
+                .knowledge
+                .iter()
+                .find(|k| k.uuid == entry.superseded_by)
+            {
                 conflicts.push(KnowledgeConflict {
                     uuid_a: entry.uuid.clone(),
                     title_a: entry.title.clone(),
@@ -1926,7 +1952,10 @@ pub fn detect_conflicts(h5_path: &Path) -> Vec<KnowledgeConflict> {
     // 2. Contradicts links between active entries
     for link in &data.links {
         if link.is_knowledge_link() && link.relation == "contradicts" {
-            let a = data.knowledge.iter().find(|k| k.uuid == link.knowledge_uuid);
+            let a = data
+                .knowledge
+                .iter()
+                .find(|k| k.uuid == link.knowledge_uuid);
             let b = data.knowledge.iter().find(|k| k.uuid == link.node_uuid);
             if let (Some(a), Some(b)) = (a, b) {
                 if a.status == "active" && b.status == "active" {
@@ -2017,12 +2046,24 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
         Ok(d) => d,
         Err(_) => {
             return KnowledgeHealth {
-                total_knowledge: 0, active: 0, tentative: 0, needs_review: 0, obsolete: 0,
-                total_links: 0, node_links: 0, knowledge_links: 0,
-                orphan_node_links: 0, orphan_knowledge_links: 0,
-                duplicate_candidates: 0, conflicts: 0,
-                avg_confidence: 0.0, avg_observations: 0.0, total_nodes: 0,
-                validation_overdue: 0, recently_changed_7d: 0, recently_changed_30d: 0,
+                total_knowledge: 0,
+                active: 0,
+                tentative: 0,
+                needs_review: 0,
+                obsolete: 0,
+                total_links: 0,
+                node_links: 0,
+                knowledge_links: 0,
+                orphan_node_links: 0,
+                orphan_knowledge_links: 0,
+                duplicate_candidates: 0,
+                conflicts: 0,
+                avg_confidence: 0.0,
+                avg_observations: 0.0,
+                total_nodes: 0,
+                validation_overdue: 0,
+                recently_changed_7d: 0,
+                recently_changed_30d: 0,
             };
         }
     };
@@ -2134,8 +2175,16 @@ pub fn get_review_queue(h5_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
-    let mut queue: Vec<_> = data.review_queue.into_iter().filter(|q| !q.completed).collect();
-    queue.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
+    let mut queue: Vec<_> = data
+        .review_queue
+        .into_iter()
+        .filter(|q| !q.completed)
+        .collect();
+    queue.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then(a.created_at.cmp(&b.created_at))
+    });
     queue
 }
 
@@ -2149,7 +2198,11 @@ pub fn enqueue_review(
 ) -> crate::error::Result<bool> {
     let mut data = crate::storage::load(h5_path)?;
     // Don't duplicate
-    if data.review_queue.iter().any(|q| q.knowledge_uuid == knowledge_uuid && !q.completed) {
+    if data
+        .review_queue
+        .iter()
+        .any(|q| q.knowledge_uuid == knowledge_uuid && !q.completed)
+    {
         return Ok(false);
     }
     let now = std::time::SystemTime::now()
@@ -2191,7 +2244,12 @@ pub fn refresh_review_queue(h5_path: &Path) -> crate::error::Result<usize> {
         }
     }
     for c in &conflicts {
-        if enqueue_review(h5_path, &c.uuid_a, &format!("conflict: {}", c.description), 8)? {
+        if enqueue_review(
+            h5_path,
+            &c.uuid_a,
+            &format!("conflict: {}", c.description),
+            8,
+        )? {
             count += 1;
         }
     }
@@ -2401,13 +2459,27 @@ mod tests {
 
         // Create two knowledge entries
         let k1 = learn_with_uuid(
-            &h5, None, KnowledgeType::Pattern, "Pattern A", "desc",
-            Some(&["node-1".to_string()]), &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Pattern,
+            "Pattern A",
+            "desc",
+            Some(&["node-1".to_string()]),
+            &[],
+            None,
+        )
+        .unwrap();
         let k2 = learn_with_uuid(
-            &h5, None, KnowledgeType::Pattern, "Pattern B", "desc",
-            Some(&["node-2".to_string()]), &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Pattern,
+            "Pattern B",
+            "desc",
+            Some(&["node-2".to_string()]),
+            &[],
+            None,
+        )
+        .unwrap();
 
         // Link knowledge ↔ knowledge
         link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", true).unwrap();
@@ -2416,8 +2488,14 @@ mod tests {
         let items = query_knowledge(&h5, "", None);
         for item in &items {
             // related_nodes should never contain a knowledge UUID
-            assert!(!item.related_nodes.contains(&k1), "k1 UUID leaked into related_nodes");
-            assert!(!item.related_nodes.contains(&k2), "k2 UUID leaked into related_nodes");
+            assert!(
+                !item.related_nodes.contains(&k1),
+                "k1 UUID leaked into related_nodes"
+            );
+            assert!(
+                !item.related_nodes.contains(&k2),
+                "k2 UUID leaked into related_nodes"
+            );
         }
         let a = items.iter().find(|k| k.title == "Pattern A").unwrap();
         assert_eq!(a.related_nodes, vec!["node-1"]);
@@ -2432,18 +2510,35 @@ mod tests {
 
         // K1 has only knowledge↔knowledge links (no node links)
         let k1 = learn_with_uuid(
-            &h5, None, KnowledgeType::Pattern, "Pure Knowledge", "no nodes",
-            None, &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Pattern,
+            "Pure Knowledge",
+            "no nodes",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
         let k2 = learn_with_uuid(
-            &h5, None, KnowledgeType::Decision, "Another", "also no nodes",
-            None, &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Decision,
+            "Another",
+            "also no nodes",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
         link_knowledge_to_knowledge(&h5, &k1, &k2, "depends_on", false).unwrap();
 
         // Stale detection should NOT mark these as needs_review
         let stale = detect_stale_knowledge(&h5).unwrap();
-        assert_eq!(stale, 0, "knowledge-only entries should not be marked stale");
+        assert_eq!(
+            stale, 0,
+            "knowledge-only entries should not be marked stale"
+        );
 
         let items = query_knowledge(&h5, "Pure Knowledge", None);
         assert_eq!(items[0].uuid, k1);
@@ -2456,17 +2551,38 @@ mod tests {
         let h5 = make_test_h5(dir.path());
 
         let k1 = learn_with_uuid(
-            &h5, None, KnowledgeType::Pattern, "Step 1", "first",
-            None, &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Pattern,
+            "Step 1",
+            "first",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
         let k2 = learn_with_uuid(
-            &h5, None, KnowledgeType::Decision, "Step 2", "second",
-            None, &[], Some(&k1),
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Decision,
+            "Step 2",
+            "second",
+            None,
+            &[],
+            Some(&k1),
+        )
+        .unwrap();
         let k3 = learn_with_uuid(
-            &h5, None, KnowledgeType::Convention, "Step 3", "third",
-            None, &[], Some(&k2),
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Convention,
+            "Step 3",
+            "third",
+            None,
+            &[],
+            Some(&k2),
+        )
+        .unwrap();
 
         // Chain from any node should give all 3 steps in order
         let chain = thought_chain(&h5, &k2);
@@ -2485,13 +2601,27 @@ mod tests {
         let h5 = make_test_h5(dir.path());
 
         let k1 = learn_with_uuid(
-            &h5, None, KnowledgeType::Pattern, "Mixed", "has both link types",
-            Some(&["node-x".to_string()]), &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Pattern,
+            "Mixed",
+            "has both link types",
+            Some(&["node-x".to_string()]),
+            &[],
+            None,
+        )
+        .unwrap();
         let k2 = learn_with_uuid(
-            &h5, None, KnowledgeType::Decision, "Other", "target",
-            None, &[], None,
-        ).unwrap();
+            &h5,
+            None,
+            KnowledgeType::Decision,
+            "Other",
+            "target",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
         link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", false).unwrap();
 
         let entries = crate::storage::load_knowledge_entries(&h5).unwrap();

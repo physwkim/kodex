@@ -128,9 +128,7 @@ pub fn propagate_confidence(
                         to_uuid: target.to_string(),
                         relation: relation.to_string(),
                         effect,
-                        explanation: format!(
-                            "{from_title} {relation} {to_title}: {effect:+.2}"
-                        ),
+                        explanation: format!("{from_title} {relation} {to_title}: {effect:+.2}"),
                     });
                 }
 
