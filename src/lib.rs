@@ -1,3 +1,4 @@
+pub mod actor;
 pub mod analyze;
 pub mod benchmark;
 pub mod cache;

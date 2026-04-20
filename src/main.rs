@@ -102,6 +102,8 @@ enum Commands {
     },
     /// List registered projects
     List,
+    /// Run actor daemon (internal, started by serve)
+    Actor,
 }
 
 fn main() {
@@ -174,6 +176,7 @@ fn main() {
                 println!("\nWorkspace: {}", kodex::registry::workspace_h5().display());
             }
         }
+        Some(Commands::Actor) => kodex::actor::run_actor(),
         None => {
             if let Some(path) = cli.path {
                 commands::run::run_pipeline(&path);
