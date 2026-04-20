@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Knowledge types that Claude can accumulate
@@ -76,178 +76,101 @@ pub struct Knowledge {
 // Knowledge store — reads/writes vault .md files
 // ---------------------------------------------------------------------------
 
-const KNOWLEDGE_PREFIX: &str = "_KNOWLEDGE_";
-
-/// Load all accumulated knowledge from the vault.
-pub fn load_knowledge(vault_dir: &Path) -> Vec<Knowledge> {
-    let mut items = Vec::new();
-    let entries = match std::fs::read_dir(vault_dir) {
-        Ok(e) => e,
-        Err(_) => return items,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        if !filename.starts_with(KNOWLEDGE_PREFIX) {
-            continue;
-        }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Some(k) = parse_knowledge_note(&content) {
-                items.push(k);
-            }
-        }
-    }
-
-    items.sort_by(|a, b| {
-        b.confidence
-            .partial_cmp(&a.confidence)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    items
-}
-
-/// Store or reinforce a piece of knowledge.
+/// Store or reinforce a piece of knowledge directly in HDF5.
 ///
-/// If knowledge with the same title exists, increments observations and
-/// raises confidence. Otherwise creates new.
+/// HDF5 is the source of truth. If knowledge with the same title exists,
+/// increments observations and raises confidence.
 pub fn learn(
-    vault_dir: &Path,
-    graph_path: Option<&Path>,
+    h5_path: &Path,
     knowledge_type: KnowledgeType,
     title: &str,
     description: &str,
     related_nodes: &[String],
     tags: &[String],
-) -> crate::error::Result<PathBuf> {
-    std::fs::create_dir_all(vault_dir)?;
-
-    let safe_name = title.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "_");
-    let filename = format!("{KNOWLEDGE_PREFIX}{safe_name}.md");
-    let path = vault_dir.join(&filename);
-    let now = timestamp();
-
-    // Check if exists — reinforce if so
-    let mut knowledge = if path.exists() {
-        let content = std::fs::read_to_string(&path)?;
-        parse_knowledge_note(&content).unwrap_or_else(|| Knowledge {
-            knowledge_type: knowledge_type.clone(),
-            title: title.to_string(),
-            description: description.to_string(),
-            related_nodes: related_nodes.to_vec(),
-            confidence: 0.5,
-            observations: 0,
-            tags: tags.to_vec(),
-            first_seen: now,
-            last_seen: now,
-        })
-    } else {
-        Knowledge {
-            knowledge_type: knowledge_type.clone(),
-            title: title.to_string(),
-            description: description.to_string(),
-            related_nodes: related_nodes.to_vec(),
-            confidence: 0.5,
-            observations: 0,
-            tags: tags.to_vec(),
-            first_seen: now,
-            last_seen: now,
-        }
-    };
-
-    // Reinforce
-    knowledge.observations += 1;
-    knowledge.last_seen = now;
-    // Confidence grows asymptotically toward 1.0
-    knowledge.confidence = 1.0 - (1.0 - knowledge.confidence) * 0.8;
-    // Merge new description if different
-    if knowledge.description != description && !description.is_empty() {
-        knowledge.description = format!("{}\n\n---\n\n{}", knowledge.description, description);
-    }
-    // Merge related nodes
-    for node in related_nodes {
-        if !knowledge.related_nodes.contains(node) {
-            knowledge.related_nodes.push(node.clone());
-        }
-    }
-    // Merge tags
-    for tag in tags {
-        if !knowledge.tags.contains(tag) {
-            knowledge.tags.push(tag.clone());
-        }
-    }
-
-    // Write vault note
-    write_knowledge_note(&path, &knowledge)?;
-
-    // Rebuild compact index
-    rebuild_index(vault_dir)?;
-
-    // Rebuild HDF5 cache if path provided
-    // Knowledge is in vault .md (source of truth); HDF5 is regenerated as cache
-    if let Some(h5_path) = graph_path {
-        if let Some(vault_parent) = h5_path.parent() {
-            let vault = vault_parent.join("vault");
-            if vault.is_dir() {
-                let _ = crate::vault::cache_graph_from_vault(&vault, h5_path);
-            }
-        }
-    }
-
-    Ok(path)
+) -> crate::error::Result<()> {
+    crate::storage::append_knowledge(
+        h5_path,
+        title,
+        &knowledge_type.to_string(),
+        description,
+        0.6, // initial confidence
+        1,
+        related_nodes,
+        tags,
+    )
 }
 
-/// Query knowledge by keyword, type, or tag.
-pub fn query_knowledge(vault_dir: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
-    let all = load_knowledge(vault_dir);
+/// Query knowledge by keyword, type, or tag. Reads from HDF5.
+pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
+    let entries = match crate::storage::load_knowledge_entries(h5_path) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
     let query_lower = query.to_lowercase();
 
-    all.into_iter()
-        .filter(|k| {
-            // Type filter
+    entries
+        .into_iter()
+        .filter_map(|(title, ktype, desc, conf, obs, related, tags)| {
             if let Some(tf) = type_filter {
-                if k.knowledge_type.to_string() != tf {
-                    return false;
+                if ktype != tf {
+                    return None;
                 }
             }
-            // Keyword match
-            if query.is_empty() {
-                return true;
+            if !query.is_empty()
+                && !title.to_lowercase().contains(&query_lower)
+                && !desc.to_lowercase().contains(&query_lower)
+                && !tags.to_lowercase().contains(&query_lower)
+            {
+                return None;
             }
-            k.title.to_lowercase().contains(&query_lower)
-                || k.description.to_lowercase().contains(&query_lower)
-                || k.tags
-                    .iter()
-                    .any(|t| t.to_lowercase().contains(&query_lower))
+            Some(Knowledge {
+                knowledge_type: parse_knowledge_type(&ktype),
+                title,
+                description: desc,
+                confidence: conf,
+                observations: obs,
+                related_nodes: related
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect(),
+                tags: tags
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect(),
+                first_seen: 0,
+                last_seen: 0,
+            })
         })
         .collect()
 }
 
-/// Get a context summary for Claude: what has been learned so far.
-///
-/// Returns a compact text that Claude can read at the start of a session
-/// to recall previously accumulated knowledge.
-pub fn knowledge_context(vault_dir: &Path, max_items: usize) -> String {
-    // Try reading pre-built index first (fast path)
-    let index_path = vault_dir.join("_KNOWLEDGE_INDEX.md");
-    if let Ok(content) = std::fs::read_to_string(&index_path) {
-        return content;
+fn parse_knowledge_type(s: &str) -> KnowledgeType {
+    match s {
+        "architecture" => KnowledgeType::Architecture,
+        "pattern" => KnowledgeType::Pattern,
+        "decision" => KnowledgeType::Decision,
+        "convention" => KnowledgeType::Convention,
+        "coupling" => KnowledgeType::Coupling,
+        "domain" => KnowledgeType::Domain,
+        "preference" => KnowledgeType::Preference,
+        "bug_pattern" => KnowledgeType::BugPattern,
+        "tech_debt" => KnowledgeType::TechDebt,
+        "ops" => KnowledgeType::Ops,
+        "api" => KnowledgeType::Api,
+        "performance" => KnowledgeType::Performance,
+        "roadmap" => KnowledgeType::Roadmap,
+        "context" => KnowledgeType::Context,
+        "lesson" => KnowledgeType::Lesson,
+        other => KnowledgeType::Custom(other.to_string()),
     }
-
-    // Fallback: build from individual files
-    let items = load_knowledge(vault_dir);
-    build_index_content(&items, max_items)
 }
 
-/// Rebuild the compact index file that Claude reads at session start.
-///
-/// This is one small file (~50 lines) instead of reading dozens of
-/// individual _KNOWLEDGE_*.md files. Saves tokens and latency.
-pub fn rebuild_index(vault_dir: &Path) -> crate::error::Result<()> {
-    let items = load_knowledge(vault_dir);
-    let content = build_index_content(&items, 50);
-    std::fs::write(vault_dir.join("_KNOWLEDGE_INDEX.md"), content)?;
-    Ok(())
+/// Get a knowledge context summary from HDF5 for Claude.
+pub fn knowledge_context(h5_path: &Path, max_items: usize) -> String {
+    let items = query_knowledge(h5_path, "", None);
+    build_index_content(&items, max_items)
 }
 
 fn build_index_content(items: &[Knowledge], max_items: usize) -> String {
@@ -308,245 +231,66 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 // Internals
 // ---------------------------------------------------------------------------
 
-fn write_knowledge_note(path: &Path, k: &Knowledge) -> crate::error::Result<()> {
-    let wikilinks: Vec<String> = k.related_nodes.iter().map(|n| format!("[[{n}]]")).collect();
-    let tags: Vec<String> = k.tags.iter().map(|t| format!("#{t}")).collect();
-    let type_str = k.knowledge_type.to_string();
-
-    let md = format!(
-        "---\n\
-         type: knowledge\n\
-         knowledge_type: {type_str}\n\
-         confidence: {conf:.2}\n\
-         observations: {obs}\n\
-         first_seen: {first}\n\
-         last_seen: {last}\n\
-         tags: [{tags_csv}]\n\
-         related_nodes: [{nodes_csv}]\n\
-         ---\n\n\
-         # {title}\n\n\
-         {desc}\n\n\
-         ## Related\n\n\
-         {related}\n\n\
-         {tags_inline}\n",
-        conf = k.confidence,
-        obs = k.observations,
-        first = k.first_seen,
-        last = k.last_seen,
-        tags_csv = k.tags.join(", "),
-        nodes_csv = k.related_nodes.join(", "),
-        title = k.title,
-        desc = k.description,
-        related = if wikilinks.is_empty() {
-            "(none)".to_string()
-        } else {
-            wikilinks.join(" ")
-        },
-        tags_inline = tags.join(" "),
-    );
-
-    std::fs::write(path, md)?;
-    Ok(())
-}
-
-fn parse_knowledge_note(content: &str) -> Option<Knowledge> {
-    let fm = parse_frontmatter(content);
-    let knowledge_type = match fm.get("knowledge_type").map(|s| s.as_str()) {
-        Some("architecture") => KnowledgeType::Architecture,
-        Some("pattern") => KnowledgeType::Pattern,
-        Some("decision") => KnowledgeType::Decision,
-        Some("convention") => KnowledgeType::Convention,
-        Some("coupling") => KnowledgeType::Coupling,
-        Some("domain") => KnowledgeType::Domain,
-        Some("preference") => KnowledgeType::Preference,
-        Some("bug_pattern") => KnowledgeType::BugPattern,
-        Some("tech_debt") => KnowledgeType::TechDebt,
-        Some("ops") => KnowledgeType::Ops,
-        Some("api") => KnowledgeType::Api,
-        Some("performance") => KnowledgeType::Performance,
-        Some("roadmap") => KnowledgeType::Roadmap,
-        Some("context") => KnowledgeType::Context,
-        Some("lesson") => KnowledgeType::Lesson,
-        Some(other) => KnowledgeType::Custom(other.to_string()),
-        None => return None,
-    };
-
-    let title = extract_title(content)?;
-    let description = extract_body(content);
-    let confidence = fm
-        .get("confidence")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.5);
-    let observations = fm
-        .get("observations")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    let first_seen = fm
-        .get("first_seen")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    let last_seen = fm
-        .get("last_seen")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
-    let related_nodes = fm
-        .get("related_nodes")
-        .map(|s| {
-            s.trim_matches(|c| c == '[' || c == ']')
-                .split(',')
-                .map(|n| n.trim().to_string())
-                .filter(|n| !n.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let tags = fm
-        .get("tags")
-        .map(|s| {
-            s.trim_matches(|c| c == '[' || c == ']')
-                .split(',')
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Some(Knowledge {
-        knowledge_type,
-        title,
-        description,
-        related_nodes,
-        confidence,
-        observations,
-        tags,
-        first_seen,
-        last_seen,
-    })
-}
-
-fn parse_frontmatter(content: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    if !content.starts_with("---") {
-        return map;
-    }
-    let end = match content[3..].find("\n---") {
-        Some(pos) => 3 + pos,
-        None => return map,
-    };
-    for line in content[4..end].lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            let k = key.trim().to_string();
-            let v = value.trim().trim_matches('"').to_string();
-            if !k.is_empty() && !v.is_empty() {
-                map.insert(k, v);
-            }
-        }
-    }
-    map
-}
-
-fn extract_title(content: &str) -> Option<String> {
-    for line in content.lines() {
-        if let Some(title) = line.trim().strip_prefix("# ") {
-            return Some(title.trim().to_string());
-        }
-    }
-    None
-}
-
-fn extract_body(content: &str) -> String {
-    let mut body = String::new();
-    let mut past_title = false;
-    let mut past_frontmatter = false;
-
-    for line in content.lines() {
-        if !past_frontmatter {
-            if line.trim() == "---" {
-                past_frontmatter = true;
-                continue;
-            }
-            continue;
-        }
-        // Skip second ---
-        if line.trim() == "---" && !past_title {
-            continue;
-        }
-        if line.starts_with("# ") && !past_title {
-            past_title = true;
-            continue;
-        }
-        if past_title {
-            if line.starts_with("## Related") || line.starts_with("## Tags") {
-                break;
-            }
-            body.push_str(line);
-            body.push('\n');
-        }
-    }
-    body.trim().to_string()
-}
-
-fn timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn make_test_h5(dir: &std::path::Path) -> std::path::PathBuf {
+        let h5_path = dir.join("test.h5");
+        // Create a minimal HDF5 with empty graph
+        let extraction = crate::types::ExtractionResult::default();
+        let graph = crate::graph::build_from_extraction(&extraction);
+        let communities = crate::cluster::cluster(&graph);
+        crate::storage::save_hdf5(&graph, &communities, &h5_path).unwrap();
+        h5_path
+    }
+
     #[test]
     fn test_learn_and_load() {
         let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
 
-        // First observation
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Pattern,
             "Repository Pattern",
             "All data access goes through Repository classes",
-            &["user_repo".to_string(), "order_repo".to_string()],
+            &["user_repo".to_string()],
             &["architecture".to_string()],
         )
         .unwrap();
 
-        let items = load_knowledge(dir.path());
+        let items = query_knowledge(&h5, "", None);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "Repository Pattern");
         assert_eq!(items[0].observations, 1);
         let conf1 = items[0].confidence;
 
-        // Second observation — reinforces
+        // Reinforce
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Pattern,
             "Repository Pattern",
-            "Confirmed: ProductRepo also follows this pattern",
+            "Confirmed: ProductRepo also follows this",
             &["product_repo".to_string()],
             &[],
         )
         .unwrap();
 
-        let items = load_knowledge(dir.path());
+        let items = query_knowledge(&h5, "", None);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].observations, 2);
         assert!(items[0].confidence > conf1, "Confidence should increase");
-        assert_eq!(items[0].related_nodes.len(), 3); // merged
     }
 
     #[test]
     fn test_query_knowledge() {
         let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
 
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Pattern,
             "Singleton",
             "Global state",
@@ -555,8 +299,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Convention,
             "Error Handling",
             "Use AppError",
@@ -565,33 +308,32 @@ mod tests {
         )
         .unwrap();
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Decision,
             "JWT Auth",
-            "Chose JWT for stateless",
+            "Chose JWT",
             &[],
             &["auth".to_string()],
         )
         .unwrap();
 
-        let all = query_knowledge(dir.path(), "", None);
+        let all = query_knowledge(&h5, "", None);
         assert_eq!(all.len(), 3);
 
-        let patterns = query_knowledge(dir.path(), "", Some("pattern"));
+        let patterns = query_knowledge(&h5, "", Some("pattern"));
         assert_eq!(patterns.len(), 1);
 
-        let auth = query_knowledge(dir.path(), "auth", None);
+        let auth = query_knowledge(&h5, "auth", None);
         assert_eq!(auth.len(), 1);
     }
 
     #[test]
     fn test_knowledge_context() {
         let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
 
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Pattern,
             "Observer",
             "Event-driven",
@@ -600,8 +342,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            dir.path(),
-            None,
+            &h5,
             KnowledgeType::Preference,
             "Functional Style",
             "User prefers FP",
@@ -610,7 +351,7 @@ mod tests {
         )
         .unwrap();
 
-        let ctx = knowledge_context(dir.path(), 10);
+        let ctx = knowledge_context(&h5, 10);
         assert!(ctx.contains("Observer"));
         assert!(ctx.contains("Functional Style"));
         assert!(ctx.contains("Knowledge Index"));

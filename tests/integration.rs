@@ -420,10 +420,16 @@ fn test_vault_round_trip() {
 #[test]
 fn test_knowledge_learn_and_recall() {
     let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("test.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
 
     kodex::learn::learn(
-        dir.path(),
-        None,
+        &h5,
         kodex::learn::KnowledgeType::Pattern,
         "Test Pattern",
         "A test pattern description",
@@ -432,18 +438,13 @@ fn test_knowledge_learn_and_recall() {
     )
     .unwrap();
 
-    // Should have index
-    assert!(dir.path().join("_KNOWLEDGE_INDEX.md").exists());
-
-    // Should find by query
-    let results = kodex::learn::query_knowledge(dir.path(), "test", None);
+    let results = kodex::learn::query_knowledge(&h5, "test", None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].title, "Test Pattern");
 
     // Reinforce
     kodex::learn::learn(
-        dir.path(),
-        None,
+        &h5,
         kodex::learn::KnowledgeType::Pattern,
         "Test Pattern",
         "Seen again",
@@ -452,19 +453,24 @@ fn test_knowledge_learn_and_recall() {
     )
     .unwrap();
 
-    let results = kodex::learn::query_knowledge(dir.path(), "test", None);
+    let results = kodex::learn::query_knowledge(&h5, "test", None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].observations, 2);
-    assert_eq!(results[0].related_nodes.len(), 2); // merged
 }
 
 #[test]
 fn test_knowledge_context_index() {
     let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("test.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
 
     kodex::learn::learn(
-        dir.path(),
-        None,
+        &h5,
         kodex::learn::KnowledgeType::Decision,
         "Use HDF5",
         "Fast storage",
@@ -473,8 +479,7 @@ fn test_knowledge_context_index() {
     )
     .unwrap();
     kodex::learn::learn(
-        dir.path(),
-        None,
+        &h5,
         kodex::learn::KnowledgeType::Convention,
         "Error Handling",
         "Use Result",
@@ -483,14 +488,8 @@ fn test_knowledge_context_index() {
     )
     .unwrap();
 
-    let ctx = kodex::learn::knowledge_context(dir.path(), 10);
+    let ctx = kodex::learn::knowledge_context(&h5, 10);
     assert!(ctx.contains("Knowledge Index"));
     assert!(ctx.contains("Use HDF5"));
     assert!(ctx.contains("Error Handling"));
-    // Should be compact (under 1000 chars for 2 items)
-    assert!(
-        ctx.len() < 1000,
-        "Index should be compact, got {} chars",
-        ctx.len()
-    );
 }

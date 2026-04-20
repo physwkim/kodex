@@ -104,8 +104,8 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
         "recall" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
-            let vault = std::path::Path::new("kodex-out/vault");
-            let results = kodex::learn::query_knowledge(vault, query, type_filter);
+            let h5 = std::path::Path::new("kodex-out/kodex.h5");
+            let results = kodex::learn::query_knowledge(h5, query, type_filter);
             let items: Vec<serde_json::Value> = results
                 .iter()
                 .map(|k| {
@@ -122,12 +122,12 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
             serde_json::json!(items)
         }
         "knowledge_context" => {
-            let vault = std::path::Path::new("kodex-out/vault");
+            let h5 = std::path::Path::new("kodex-out/kodex.h5");
             let max = params
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(20) as usize;
-            serde_json::json!(kodex::learn::knowledge_context(vault, max))
+            serde_json::json!(kodex::learn::knowledge_context(h5, max))
         }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
@@ -224,9 +224,8 @@ fn handle_learn(params: &serde_json::Value) -> serde_json::Value {
         other => kodex::learn::KnowledgeType::Custom(other.to_string()),
     };
 
-    let vault = std::path::Path::new("kodex-out/vault");
-    let gp = std::path::Path::new("kodex-out/kodex.h5");
-    match kodex::learn::learn(vault, Some(gp), kt, title, desc, &related, &tags) {
+    let h5 = std::path::Path::new("kodex-out/kodex.h5");
+    match kodex::learn::learn(h5, kt, title, desc, &related, &tags) {
         Ok(_) => serde_json::json!({"status": "learned", "title": title}),
         Err(e) => serde_json::json!({"error": e.to_string()}),
     }
