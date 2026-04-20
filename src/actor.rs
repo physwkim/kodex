@@ -372,8 +372,8 @@ fn process_request(input: &str) -> String {
                     &h5_path, question, &touched_files, max, task_type,
                 ))
             } else {
-                serde_json::json!(crate::learn::get_task_context(
-                    &h5_path, question, &touched_files, max,
+                serde_json::json!(crate::learn::get_task_context_md(
+                    &h5_path, question, &touched_files, max, task_type,
                 ))
             }
         }

@@ -870,51 +870,36 @@ pub fn get_task_context_json(
 }
 
 /// Build a task-specific briefing for the agent (markdown string).
-///
-/// Returns: relevant knowledge (with reasons), warnings, conflicts.
+/// Delegates to get_task_context_json and renders to markdown.
 pub fn get_task_context(
     h5_path: &Path,
     question: &str,
     touched_files: &[String],
     max_items: usize,
 ) -> String {
-    let data = match crate::storage::load(h5_path) {
-        Ok(d) => d,
-        Err(_) => return "No knowledge base found.".to_string(),
-    };
+    get_task_context_md(h5_path, question, touched_files, max_items, "coding")
+}
 
-    // Find node UUIDs related to touched files
-    let file_node_uuids: Vec<String> = data
-        .extraction
-        .nodes
-        .iter()
-        .filter(|n| {
-            touched_files.iter().any(|f| {
-                let filename = f.rsplit('/').next().unwrap_or(f);
-                n.source_file.contains(filename)
-            })
-        })
-        .filter_map(|n| n.uuid.clone())
-        .collect();
+/// Markdown briefing with task_type support.
+pub fn get_task_context_md(
+    h5_path: &Path,
+    question: &str,
+    touched_files: &[String],
+    max_items: usize,
+    task_type: &str,
+) -> String {
+    let tc = get_task_context_json(h5_path, question, touched_files, max_items, task_type);
 
-    let items = recall_for_task(h5_path, question, touched_files, &file_node_uuids, max_items);
-
-    if items.is_empty() {
+    if tc.relevant.is_empty() {
         return "No relevant knowledge found for this task.".to_string();
     }
 
     let mut ctx = String::new();
 
     // Relevant knowledge with reasons
-    let query_tokens: Vec<String> = question
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|s| s.len() > 2)
-        .map(String::from)
-        .collect();
-
-    ctx.push_str(&format!("## Relevant Knowledge ({} items)\n\n", items.len()));
-    for k in &items {
+    ctx.push_str(&format!("## Relevant Knowledge ({} items)\n\n", tc.relevant.len()));
+    for r in &tc.relevant {
+        let k = &r.knowledge;
         let conf = (k.confidence * 100.0) as u32;
         let status_tag = if conf < 50 { " [tentative]" } else { "" };
         let summary = k.description.lines().next().unwrap_or("");
@@ -924,84 +909,43 @@ pub fn get_task_context(
         } else {
             summary.to_string()
         };
-
-        // Build reason string
-        let mut reasons = Vec::new();
-        if k.related_nodes.iter().any(|r| file_node_uuids.contains(r)) {
-            reasons.push("linked to code in scope");
-        }
-        let touched_fns: Vec<&str> = touched_files
-            .iter()
-            .map(|f| f.rsplit('/').next().unwrap_or(f.as_str()))
-            .collect();
-        if touched_fns.iter().any(|f| k.title.contains(f) || k.description.contains(f)) {
-            reasons.push("mentions touched file");
-        }
-        if !query_tokens.is_empty()
-            && query_tokens.iter().any(|t| {
-                k.title.to_lowercase().contains(t.as_str())
-                    || k.description.to_lowercase().contains(t.as_str())
-            })
-        {
-            reasons.push("matches query");
-        }
-        if reasons.is_empty() {
-            reasons.push("high confidence");
-        }
-
         ctx.push_str(&format!(
             "- **{}** ({conf}%{status_tag}) — {summary} [{}]\n",
             k.title,
-            reasons.join(", "),
+            r.score.reasons.join(", "),
         ));
     }
     ctx.push('\n');
 
-    // Warnings: needs_review status OR low confidence
-    let warned_uuids: Vec<&str> = data
-        .knowledge
-        .iter()
-        .filter(|k| k.status == "needs_review" || k.confidence < 0.4)
-        .map(|k| k.uuid.as_str())
-        .collect();
-    let warn_items: Vec<&Knowledge> = items
-        .iter()
-        .filter(|k| warned_uuids.contains(&k.uuid.as_str()))
-        .collect();
-    if !warn_items.is_empty() {
-        ctx.push_str("## Warnings\n\n");
-        for k in warn_items {
-            let entry = data.knowledge.iter().find(|e| e.uuid == k.uuid);
-            let status = entry.map(|e| e.status.as_str()).unwrap_or("active");
-            let reason = if status == "needs_review" {
-                "marked needs_review (linked nodes may have changed)"
-            } else {
-                "low confidence — may be outdated"
-            };
+    // Recommendations
+    if !tc.recommendations.is_empty() {
+        ctx.push_str("## Recommendations\n\n");
+        for rec in &tc.recommendations {
             ctx.push_str(&format!(
-                "- **{}** ({}%, {status}) — {reason}\n",
-                k.title,
-                (k.confidence * 100.0) as u32
+                "- [{}] **{}** — {}\n",
+                rec.category, rec.action, rec.reason
             ));
         }
         ctx.push('\n');
     }
 
-    // Conflicts in scope
-    let conflicts = detect_conflicts(h5_path);
-    let relevant_conflicts: Vec<&KnowledgeConflict> = conflicts
-        .iter()
-        .filter(|c| {
-            items.iter().any(|k| k.uuid == c.uuid_a || k.uuid == c.uuid_b)
-        })
-        .collect();
-    if !relevant_conflicts.is_empty() {
-        ctx.push_str("## Conflicts\n\n");
-        for c in relevant_conflicts {
+    // Warnings
+    if !tc.warnings.is_empty() {
+        ctx.push_str("## Warnings\n\n");
+        for w in &tc.warnings {
             ctx.push_str(&format!(
-                "- {} vs {} — {}\n",
-                c.title_a, c.title_b, c.description
+                "- **{}** ({}%, {}) — {}\n",
+                w.title, w.confidence, w.status, w.reason
             ));
+        }
+        ctx.push('\n');
+    }
+
+    // Conflicts
+    if !tc.conflicts.is_empty() {
+        ctx.push_str("## Conflicts\n\n");
+        for c in &tc.conflicts {
+            ctx.push_str(&format!("- {} vs {} — {}\n", c.title_a, c.title_b, c.description));
         }
         ctx.push('\n');
     }
