@@ -190,10 +190,13 @@ fn install_mcp_claude(target_dir: &Path) -> String {
                 "PostToolUse".to_string(),
                 serde_json::json!([{
                     "matcher": "Write",
-                    "command": format!(
-                        "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then {} import 2>/dev/null; fi",
-                        kodex_bin_clone
-                    )
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!(
+                            "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then {} import 2>/dev/null; fi",
+                            kodex_bin_clone
+                        )
+                    }]
                 }]),
             );
         }

@@ -212,7 +212,10 @@ Auto-adds to `.claude/settings.json`:
   "hooks": {
     "PostToolUse": [{
       "matcher": "Write",
-      "command": "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then kodex import 2>/dev/null; fi"
+      "hooks": [{
+        "type": "command",
+        "command": "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then kodex import 2>/dev/null; fi"
+      }]
     }]
   }
 }
