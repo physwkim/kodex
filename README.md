@@ -8,6 +8,7 @@ Single Rust binary. HDF5 storage. Tree-sitter AST extraction. MCP server for AI 
 
 ```bash
 cargo install --path .
+kodex install claude        # register MCP server in Claude Code
 ```
 
 ## Quick Start
@@ -16,51 +17,64 @@ cargo install --path .
 kodex run .                             # build knowledge graph
 kodex query "how does auth work"        # search
 kodex explain "AuthService"             # node details
-kodex serve                             # start MCP server for AI editors
-kodex install claude                    # register MCP in Claude Code
 ```
+
+No manual server management needed. Claude Code starts `kodex serve` automatically via MCP.
 
 ## Architecture
 
 ```
-~/.kodex/                              ← global home
-├── registry.json                      ← all registered projects
-└── workspace.h5                       ← unified knowledge across all projects
+~/.kodex/                                    ← global home
+├── kodex.sock                               ← actor Unix socket
+├── registry.json                            ← registered projects
+└── workspace.h5                             ← unified knowledge (all projects)
 
-~/codes/my-project/
-├── kodex-out/
-│   ├── kodex.h5        ← project graph + knowledge (source of truth)
-│   ├── graph.html      ← interactive visualization
-│   ├── GRAPH_REPORT.md ← analysis report
-│   ├── cache/          ← extraction cache
-│   └── vault/          ← Obsidian vault (on-demand)
-│       ├── .obsidian/
-│       ├── _COMMUNITY_*.md
-│       └── *.md
-└── CLAUDE.md           ← AI instructions
+~/codes/my-project/kodex-out/
+├── kodex.h5         ← project graph + knowledge (HDF5, source of truth)
+├── graph.html       ← interactive visualization
+├── GRAPH_REPORT.md  ← analysis report
+├── cache/           ← extraction cache
+└── vault/           ← Obsidian export (on-demand)
 ```
+
+### Process Model
+
+```
+kodex actor (single daemon, auto-managed)
+  ├─ owns all HDF5 files (no concurrent write conflicts)
+  ├─ listens on ~/.kodex/kodex.sock
+  ├─ auto-started by first kodex serve
+  └─ auto-exits after 5 min idle
+
+kodex serve (per Claude session, MCP stdio proxy)
+  ├─ Claude ←stdin/stdout→ serve ←socket→ actor
+  ├─ injects project_dir from CWD
+  └─ exits when Claude session ends (stdin EOF)
+```
+
+```
+Claude A → kodex serve → ┐
+Claude B → kodex serve → ├─ kodex.sock → kodex actor → kodex.h5
+Claude C → kodex serve → ┘                           → workspace.h5
+```
+
+All write requests go through one actor — no file locking needed.
 
 ### Data Flow
 
 ```
-kodex run
-  ├─ detect → extract → build → cluster → analyze
-  ├─ kodex.h5          (code graph: nodes, edges, communities)
-  ├─ graph.html        (visualization)
-  ├─ vault/*.md        (Obsidian export)
-  └─ ~/.kodex/         (auto-register project + sync knowledge)
+kodex run ./my-project
+  ├─ detect → extract (tree-sitter) → build → cluster → analyze
+  ├─ kodex.h5       (code graph + knowledge)
+  ├─ graph.html     (visualization)
+  ├─ vault/*.md     (Obsidian)
+  └─ auto-register in ~/.kodex/registry.json
+                    sync knowledge → ~/.kodex/workspace.h5
 
-kodex serve (MCP, stdin/stdout)
-  ├─ read:   kodex.h5 + ~/.kodex/workspace.h5
-  ├─ write:  kodex.h5 /knowledge/ group
-  └─ tools:  query_graph, learn, recall, explain, ...
-
-Claude session
-  → kodex serve auto-started by MCP config
-  → knowledge_context → reads project + global knowledge
-  → work, discover patterns
-  → learn → writes to kodex.h5
-  → next session reads it back
+kodex serve (MCP)
+  → actor reads/writes kodex.h5 per project
+  → recall/knowledge_context searches project h5 + workspace.h5
+  → learn() writes to project h5, syncs to workspace.h5
 ```
 
 ### HDF5 Structure
@@ -74,64 +88,56 @@ kodex.h5
 │   ├── source, target, relation, confidence
 │   └── weight       (f64)
 └── /knowledge/      ← AI-accumulated knowledge
-    ├── titles, types, descriptions, related, tags (vlen strings)
+    ├── titles, types, descriptions, related, tags
     ├── confidence   (f64)
     └── observations (u32)
-
-~/.kodex/workspace.h5
-└── /knowledge/      ← merged from all projects
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `kodex run <path>` | Full pipeline + auto-register in global workspace |
-| `kodex query "<question>"` | BFS/DFS search over the graph |
-| `kodex path "<source>" "<target>"` | Shortest path between two nodes |
-| `kodex explain "<node>"` | Show node details and neighbors |
-| `kodex update <path>` | Re-extract code only (AST, no LLM cost) |
-| `kodex cluster-only <path>` | Rerun clustering on existing graph |
-| `kodex watch <path>` | Auto-rebuild on code changes |
-| `kodex serve` | Start MCP stdio server |
-| `kodex install <platform>` | Register MCP server + install skill |
-| `kodex list` | Show all registered projects |
-| `kodex benchmark` | Measure token reduction ratio |
-| `kodex add <url>` | Fetch URL and add to corpus |
-| `kodex hook [install\|uninstall\|status]` | Git hooks |
-| `kodex workspace init` | Create multi-project config |
-| `kodex workspace run` | Build + merge all workspace projects |
+| `kodex run <path>` | Build graph + register in global workspace |
+| `kodex query "<question>"` | BFS/DFS search |
+| `kodex path "<src>" "<tgt>"` | Shortest path |
+| `kodex explain "<node>"` | Node details + neighbors |
+| `kodex update <path>` | Re-extract code (AST only) |
+| `kodex cluster-only <path>` | Rerun clustering |
+| `kodex watch <path>` | Auto-rebuild on changes |
+| `kodex serve` | MCP stdio proxy (auto-starts actor) |
+| `kodex install <platform>` | Register MCP + skill |
+| `kodex list` | Show registered projects |
+| `kodex benchmark` | Token reduction ratio |
+| `kodex add <url>` | Fetch URL to corpus |
+| `kodex hook [action]` | Git hooks |
+| `kodex workspace init\|run` | Multi-project workspace |
 
 ## AI Knowledge System
 
 ### How It Works
 
 ```
-Session 1: Claude analyzes code
-  → MCP learn("Repository Pattern", "All DB access via *Repo classes")
-  → kodex.h5 /knowledge/ (confidence: 60%)
-  → auto-synced to ~/.kodex/workspace.h5
+Session 1 (project-a):
+  Claude → MCP learn("Repository Pattern", ...) → actor → project-a/kodex.h5
+  → auto-sync → ~/.kodex/workspace.h5
 
-Session 2: Claude starts
-  → MCP knowledge_context() → reads from kodex.h5 + workspace.h5
-  → "Repository Pattern (60%, 1 obs)" — already knows
-  → finds same pattern again → learn() → confidence 68%, 2 obs
+Session 2 (project-b):
+  Claude → MCP knowledge_context() → actor reads project-b/kodex.h5 + workspace.h5
+  → "Repository Pattern (60%, from project-a)" — cross-project knowledge
+  → discovers same pattern → learn() → confidence grows
 
 Session 10:
   → confidence 89%, 8 observations → established knowledge
-
-Different project:
-  → MCP recall("repository") → finds it via workspace.h5
-  → knowledge crosses project boundaries automatically
+  → available in all projects via workspace.h5
 ```
 
 ### Setup
 
 ```bash
-kodex install claude    # registers MCP server in .claude/settings.json
+kodex install claude
 ```
 
-This auto-adds to `.claude/settings.json`:
+Adds to `.claude/settings.json`:
 ```json
 {
   "mcpServers": {
@@ -143,7 +149,7 @@ This auto-adds to `.claude/settings.json`:
 }
 ```
 
-Claude Code starts `kodex serve` automatically. No manual server management.
+Also supported: `kodex install cursor`, `kodex install vscode`, `kodex install codex`, `kodex install kiro`
 
 ### Knowledge Types
 
@@ -162,7 +168,7 @@ Claude Code starts `kodex serve` automatically. No manual server management.
 | `performance` | "N+1 query in user listing" |
 | `lesson` | "Don't mock DB in integration tests" |
 
-Custom types allowed. AI decides what's worth saving.
+Custom types allowed.
 
 ### Confidence Growth
 
@@ -174,37 +180,29 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 
 | Tool | Description |
 |------|-------------|
-| `query_graph` | BFS/DFS traversal from matching nodes |
-| `get_node` | Node details by label |
+| `query_graph` | BFS/DFS traversal |
+| `get_node` | Node details |
 | `god_nodes` | Most-connected entities |
-| `graph_stats` | Node/edge/community counts |
-| `learn` | Store/reinforce knowledge in kodex.h5 |
-| `recall` | Search knowledge (local + global workspace) |
-| `knowledge_context` | Compact summary for session start |
-| `save_insight` | Link nodes with a named pattern |
-| `save_note` | Free-text memo with related nodes |
-| `add_edge` | Add relationship between nodes |
+| `graph_stats` | Counts |
+| `learn` | Store/reinforce knowledge |
+| `recall` | Search local + global knowledge |
+| `knowledge_context` | Session bootstrap summary |
+| `save_insight` | Link nodes with pattern |
+| `save_note` | Free-text memo |
+| `add_edge` | Add relationship |
 
 ## Global Workspace
 
-Every `kodex run` auto-registers the project in `~/.kodex/registry.json` and syncs knowledge to `~/.kodex/workspace.h5`.
+Every `kodex run` auto-registers the project.
 
 ```bash
 kodex list
-# Registered projects (3):
-#   ✓ my-api: /Users/me/codes/my-api
-#   ✓ my-frontend: /Users/me/codes/my-frontend
-#   ✓ shared-lib: /Users/me/codes/shared-lib
+# ✓ my-api: /Users/me/codes/my-api
+# ✓ my-frontend: /Users/me/codes/my-frontend
 # Workspace: /Users/me/.kodex/workspace.h5
 ```
 
-- `learn` in any project → synced to workspace.h5
-- `recall` in any project → searches local h5 + workspace.h5
-- Knowledge crosses project boundaries automatically
-
-## Obsidian
-
-Vault is generated during `kodex run` at `kodex-out/vault/`. Open in Obsidian for visual exploration with wikilinks, community maps, and Dataview queries.
+Knowledge syncs automatically. Learn in project A, recall in project B.
 
 ## Supported Languages
 
@@ -212,18 +210,18 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Scala, PHP, Sw
 
 ## Feature Flags
 
-| Feature | Description | Dependency |
-|---------|-------------|------------|
-| `extract` | AST extraction (default) | tree-sitter |
-| `lang-*` | Per-language parsers | tree-sitter-{lang} |
-| `all-languages` | All 14 languages | |
-| `fetch` | URL fetching | reqwest |
-| `watch` | File monitoring | notify |
-| `video` | Audio transcription | whisper-rs, hound |
-| `parallel` | Parallel extraction | rayon |
-| `all` | Everything except `video` | |
+| Feature | Description |
+|---------|-------------|
+| `extract` | AST extraction (default) |
+| `lang-*` | Per-language parsers |
+| `all-languages` | All 14 languages |
+| `fetch` | URL fetching |
+| `watch` | File monitoring |
+| `video` | Audio transcription (whisper.cpp) |
+| `parallel` | Parallel extraction (rayon) |
+| `all` | Everything except `video` |
 
-HDF5 via [rust-hdf5](https://crates.io/crates/rust-hdf5) is always included (pure Rust, no C).
+HDF5 via [rust-hdf5](https://crates.io/crates/rust-hdf5) always included (pure Rust).
 
 ## License
 
