@@ -165,9 +165,27 @@ fn install_mcp_claude(target_dir: &Path) -> String {
         );
     }
 
+    // Add hook: sync Claude memory writes to kodex
+    let kodex_bin_clone = kodex_bin.clone();
+    let hooks = obj.entry("hooks").or_insert_with(|| serde_json::json!({}));
+    if let Some(hooks_obj) = hooks.as_object_mut() {
+        if !hooks_obj.contains_key("PostToolUse") {
+            hooks_obj.insert(
+                "PostToolUse".to_string(),
+                serde_json::json!([{
+                    "matcher": "Write",
+                    "command": format!(
+                        "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then {} import 2>/dev/null; fi",
+                        kodex_bin_clone
+                    )
+                }]),
+            );
+        }
+    }
+
     match serde_json::to_string_pretty(&settings) {
         Ok(json) => match std::fs::write(&settings_path, json) {
-            Ok(()) => format!("MCP: registered in {}", settings_path.display()),
+            Ok(()) => format!("MCP + hook: registered in {}", settings_path.display()),
             Err(e) => format!("MCP: failed to write settings: {e}"),
         },
         Err(e) => format!("MCP: failed to serialize: {e}"),

@@ -119,6 +119,8 @@ enum Commands {
     },
     /// Import Claude Code memories into kodex
     Import,
+    /// Export kodex knowledge to Claude Code memories
+    Export,
     /// Run actor daemon (internal, started by serve)
     Actor,
 }
@@ -225,6 +227,18 @@ fn main() {
                 Ok(0) => println!("No memories found to import."),
                 Ok(n) => println!("Imported {n} memories from ~/.claude/"),
                 Err(e) => eprintln!("Import error: {e}"),
+            }
+        }
+        Some(Commands::Export) => {
+            let h5 = kodex::registry::global_h5();
+            if !h5.exists() {
+                eprintln!("No kodex.h5 found. Run `kodex run` first.");
+                return;
+            }
+            match kodex::import::export_to_claude_memories(&h5) {
+                Ok(0) => println!("No new knowledge to export."),
+                Ok(n) => println!("Exported {n} entries to ~/.claude/memory/"),
+                Err(e) => eprintln!("Export error: {e}"),
             }
         }
         Some(Commands::Actor) => kodex::actor::run_actor(),
