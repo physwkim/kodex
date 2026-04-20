@@ -805,7 +805,8 @@ fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
         .dataset("edges/weight")
         .and_then(|ds| ds.read_raw())
         .unwrap_or_default();
-    for i in 0..es.len() {
+    let edge_count = es.len().min(et.len());
+    for i in 0..edge_count {
         let c = Confidence::from_str_loose(ec.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"))
             .unwrap_or(Confidence::EXTRACTED);
         ext.edges.push(crate::types::Edge {

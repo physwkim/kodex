@@ -104,13 +104,13 @@ pub fn diff_to_node_uuids(hunks: &[DiffHunk], data: &crate::types::KodexData) ->
                 let new_match = (node_filename == new_filename
                     || node.source_file.ends_with(&hunk.file))
                     && node_line >= hunk.start_line
-                    && node_line <= hunk.end_line + 5;
+                    && node_line <= hunk.end_line.saturating_add(5);
 
                 // Match old-side (deletions/renames)
                 let old_match = (node_filename == old_filename
                     || node.source_file.ends_with(&hunk.old_file))
                     && node_line >= hunk.old_start_line
-                    && node_line <= hunk.old_end_line + 5;
+                    && node_line <= hunk.old_end_line.saturating_add(5);
 
                 if new_match || old_match {
                     if let Some(uuid) = &node.uuid {
