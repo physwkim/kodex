@@ -241,6 +241,7 @@ fn process_request(input: &str) -> String {
                 .unwrap_or("");
             let related = extract_optional_string_array(&params, "related_nodes");
             let tags = extract_string_array(&params, "tags");
+            let context_uuid = params.get("context_uuid").and_then(|v| v.as_str());
             let kt = parse_knowledge_type(kt_str);
             match crate::learn::learn_with_uuid(
                 &h5_path,
@@ -250,6 +251,7 @@ fn process_request(input: &str) -> String {
                 desc,
                 related.as_deref(),
                 &tags,
+                context_uuid,
             ) {
                 Ok(uuid) => {
                     serde_json::json!({"status": "learned", "uuid": uuid, "title": title})
@@ -454,6 +456,19 @@ fn process_request(input: &str) -> String {
                 .map(|(other, rel, dir)| serde_json::json!({"uuid": other, "relation": rel, "direction": dir}))
                 .collect();
             serde_json::json!(items)
+        }
+        "thought_chain" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            let format = params.get("format").and_then(|v| v.as_str()).unwrap_or("json");
+            let chain = crate::learn::thought_chain(&h5_path, uuid);
+            if format == "markdown" {
+                serde_json::json!(crate::learn::render_thought_chain(&chain))
+            } else {
+                serde_json::json!(chain)
+            }
         }
         "knowledge_graph" => {
             let start = params.get("uuid").and_then(|v| v.as_str());

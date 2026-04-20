@@ -94,7 +94,8 @@ pub fn learn(
     } else {
         Some(related_nodes)
     };
-    learn_with_uuid(h5_path, None, knowledge_type, title, description, nodes, tags).map(|_| ())
+    learn_with_uuid(h5_path, None, knowledge_type, title, description, nodes, tags, None)
+        .map(|_| ())
 }
 
 /// Learn with explicit UUID. Returns the UUID of the created/updated entry.
@@ -105,6 +106,10 @@ pub fn learn(
 /// - `None` → don't touch existing links
 /// - `Some(&[])` → clear all links
 /// - `Some(&[...])` → replace links with these nodes
+///
+/// `context_uuid`: if provided, auto-creates a "leads_to" chain link
+/// from the context knowledge to this one (chain of thought).
+#[allow(clippy::too_many_arguments)]
 pub fn learn_with_uuid(
     h5_path: &Path,
     knowledge_uuid: Option<&str>,
@@ -113,8 +118,9 @@ pub fn learn_with_uuid(
     description: &str,
     related_nodes: Option<&[String]>,
     tags: &[String],
+    context_uuid: Option<&str>,
 ) -> crate::error::Result<String> {
-    crate::storage::append_knowledge_with_uuid(
+    let new_uuid = crate::storage::append_knowledge_with_uuid(
         h5_path,
         knowledge_uuid,
         title,
@@ -123,7 +129,16 @@ pub fn learn_with_uuid(
         0.6,
         related_nodes,
         tags,
-    )
+    )?;
+
+    // Auto-link chain of thought: context → this
+    if let Some(ctx) = context_uuid {
+        if ctx != new_uuid {
+            let _ = link_knowledge_to_knowledge(h5_path, ctx, &new_uuid, "leads_to", false);
+        }
+    }
+
+    Ok(new_uuid)
 }
 
 /// Query knowledge by keyword, type, or tag. Reads from HDF5.
@@ -730,6 +745,116 @@ pub fn knowledge_neighbors(h5_path: &Path, knowledge_uuid: &str) -> Vec<(String,
 }
 
 // ---------------------------------------------------------------------------
+// Chain of thought
+// ---------------------------------------------------------------------------
+
+/// A step in a thought chain.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ThoughtStep {
+    pub uuid: String,
+    pub title: String,
+    pub knowledge_type: String,
+    pub description: String,
+    pub confidence: f64,
+    pub relation_to_next: Option<String>,
+}
+
+/// Trace the chain of thought starting from a knowledge UUID.
+/// Follows `leads_to` links forward (and `because`/`resolved_by`/etc. as alternatives).
+/// Also walks backward to find the chain root.
+pub fn thought_chain(h5_path: &Path, knowledge_uuid: &str) -> Vec<ThoughtStep> {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let chain_relations = ["leads_to", "because", "resolved_by", "therefore", "implies"];
+
+    // Build forward/backward adjacency for chain relations
+    let mut forward: HashMap<String, (String, String)> = HashMap::new(); // uuid → (next, relation)
+    let mut backward: HashMap<String, String> = HashMap::new(); // uuid → prev
+
+    for link in &data.links {
+        if link.is_knowledge_link() && chain_relations.contains(&link.relation.as_str()) {
+            forward.insert(
+                link.knowledge_uuid.clone(),
+                (link.node_uuid.clone(), link.relation.clone()),
+            );
+            backward
+                .entry(link.node_uuid.clone())
+                .or_insert_with(|| link.knowledge_uuid.clone());
+        }
+    }
+
+    // Walk backward to find chain root
+    let mut root = knowledge_uuid.to_string();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(root.clone());
+    while let Some(prev) = backward.get(&root) {
+        if !visited.insert(prev.clone()) {
+            break; // cycle
+        }
+        root = prev.clone();
+    }
+
+    // Walk forward from root
+    let mut chain = Vec::new();
+    let mut current = root;
+    visited.clear();
+
+    loop {
+        if !visited.insert(current.clone()) {
+            break; // cycle
+        }
+
+        let entry = data.knowledge.iter().find(|k| k.uuid == current);
+        let (next, rel) = forward.get(&current).cloned().unzip();
+
+        chain.push(ThoughtStep {
+            uuid: current.clone(),
+            title: entry.map(|e| e.title.clone()).unwrap_or_default(),
+            knowledge_type: entry.map(|e| e.knowledge_type.clone()).unwrap_or_default(),
+            description: entry.map(|e| e.description.clone()).unwrap_or_default(),
+            confidence: entry.map(|e| e.confidence).unwrap_or(0.0),
+            relation_to_next: rel,
+        });
+
+        match next {
+            Some(n) => current = n,
+            None => break,
+        }
+    }
+
+    chain
+}
+
+/// Render a thought chain as readable markdown.
+pub fn render_thought_chain(steps: &[ThoughtStep]) -> String {
+    if steps.is_empty() {
+        return "No thought chain found.".to_string();
+    }
+
+    let mut out = format!("## Thought Chain ({} steps)\n\n", steps.len());
+
+    for (i, step) in steps.iter().enumerate() {
+        let conf = (step.confidence * 100.0) as u32;
+        let summary = step.description.lines().next().unwrap_or("");
+        out.push_str(&format!(
+            "{}. **{}** ({}, {conf}%)\n   {summary}\n",
+            i + 1,
+            step.title,
+            step.knowledge_type,
+        ));
+
+        if let Some(rel) = &step.relation_to_next {
+            out.push_str(&format!("   ↓ _{rel}_\n"));
+        }
+    }
+
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Knowledge graph traversal
 // ---------------------------------------------------------------------------
 
@@ -977,6 +1102,7 @@ mod tests {
             "Confirmed: ProductRepo also follows this",
             Some(&["product_repo".to_string()]),
             &[],
+            None,
         )
         .unwrap();
 

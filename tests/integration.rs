@@ -474,6 +474,7 @@ fn test_knowledge_learn_and_recall() {
         "Seen again",
         Some(&["node_b".to_string()]),
         &[],
+        None,
     )
     .unwrap();
 
