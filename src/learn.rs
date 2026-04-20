@@ -320,6 +320,10 @@ pub fn detect_stale_knowledge(h5_path: &Path) -> crate::error::Result<usize> {
     }
 
     if stale_count > 0 {
+        // Clean dead node links (keep knowledge↔knowledge links)
+        data.links.retain(|l| {
+            l.is_knowledge_link() || valid_node_uuids.contains(l.node_uuid.as_str())
+        });
         crate::storage::save(h5_path, &data)?;
     }
 

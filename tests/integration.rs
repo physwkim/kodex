@@ -484,6 +484,43 @@ fn test_knowledge_learn_and_recall() {
 }
 
 #[test]
+fn test_forget_knowledge_and_logic() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("test.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
+
+    kodex::learn::learn(&h5, kodex::learn::KnowledgeType::Pattern, "Foo Pattern", "desc", &[], &[]).unwrap();
+    kodex::learn::learn(&h5, kodex::learn::KnowledgeType::Decision, "Bar Decision", "desc", &[], &[]).unwrap();
+    kodex::learn::learn(&h5, kodex::learn::KnowledgeType::Pattern, "Baz Pattern", "desc", &[], &[]).unwrap();
+
+    // forget with title + type should AND: only "Foo Pattern" matches both
+    let removed = kodex::storage::forget_knowledge(&h5, Some("Foo"), Some("pattern"), None, None).unwrap();
+    assert_eq!(removed, 1, "AND logic: only Foo Pattern matches title=Foo AND type=pattern");
+
+    let remaining = kodex::learn::query_knowledge(&h5, "", None);
+    assert_eq!(remaining.len(), 2);
+    assert!(remaining.iter().any(|k| k.title == "Bar Decision"));
+    assert!(remaining.iter().any(|k| k.title == "Baz Pattern"));
+
+    // forget with type only should match all remaining patterns
+    let removed = kodex::storage::forget_knowledge(&h5, None, Some("pattern"), None, None).unwrap();
+    assert_eq!(removed, 1, "Baz Pattern should be removed");
+
+    let remaining = kodex::learn::query_knowledge(&h5, "", None);
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].title, "Bar Decision");
+
+    // forget with no criteria should remove nothing
+    let removed = kodex::storage::forget_knowledge(&h5, None, None, None, None).unwrap();
+    assert_eq!(removed, 0, "No criteria = no deletion");
+}
+
+#[test]
 fn test_knowledge_context_index() {
     let dir = tempfile::TempDir::new().unwrap();
     let h5 = dir.path().join("test.h5");

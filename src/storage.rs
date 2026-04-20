@@ -219,6 +219,11 @@ pub fn append_knowledge_with_uuid(
         entry.uuid.clone()
     } else {
         let new_uuid = uuid::Uuid::new_v4().to_string();
+        let inferred_source = if tags.iter().any(|t| t == "imported") {
+            "imported"
+        } else {
+            "agent"
+        };
         data.knowledge.push(KnowledgeEntry {
             uuid: new_uuid.clone(),
             title: title.to_string(),
@@ -229,7 +234,7 @@ pub fn append_knowledge_with_uuid(
             tags: tags.to_vec(),
             scope: String::new(),
             status: "active".to_string(),
-            source: "agent".to_string(),
+            source: inferred_source.to_string(),
             last_validated_at: 0,
             applies_when: String::new(),
             supersedes: String::new(),
@@ -293,16 +298,24 @@ pub fn forget_knowledge(
     }
     let mut data = load(h5_path)?;
     let before = data.knowledge.len();
+    // AND logic: entry must match ALL provided criteria
     let remove_uuids: Vec<String> = data
         .knowledge
         .iter()
         .filter(|k| {
-            title_match.map(|m| k.title.contains(m)).unwrap_or(false)
-                || type_match.map(|m| k.knowledge_type == m).unwrap_or(false)
-                || project_match
+            title_match.map(|m| k.title.contains(m)).unwrap_or(true)
+                && type_match.map(|m| k.knowledge_type == m).unwrap_or(true)
+                && project_match
                     .map(|m| k.description.contains(m))
-                    .unwrap_or(false)
-                || below_confidence.map(|c| k.confidence < c).unwrap_or(false)
+                    .unwrap_or(true)
+                && below_confidence.map(|c| k.confidence < c).unwrap_or(true)
+        })
+        // At least one criterion must be provided (avoid deleting everything)
+        .filter(|_| {
+            title_match.is_some()
+                || type_match.is_some()
+                || project_match.is_some()
+                || below_confidence.is_some()
         })
         .map(|k| k.uuid.clone())
         .collect();
@@ -358,8 +371,11 @@ pub fn merge_project(
         .iter()
         .filter_map(|n| n.uuid.as_deref())
         .collect();
-    data.links
-        .retain(|l| valid_node_uuids.contains(l.node_uuid.as_str()) || l.node_uuid.is_empty());
+    data.links.retain(|l| {
+        l.is_knowledge_link()
+            || valid_node_uuids.contains(l.node_uuid.as_str())
+            || l.node_uuid.is_empty()
+    });
 
     save(h5_path, &data)
 }
@@ -384,8 +400,11 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
         .iter()
         .filter_map(|n| n.uuid.as_deref())
         .collect();
-    data.links
-        .retain(|l| valid_node_uuids.contains(l.node_uuid.as_str()) || l.node_uuid.is_empty());
+    data.links.retain(|l| {
+        l.is_knowledge_link()
+            || valid_node_uuids.contains(l.node_uuid.as_str())
+            || l.node_uuid.is_empty()
+    });
 
     save(h5_path, &data)?;
     Ok(before - data.extraction.nodes.len())

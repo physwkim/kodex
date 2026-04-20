@@ -177,6 +177,9 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
                         .copied()
                         .filter(|b| !b.is_ascii_whitespace())
                         .collect();
+                    if normalized.is_empty() {
+                        return None; // skip empty/whitespace-only bodies
+                    }
                     let mut hasher = Sha256::new();
                     hasher.update(&normalized);
                     let hash = format!("{:x}", hasher.finalize());
