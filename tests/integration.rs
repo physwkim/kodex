@@ -158,7 +158,7 @@ fn test_extract_go() {
 }
 
 #[test]
-#[cfg(feature = "extract")]
+#[cfg(feature = "lang-python")]
 fn test_full_pipeline_on_fixtures() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let (nodes, edges) = run_pipeline(&dir);

@@ -86,20 +86,13 @@ pub fn run_pipeline(path: &Path) {
     let communities = kodex::cluster::cluster(&graph);
     println!("  detected {} communities", communities.len());
 
-    // Save to global h5
+    // Merge into global h5
     let h5_path = kodex::registry::global_h5();
     let _ = std::fs::create_dir_all(kodex::registry::kodex_home());
 
-    // If global h5 exists, remove old project nodes first, then merge
-    if h5_path.exists() {
-        let _ = kodex::storage::forget_project(&h5_path, project_name);
-    }
-
-    // For fresh file or after cleanup, save
-    if let Err(e) = kodex::storage::save_hdf5(&graph, &communities, &h5_path) {
-        eprintln!("  HDF5 error: {e}");
-    } else {
-        println!("  saved to {}", h5_path.display());
+    match kodex::storage::merge_project(&h5_path, project_name, &extraction) {
+        Ok(()) => println!("  merged into {}", h5_path.display()),
+        Err(e) => eprintln!("  HDF5 error: {e}"),
     }
 
     // Register project

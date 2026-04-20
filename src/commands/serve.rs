@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 /// Start MCP stdio server. Connects to actor (starts it if needed).
+/// The graph_path argument is unused — actor always uses ~/.kodex/kodex.h5.
 pub fn serve(_graph_path: &Path) {
     // Ensure actor is running
     if let Err(e) = kodex::actor::ensure_running() {

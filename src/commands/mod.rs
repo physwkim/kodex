@@ -34,22 +34,6 @@ pub fn community_labels(
         .collect()
 }
 
-/// Helper: export all formats to out_dir.
-pub fn export_all(
-    graph: &kodex::graph::KodexGraph,
-    communities: &std::collections::HashMap<usize, Vec<String>>,
-    community_labels: &std::collections::HashMap<usize, String>,
-    out_dir: &Path,
-) {
-    let _ = kodex::storage::save_hdf5(graph, communities, &kodex::registry::global_h5());
-    let _ = kodex::export::to_html(
-        graph,
-        communities,
-        &out_dir.join("graph.html"),
-        Some(community_labels),
-    );
-}
-
 pub fn path(source: &str, target: &str, graph_path: &Path) {
     let graph = match load_graph(graph_path) {
         Some(g) => g,
@@ -143,28 +127,50 @@ pub fn update(path: &Path) {
 
     #[cfg(feature = "extract")]
     {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let project_name = canonical
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
         println!("  extracting {} code files...", code_paths.len());
-        let extraction = kodex::extract::extract(&code_paths, Some(path));
-        let graph = kodex::graph::build_from_extraction(&extraction);
-        let communities = kodex::cluster::cluster(&graph);
-        let labels = community_labels(&graph, &communities);
-        let out_dir = path.join("kodex-out");
-        let _ = std::fs::create_dir_all(&out_dir);
-        export_all(&graph, &communities, &labels, &out_dir);
-        println!(
-            "  updated: {} nodes, {} edges",
-            graph.node_count(),
-            graph.edge_count()
-        );
+        let mut extraction = kodex::extract::extract(&code_paths, Some(path));
+        // Tag with project name
+        for node in &mut extraction.nodes {
+            if !node.source_file.starts_with(project_name) {
+                node.source_file = format!(
+                    "{project_name}/{}",
+                    node.source_file.trim_start_matches('/')
+                );
+            }
+        }
+        for edge in &mut extraction.edges {
+            if !edge.source_file.starts_with(project_name) {
+                edge.source_file = format!(
+                    "{project_name}/{}",
+                    edge.source_file.trim_start_matches('/')
+                );
+            }
+        }
+
+        let h5 = kodex::registry::global_h5();
+        match kodex::storage::merge_project(&h5, project_name, &extraction) {
+            Ok(()) => println!(
+                "  merged: {} nodes, {} edges",
+                extraction.nodes.len(),
+                extraction.edges.len()
+            ),
+            Err(e) => eprintln!("  merge error: {e}"),
+        }
     }
 
     #[cfg(not(feature = "extract"))]
     println!("  extract feature not enabled");
 }
 
-pub fn cluster_only(path: &Path) {
-    let graph_path = kodex::registry::global_h5();
-    let graph = match load_graph(&graph_path) {
+pub fn cluster_only(_path: &Path) {
+    let h5 = kodex::registry::global_h5();
+    let graph = match load_graph(&h5) {
         Some(g) => g,
         None => return,
     };
@@ -180,10 +186,24 @@ pub fn cluster_only(path: &Path) {
         );
     }
 
-    let labels = community_labels(&graph, &communities);
-    let out_dir = path.join("kodex-out");
-    export_all(&graph, &communities, &labels, &out_dir);
-    println!("  re-exported kodex.h5, graph.html");
+    // Preserve knowledge, re-save with new communities
+    let knowledge = kodex::storage::load_knowledge_entries(&h5).unwrap_or_default();
+    let (kt, kty, kd, kc, ko, kr, ktg) = kodex::storage::unpack_knowledge(knowledge);
+    match kodex::storage::save_hdf5_with_knowledge_pub(
+        &graph,
+        &communities,
+        &h5,
+        &kt,
+        &kty,
+        &kd,
+        &kc,
+        &ko,
+        &kr,
+        &ktg,
+    ) {
+        Ok(()) => println!("  saved to {}", h5.display()),
+        Err(e) => eprintln!("  save error: {e}"),
+    }
 }
 
 #[allow(unused_variables)]
