@@ -131,30 +131,16 @@ fn find_memory_files(claude_dir: &Path) -> Vec<(PathBuf, Option<String>)> {
 fn parse_frontmatter_and_body(
     content: &str,
 ) -> (std::collections::HashMap<String, String>, String) {
-    let mut map = std::collections::HashMap::new();
-
-    if !content.starts_with("---") {
-        return (map, content.to_string());
-    }
-
-    let rest = &content[3..];
-    let end = match rest.find("\n---") {
-        Some(pos) => pos,
-        None => return (map, content.to_string()),
-    };
-
-    let fm = &rest[..end];
-    for line in fm.lines() {
-        if let Some((key, value)) = line.split_once(':') {
-            let k = key.trim().to_string();
-            let v = value.trim().trim_matches('"').to_string();
-            if !k.is_empty() && !v.is_empty() {
-                map.insert(k, v);
-            }
+    let map = crate::vault::parse_frontmatter(content);
+    // Extract body: skip past closing ---
+    let body = if let Some(rest) = content.strip_prefix("---") {
+        match rest.find("\n---") {
+            Some(pos) => rest[pos + 4..].trim().to_string(),
+            None => content.to_string(),
         }
-    }
-
-    let body = rest[end + 4..].trim().to_string();
+    } else {
+        content.to_string()
+    };
     (map, body)
 }
 

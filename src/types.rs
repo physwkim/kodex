@@ -310,3 +310,15 @@ pub struct KodexData {
     pub knowledge: Vec<KnowledgeEntry>,
     pub links: Vec<KnowledgeLink>,
 }
+
+impl KodexData {
+    /// Look up body_hash for a node by UUID. Used for link snapshots.
+    pub fn node_body_hash(&self, node_uuid: &str) -> String {
+        self.extraction
+            .nodes
+            .iter()
+            .find(|n| n.uuid.as_deref() == Some(node_uuid))
+            .and_then(|n| n.body_hash.clone())
+            .unwrap_or_default()
+    }
+}

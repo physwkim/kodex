@@ -40,9 +40,6 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
 /// Current storage format version.
 const CURRENT_VERSION: &str = "0.5.0";
 
-/// Known versions and their migration paths.
-#[allow(dead_code)]
-const KNOWN_VERSIONS: &[&str] = &["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0"];
 
 pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
@@ -283,13 +280,7 @@ pub fn append_knowledge_with_uuid(
             .retain(|l| l.knowledge_uuid != k_uuid || l.is_knowledge_link());
         for node_ref in nodes {
             // Snapshot body_hash at link time for drift detection
-            let linked_bh = data
-                .extraction
-                .nodes
-                .iter()
-                .find(|n| n.uuid.as_deref() == Some(node_ref.as_str()))
-                .and_then(|n| n.body_hash.clone())
-                .unwrap_or_default();
+            let linked_bh = data.node_body_hash(node_ref);
             data.links.push(KnowledgeLink {
                 knowledge_uuid: k_uuid.clone(),
                 node_uuid: node_ref.clone(),

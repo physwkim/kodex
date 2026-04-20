@@ -67,10 +67,10 @@ pub struct Knowledge {
     pub observations: u32,
     /// Tags for querying
     pub tags: Vec<String>,
-    /// When first observed (unix timestamp)
-    pub first_seen: u64,
-    /// When last reinforced
-    pub last_seen: u64,
+    /// When first created (unix timestamp)
+    pub created_at: u64,
+    /// When last updated (unix timestamp)
+    pub updated_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -182,8 +182,8 @@ pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -
                 observations: k.observations,
                 related_nodes: related,
                 tags: k.tags,
-                first_seen: 0,
-                last_seen: 0,
+                created_at: k.created_at,
+                updated_at: k.updated_at,
             }
         })
         .collect()
@@ -692,8 +692,8 @@ pub fn recall_for_task(
                 observations: k.observations,
                 related_nodes: related,
                 tags: k.tags.clone(),
-                first_seen: 0,
-                last_seen: 0,
+                created_at: k.created_at,
+                updated_at: k.updated_at,
             };
             let score = relevance_score(&knowledge, k, &ctx);
             (score, knowledge)
@@ -938,13 +938,7 @@ pub fn link_knowledge_to_nodes(
         });
         if !exists {
             // Snapshot body_hash for drift detection
-            let linked_bh = data
-                .extraction
-                .nodes
-                .iter()
-                .find(|n| n.uuid.as_deref() == Some(node_uuid.as_str()))
-                .and_then(|n| n.body_hash.clone())
-                .unwrap_or_default();
+            let linked_bh = data.node_body_hash(node_uuid);
             data.links.push(crate::types::KnowledgeLink {
                 knowledge_uuid: knowledge_uuid.to_string(),
                 node_uuid: node_uuid.clone(),

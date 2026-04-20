@@ -236,7 +236,7 @@ fn collect_md_files(dir: &Path) -> crate::error::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn parse_frontmatter(content: &str) -> HashMap<String, String> {
+pub fn parse_frontmatter(content: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     if !content.starts_with("---") {
         return map;
