@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.1 (2026-04-21)
+
+- **Critical fix**: save writes extraction data directly, no graph rebuild (was losing nodes/edges on every learn call)
+- Default features now include all-languages (14 parsers)
+- Actor: set accepted streams to blocking mode (was causing broken pipe)
+
 ## v0.2.0 (2026-04-21)
 
 - Zstd compression for HDF5 vlen strings (12MB → 3.3MB, 72% reduction)
