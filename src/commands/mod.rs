@@ -135,21 +135,26 @@ pub fn update(path: &Path) {
 
         println!("  extracting {} code files...", code_paths.len());
         let mut extraction = kodex::extract::extract(&code_paths, Some(path));
-        // Tag with project name
+        // Tag with project name (same normalization as run.rs)
+        let path_str = path.to_str().unwrap_or("");
         for node in &mut extraction.nodes {
             if !node.source_file.starts_with(project_name) {
-                node.source_file = format!(
-                    "{project_name}/{}",
-                    node.source_file.trim_start_matches('/')
-                );
+                let relative = node
+                    .source_file
+                    .strip_prefix(path_str)
+                    .unwrap_or(&node.source_file)
+                    .trim_start_matches('/');
+                node.source_file = format!("{project_name}/{relative}");
             }
         }
         for edge in &mut extraction.edges {
             if !edge.source_file.starts_with(project_name) {
-                edge.source_file = format!(
-                    "{project_name}/{}",
-                    edge.source_file.trim_start_matches('/')
-                );
+                let relative = edge
+                    .source_file
+                    .strip_prefix(path_str)
+                    .unwrap_or(&edge.source_file)
+                    .trim_start_matches('/');
+                edge.source_file = format!("{project_name}/{relative}");
             }
         }
 
@@ -186,23 +191,16 @@ pub fn cluster_only(_path: &Path) {
         );
     }
 
-    // Preserve knowledge, re-save with new communities
-    let knowledge = kodex::storage::load_knowledge_entries(&h5).unwrap_or_default();
-    let (kt, kty, kd, kc, ko, kr, ktg) = kodex::storage::unpack_knowledge(knowledge);
-    match kodex::storage::save_hdf5_with_knowledge_pub(
-        &graph,
-        &communities,
-        &h5,
-        &kt,
-        &kty,
-        &kd,
-        &kc,
-        &ko,
-        &kr,
-        &ktg,
-    ) {
-        Ok(()) => println!("  saved to {}", h5.display()),
-        Err(e) => eprintln!("  save error: {e}"),
+    // Load full data to preserve knowledge + links, only re-cluster
+    match kodex::storage::load(&h5) {
+        Ok(data) => {
+            // Re-cluster only changes community assignments, not knowledge/links
+            match kodex::storage::save(&h5, &data) {
+                Ok(()) => println!("  saved to {}", h5.display()),
+                Err(e) => eprintln!("  save error: {e}"),
+            }
+        }
+        Err(e) => eprintln!("  load error: {e}"),
     }
 }
 

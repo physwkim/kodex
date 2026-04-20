@@ -221,12 +221,10 @@ pub fn append_knowledge_with_uuid(
         });
         new_uuid
     };
-    for node_ref in related_nodes {
-        if !data
-            .links
-            .iter()
-            .any(|l| l.knowledge_uuid == k_uuid && l.node_uuid == *node_ref)
-        {
+    // Replace links for this knowledge (not accumulate)
+    if !related_nodes.is_empty() {
+        data.links.retain(|l| l.knowledge_uuid != k_uuid);
+        for node_ref in related_nodes {
             data.links.push(KnowledgeLink {
                 knowledge_uuid: k_uuid.clone(),
                 node_uuid: node_ref.clone(),
@@ -335,6 +333,17 @@ pub fn merge_project(
     crate::fingerprint::assign_stable_ids(&old_project_nodes, &mut new_nodes);
     data.extraction.nodes.extend(new_nodes);
     data.extraction.edges.extend(new_extraction.edges.clone());
+
+    // Clean stale links — remove links to node UUIDs that no longer exist
+    let valid_node_uuids: std::collections::HashSet<&str> = data
+        .extraction
+        .nodes
+        .iter()
+        .filter_map(|n| n.uuid.as_deref())
+        .collect();
+    data.links
+        .retain(|l| valid_node_uuids.contains(l.node_uuid.as_str()) || l.node_uuid.is_empty());
+
     save(h5_path, &data)
 }
 
@@ -350,6 +359,17 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
     data.extraction
         .edges
         .retain(|e| !e.source_file.starts_with(project_path));
+
+    // Clean stale links
+    let valid_node_uuids: std::collections::HashSet<&str> = data
+        .extraction
+        .nodes
+        .iter()
+        .filter_map(|n| n.uuid.as_deref())
+        .collect();
+    data.links
+        .retain(|l| valid_node_uuids.contains(l.node_uuid.as_str()) || l.node_uuid.is_empty());
+
     save(h5_path, &data)?;
     Ok(before - data.extraction.nodes.len())
 }

@@ -11,7 +11,7 @@ use crate::types::Node;
 /// Generate a fingerprint for a node based on its structural properties.
 /// Combines: symbol kind + normalized signature + source context.
 pub fn compute_fingerprint(
-    label: &str,
+    _label: &str,
     file_type: &str,
     source_file: &str,
     source_location: Option<&str>,
@@ -23,16 +23,13 @@ pub fn compute_fingerprint(
     hasher.update(file_type.as_bytes());
     hasher.update(b"|");
 
-    // Normalized signature: strip parens, lowercase
-    let norm_sig = label
-        .trim_end_matches("()")
-        .to_lowercase()
-        .replace(|c: char| !c.is_alphanumeric() && c != '_', "");
-    hasher.update(norm_sig.as_bytes());
-    hasher.update(b"|");
+    // NOTE: label is intentionally excluded from fingerprint.
+    // This allows renames to keep the same fingerprint.
+    // Matching relies on file path + line proximity + body content.
 
-    // File path (contributes to location awareness)
-    hasher.update(source_file.as_bytes());
+    // File path (filename only, not full path — survives directory moves)
+    let filename = source_file.rsplit('/').next().unwrap_or(source_file);
+    hasher.update(filename.as_bytes());
     hasher.update(b"|");
 
     // Line number proximity hint
@@ -78,31 +75,30 @@ pub fn match_score(old: &Node, new: &Node) -> f64 {
         }
     }
 
-    // Same file
-    max_score += 15.0;
+    // Same file (strongest non-fingerprint signal)
+    max_score += 25.0;
     if old.source_file == new.source_file {
-        score += 15.0;
+        score += 25.0;
     } else {
-        // Same filename different path (moved file)
         let old_name = old.source_file.rsplit('/').next().unwrap_or("");
         let new_name = new.source_file.rsplit('/').next().unwrap_or("");
         if !old_name.is_empty() && old_name == new_name {
-            score += 8.0;
+            score += 15.0;
         }
     }
 
     // Line proximity (within 20 lines)
-    max_score += 10.0;
+    max_score += 15.0;
     if let (Some(old_loc), Some(new_loc)) = (&old.source_location, &new.source_location) {
         let old_line: i64 = old_loc.trim_start_matches('L').parse().unwrap_or(0);
         let new_line: i64 = new_loc.trim_start_matches('L').parse().unwrap_or(0);
         let diff = (old_line - new_line).unsigned_abs();
         if diff == 0 {
-            score += 10.0;
+            score += 15.0;
         } else if diff <= 5 {
-            score += 7.0;
+            score += 12.0;
         } else if diff <= 20 {
-            score += 3.0;
+            score += 6.0;
         }
     }
 
@@ -143,7 +139,7 @@ pub fn match_score(old: &Node, new: &Node) -> f64 {
 }
 
 /// Threshold for considering two nodes the same entity.
-const MATCH_THRESHOLD: f64 = 0.6;
+const MATCH_THRESHOLD: f64 = 0.4;
 
 /// Match new nodes against existing nodes, assigning UUIDs.
 ///
@@ -256,12 +252,12 @@ mod tests {
         let old = make_node("authenticate()", "auth.py", "L42");
         let mut new_nodes = vec![make_node("verify_token()", "auth.py", "L44")];
         new_nodes[0].uuid = None;
-        new_nodes[0].fingerprint = None; // different fingerprint
+        new_nodes[0].fingerprint = None;
 
         assign_stable_ids(std::slice::from_ref(&old), &mut new_nodes);
-        // Score: same file (15) + close line (7) + same type (10) = 32/100 = 0.32
-        // Below threshold → new UUID
-        assert_ne!(new_nodes[0].uuid, old.uuid);
+        // same file(25) + close line(12) + same type(10) = 47/100 = 0.47 > 0.4
+        // Rename in same file → UUID preserved
+        assert_eq!(new_nodes[0].uuid, old.uuid);
     }
 
     #[test]
