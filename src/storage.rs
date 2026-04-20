@@ -1004,7 +1004,7 @@ fn write_vlen(
             name,
             &refs,
             VLEN_CHUNK_SIZE,
-            rust_hdf5::FilterPipeline::lz4(),
+            rust_hdf5::FilterPipeline::zstd(3),
         )
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))
 }

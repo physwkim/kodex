@@ -137,7 +137,9 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
         }
 
         let owned = trimmed.to_string();
-        let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process_request(&owned))) {
+        let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            process_request(&owned)
+        })) {
             Ok(r) => r,
             Err(_) => {
                 let id = serde_json::from_str::<serde_json::Value>(trimmed)

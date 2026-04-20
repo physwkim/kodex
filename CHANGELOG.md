@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.0 (2026-04-21)
+
+- Zstd compression for HDF5 vlen strings (12MB → 3.3MB, 72% reduction)
+- rust-hdf5 0.2.6 (O(n²) GCOL fix, slice bounds fix, open_rw corruption fix)
+- MCP protocol: initialize handshake, tools/list, tools/call rewriting
+- MCP registration in ~/.claude.json (Claude Code v2.x compatible)
+- Hook format: matcher + hooks array
+- Panic-safe actor: catch_unwind on process_request
+
 ## v0.1.0 (2026-04-20)
 
 Initial release. Three generations of knowledge management in a single binary.
