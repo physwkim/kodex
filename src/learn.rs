@@ -1442,11 +1442,19 @@ pub fn merge_knowledge(
             && l.relation == "supersedes"
     });
     if !already_linked {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
         data.links.push(crate::types::KnowledgeLink {
             knowledge_uuid: uuid_keep.to_string(),
             node_uuid: uuid_absorb.to_string(),
             relation: "supersedes".to_string(),
             target_type: "knowledge".to_string(),
+            confidence: 1.0,
+            created_at: now,
+            source: "agent".to_string(),
+            reason: "duplicate merge".to_string(),
             ..Default::default()
         });
     }
@@ -1484,6 +1492,10 @@ pub fn link_knowledge_to_knowledge(
     bidirectional: bool,
 ) -> crate::error::Result<()> {
     let mut data = crate::storage::load(h5_path)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     // Verify both exist
     let source_exists = data.knowledge.iter().any(|k| k.uuid == source_uuid);
@@ -1512,6 +1524,9 @@ pub fn link_knowledge_to_knowledge(
             node_uuid: target_uuid.to_string(),
             relation: relation.to_string(),
             target_type: "knowledge".to_string(),
+            confidence: 1.0,
+            created_at: now,
+            source: "agent".to_string(),
             ..Default::default()
         });
     }
@@ -1538,6 +1553,9 @@ pub fn link_knowledge_to_knowledge(
                 node_uuid: source_uuid.to_string(),
                 relation: reverse_rel.to_string(),
                 target_type: "knowledge".to_string(),
+                confidence: 1.0,
+                created_at: now,
+                source: "agent".to_string(),
                 ..Default::default()
             });
         }
