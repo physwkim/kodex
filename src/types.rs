@@ -84,7 +84,7 @@ impl fmt::Display for Confidence {
 }
 
 // ---------------------------------------------------------------------------
-// Node
+// Node — code entity with stable UUID
 // ---------------------------------------------------------------------------
 
 fn default_weight() -> f64 {
@@ -112,7 +112,7 @@ pub struct Node {
     /// Stable UUID — survives renames, moves, refactors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uuid: Option<String>,
-    /// Fingerprint for re-extraction matching (normalized signature + body hash).
+    /// Fingerprint for re-extraction matching.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
     /// Human-readable logical key: project/module.py::Class.method
@@ -218,4 +218,41 @@ pub struct DetectedFiles {
     pub paper: Vec<String>,
     pub image: Vec<String>,
     pub video: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// KnowledgeEntry — knowledge entity with its own UUID
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntry {
+    pub uuid: String,
+    pub title: String,
+    pub knowledge_type: String,
+    pub description: String,
+    pub confidence: f64,
+    pub observations: u32,
+    pub tags: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// KnowledgeLink — knowledge_uuid ↔ node_uuid
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeLink {
+    pub knowledge_uuid: String,
+    pub node_uuid: String,
+    pub relation: String,
+}
+
+// ---------------------------------------------------------------------------
+// KodexData — complete h5 contents as a struct
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+pub struct KodexData {
+    pub extraction: ExtractionResult,
+    pub knowledge: Vec<KnowledgeEntry>,
+    pub links: Vec<KnowledgeLink>,
 }

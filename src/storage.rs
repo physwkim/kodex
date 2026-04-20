@@ -143,8 +143,8 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
 
 /// Append a knowledge entry to an existing HDF5 file.
 ///
-/// Opens the file in read-write mode and adds datasets to /knowledge/ group.
-/// Does NOT reload the entire graph — true incremental write.
+/// Knowledge entries have their own UUID (knowledge_uuid).
+/// Links between knowledge and code nodes are stored in /links/ group.
 #[allow(clippy::too_many_arguments)]
 pub fn append_knowledge(
     h5_path: &Path,
@@ -164,17 +164,21 @@ pub fn append_knowledge(
 
     // Load existing knowledge
     let (
+        mut k_uuids,
         mut titles,
         mut types,
         mut descriptions,
         mut confidences,
         mut obs,
-        mut related,
         mut tag_list,
+        mut link_k_uuids,
+        mut link_n_uuids,
+        mut link_relations,
     ) = {
         let file = H5File::open(h5_path)
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
 
+        let ku = read_vlen(&file, "knowledge/uuid").unwrap_or_default();
         let t = read_vlen(&file, "knowledge/titles").unwrap_or_default();
         let ty = read_vlen(&file, "knowledge/types").unwrap_or_default();
         let d = read_vlen(&file, "knowledge/descriptions").unwrap_or_default();
@@ -186,29 +190,21 @@ pub fn append_knowledge(
             .dataset("knowledge/observations")
             .and_then(|ds| ds.read_raw())
             .unwrap_or_default();
-        let r = read_vlen(&file, "knowledge/related").unwrap_or_default();
         let tl = read_vlen(&file, "knowledge/tags").unwrap_or_default();
-        (t, ty, d, c, o, r, tl)
+        let lk = read_vlen(&file, "links/knowledge_uuid").unwrap_or_default();
+        let ln = read_vlen(&file, "links/node_uuid").unwrap_or_default();
+        let lr = read_vlen(&file, "links/relation").unwrap_or_default();
+        (ku, t, ty, d, c, o, tl, lk, ln, lr)
     };
 
-    // Check if exists — reinforce
+    // Check if exists — reinforce by title match
     let existing_idx = titles.iter().position(|t| t == title);
-    if let Some(idx) = existing_idx {
+    let knowledge_uuid = if let Some(idx) = existing_idx {
         obs[idx] += 1;
         confidences[idx] = 1.0 - (1.0 - confidences[idx]) * 0.8;
         if !description.is_empty() && descriptions[idx] != description {
             descriptions[idx] = format!("{}\n---\n{}", descriptions[idx], description);
         }
-        // Merge related nodes
-        let existing_related: Vec<&str> =
-            related[idx].split(',').filter(|s| !s.is_empty()).collect();
-        let mut merged: Vec<String> = existing_related.iter().map(|s| s.to_string()).collect();
-        for node in related_nodes {
-            if !merged.contains(node) {
-                merged.push(node.clone());
-            }
-        }
-        related[idx] = merged.join(",");
         // Merge tags
         let existing_tags: Vec<&str> = tag_list[idx].split(',').filter(|s| !s.is_empty()).collect();
         let mut merged_tags: Vec<String> = existing_tags.iter().map(|s| s.to_string()).collect();
@@ -218,14 +214,31 @@ pub fn append_knowledge(
             }
         }
         tag_list[idx] = merged_tags.join(",");
+        k_uuids[idx].clone()
     } else {
+        // New knowledge entry
+        let new_uuid = uuid::Uuid::new_v4().to_string();
+        k_uuids.push(new_uuid.clone());
         titles.push(title.to_string());
         types.push(knowledge_type.to_string());
         descriptions.push(description.to_string());
         confidences.push(confidence);
         obs.push(observations);
-        related.push(related_nodes.join(","));
         tag_list.push(tags.join(","));
+        new_uuid
+    };
+
+    // Add links: knowledge_uuid → node_uuid (use node id as fallback for node_uuid)
+    for node_ref in related_nodes {
+        if !link_k_uuids
+            .iter()
+            .zip(link_n_uuids.iter())
+            .any(|(k, n)| k == &knowledge_uuid && n == node_ref)
+        {
+            link_k_uuids.push(knowledge_uuid.clone());
+            link_n_uuids.push(node_ref.clone());
+            link_relations.push("related_to".to_string());
+        }
     }
 
     // Rewrite knowledge group (open_rw can't delete existing datasets, so recreate file knowledge section)
@@ -233,19 +246,24 @@ pub fn append_knowledge(
     let graph = load_hdf5(h5_path)?;
     let communities = crate::cluster::cluster(&graph);
 
-    // Save with knowledge
+    // Save with knowledge (related moved to /links/ group)
+    let empty_related: Vec<String> = Vec::new();
     save_hdf5_with_knowledge(
         &graph,
         &communities,
         h5_path,
+        &k_uuids,
         &titles,
         &types,
         &descriptions,
         &confidences,
         &obs,
-        &related,
+        &empty_related,
         &tag_list,
-    )
+    )?;
+
+    // Save links separately by reopening
+    save_links(h5_path, &link_k_uuids, &link_n_uuids, &link_relations)
 }
 
 /// Load knowledge entries from HDF5.
