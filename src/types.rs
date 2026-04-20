@@ -257,6 +257,15 @@ pub struct KnowledgeEntry {
     /// UUID of knowledge entry that supersedes this one
     #[serde(default)]
     pub superseded_by: String,
+    /// Evidence: file/PR/commit/observation that produced this knowledge
+    #[serde(default)]
+    pub evidence: String,
+    /// When first created (unix timestamp)
+    #[serde(default)]
+    pub created_at: u64,
+    /// When last updated (unix timestamp)
+    #[serde(default)]
+    pub updated_at: u64,
 }
 
 // ---------------------------------------------------------------------------

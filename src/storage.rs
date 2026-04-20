@@ -38,11 +38,11 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
 }
 
 /// Current storage format version.
-const CURRENT_VERSION: &str = "0.4.0";
+const CURRENT_VERSION: &str = "0.5.0";
 
 /// Known versions and their migration paths.
 #[allow(dead_code)]
-const KNOWN_VERSIONS: &[&str] = &["0.1.0", "0.2.0", "0.3.0", "0.4.0"];
+const KNOWN_VERSIONS: &[&str] = &["0.1.0", "0.2.0", "0.3.0", "0.4.0", "0.5.0"];
 
 pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
@@ -105,13 +105,16 @@ fn migrate(data: &mut KodexData, from_version: &str) {
     }
 
     // v0.3.0 → v0.4.0: knowledge entries get new metadata fields (defaulted)
-    if from_version == "0.1.0" || from_version == "0.2.0" || from_version == "0.3.0" {
+    if from_version < "0.4.0" {
         for entry in &mut data.knowledge {
             if entry.status.is_empty() {
                 entry.status = "active".to_string();
             }
         }
     }
+
+    // v0.4.0 → v0.5.0: evidence + created_at + updated_at (defaulted to 0)
+    // No explicit migration needed — fields default to empty/0 via read_knowledge
 }
 
 pub fn load_graph(path: &Path) -> crate::error::Result<KodexGraph> {
@@ -204,12 +207,17 @@ pub fn append_knowledge_with_uuid(
             )));
         }
     }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let existing =
         knowledge_uuid.and_then(|uuid| data.knowledge.iter_mut().find(|k| k.uuid == uuid));
     let k_uuid = if let Some(entry) = existing {
         // Update existing entry (UUID stays the same)
         entry.observations += 1;
         entry.confidence = 1.0 - (1.0 - entry.confidence) * 0.8;
+        entry.updated_at = now;
         // Title can change — it's display-only, not a key
         if !title.is_empty() {
             entry.title = title.to_string();
@@ -248,6 +256,9 @@ pub fn append_knowledge_with_uuid(
             applies_when: String::new(),
             supersedes: String::new(),
             superseded_by: String::new(),
+            evidence: String::new(),
+            created_at: now,
+            updated_at: now,
         });
         new_uuid
     };
@@ -540,9 +551,12 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
     let aw: Vec<String> = knowledge.iter().map(|k| k.applies_when.clone()).collect();
     let sp: Vec<String> = knowledge.iter().map(|k| k.supersedes.clone()).collect();
     let sb: Vec<String> = knowledge.iter().map(|k| k.superseded_by.clone()).collect();
+    let ev: Vec<String> = knowledge.iter().map(|k| k.evidence.clone()).collect();
     let co: Vec<f64> = knowledge.iter().map(|k| k.confidence).collect();
     let ob: Vec<u32> = knowledge.iter().map(|k| k.observations).collect();
     let lv: Vec<u64> = knowledge.iter().map(|k| k.last_validated_at).collect();
+    let ca: Vec<u64> = knowledge.iter().map(|k| k.created_at).collect();
+    let ua: Vec<u64> = knowledge.iter().map(|k| k.updated_at).collect();
     write_vlen(&grp, "uuid", &uu)?;
     write_vlen(&grp, "titles", &ti)?;
     write_vlen(&grp, "types", &ty)?;
@@ -554,6 +568,7 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
     write_vlen(&grp, "applies_when", &aw)?;
     write_vlen(&grp, "supersedes", &sp)?;
     write_vlen(&grp, "superseded_by", &sb)?;
+    write_vlen(&grp, "evidence", &ev)?;
     grp.new_dataset::<f64>()
         .shape([co.len()])
         .create("confidence")
@@ -568,6 +583,16 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
         .shape([lv.len()])
         .create("last_validated_at")
         .and_then(|ds| ds.write_raw(&lv))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    grp.new_dataset::<u64>()
+        .shape([ca.len()])
+        .create("created_at")
+        .and_then(|ds| ds.write_raw(&ca))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    grp.new_dataset::<u64>()
+        .shape([ua.len()])
+        .create("updated_at")
+        .and_then(|ds| ds.write_raw(&ua))
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     Ok(())
 }
@@ -728,6 +753,7 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
     let aw = read_vlen(file, "knowledge/applies_when").unwrap_or_default();
     let sp = read_vlen(file, "knowledge/supersedes").unwrap_or_default();
     let sb = read_vlen(file, "knowledge/superseded_by").unwrap_or_default();
+    let ev = read_vlen(file, "knowledge/evidence").unwrap_or_default();
     let co: Vec<f64> = file
         .dataset("knowledge/confidence")
         .and_then(|ds| ds.read_raw())
@@ -738,6 +764,14 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
         .unwrap_or_default();
     let lv: Vec<u64> = file
         .dataset("knowledge/last_validated_at")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let ca: Vec<u64> = file
+        .dataset("knowledge/created_at")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let ua: Vec<u64> = file
+        .dataset("knowledge/updated_at")
         .and_then(|ds| ds.read_raw())
         .unwrap_or_default();
     let s = |v: &[String], i: usize| -> String { v.get(i).cloned().unwrap_or_default() };
@@ -772,6 +806,9 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
             applies_when: s(&aw, i),
             supersedes: s(&sp, i),
             superseded_by: s(&sb, i),
+            evidence: s(&ev, i),
+            created_at: ca.get(i).copied().unwrap_or(0),
+            updated_at: ua.get(i).copied().unwrap_or(0),
         })
         .collect())
 }

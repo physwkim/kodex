@@ -612,7 +612,7 @@ pub fn recall_for_task(
 
 /// Build a task-specific briefing for the agent.
 ///
-/// Returns structured context: relevant knowledge, stale warnings, related patterns.
+/// Returns structured context: relevant knowledge, stale warnings, conflicts, health.
 pub fn get_task_context(
     h5_path: &Path,
     question: &str,
@@ -646,7 +646,14 @@ pub fn get_task_context(
 
     let mut ctx = String::new();
 
-    // Relevant knowledge
+    // Relevant knowledge with reasons
+    let query_tokens: Vec<String> = question
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .map(String::from)
+        .collect();
+
     ctx.push_str(&format!("## Relevant Knowledge ({} items)\n\n", items.len()));
     for k in &items {
         let conf = (k.confidence * 100.0) as u32;
@@ -658,25 +665,67 @@ pub fn get_task_context(
         } else {
             summary.to_string()
         };
+
+        // Build reason string
+        let mut reasons = Vec::new();
+        if k.related_nodes.iter().any(|r| file_node_uuids.contains(r)) {
+            reasons.push("linked to code in scope");
+        }
+        let touched_fns: Vec<&str> = touched_files
+            .iter()
+            .map(|f| f.rsplit('/').next().unwrap_or(f.as_str()))
+            .collect();
+        if touched_fns.iter().any(|f| k.title.contains(f) || k.description.contains(f)) {
+            reasons.push("mentions touched file");
+        }
+        if !query_tokens.is_empty()
+            && query_tokens.iter().any(|t| {
+                k.title.to_lowercase().contains(t.as_str())
+                    || k.description.to_lowercase().contains(t.as_str())
+            })
+        {
+            reasons.push("matches query");
+        }
+        if reasons.is_empty() {
+            reasons.push("high confidence");
+        }
+
         ctx.push_str(&format!(
-            "- **{}** ({conf}%{status_tag}) — {summary}\n",
-            k.title
+            "- **{}** ({conf}%{status_tag}) — {summary} [{}]\n",
+            k.title,
+            reasons.join(", "),
         ));
     }
     ctx.push('\n');
 
-    // Stale warnings
-    let stale: Vec<&Knowledge> = items
-        .iter()
-        .filter(|k| k.confidence < 0.4)
-        .collect();
+    // Stale/low-confidence warnings
+    let stale: Vec<&Knowledge> = items.iter().filter(|k| k.confidence < 0.4).collect();
     if !stale.is_empty() {
-        ctx.push_str("## Stale/Low-Confidence Warnings\n\n");
+        ctx.push_str("## Warnings\n\n");
         for k in stale {
             ctx.push_str(&format!(
-                "- ⚠ **{}** ({}%) — may be outdated\n",
+                "- **{}** ({}%) — may be outdated, needs validation\n",
                 k.title,
                 (k.confidence * 100.0) as u32
+            ));
+        }
+        ctx.push('\n');
+    }
+
+    // Conflicts in scope
+    let conflicts = detect_conflicts(h5_path);
+    let relevant_conflicts: Vec<&KnowledgeConflict> = conflicts
+        .iter()
+        .filter(|c| {
+            items.iter().any(|k| k.uuid == c.uuid_a || k.uuid == c.uuid_b)
+        })
+        .collect();
+    if !relevant_conflicts.is_empty() {
+        ctx.push_str("## Conflicts\n\n");
+        for c in relevant_conflicts {
+            ctx.push_str(&format!(
+                "- {} vs {} — {}\n",
+                c.title_a, c.title_b, c.description
             ));
         }
         ctx.push('\n');
@@ -1436,6 +1485,220 @@ pub fn render_knowledge_graph(nodes: &[KnowledgeGraphNode]) -> String {
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// Conflict detection
+// ---------------------------------------------------------------------------
+
+/// A conflict between two knowledge entries.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KnowledgeConflict {
+    pub uuid_a: String,
+    pub title_a: String,
+    pub uuid_b: String,
+    pub title_b: String,
+    pub conflict_type: String,
+    pub description: String,
+}
+
+/// Find conflicting knowledge entries:
+/// - Same scope with opposing decisions
+/// - Superseded but not marked obsolete
+/// - High-confidence entries with contradicts links
+pub fn detect_conflicts(h5_path: &Path) -> Vec<KnowledgeConflict> {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut conflicts = Vec::new();
+
+    // 1. Superseded but not obsolete
+    for entry in &data.knowledge {
+        if !entry.superseded_by.is_empty() && entry.status != "obsolete" {
+            if let Some(successor) = data.knowledge.iter().find(|k| k.uuid == entry.superseded_by) {
+                conflicts.push(KnowledgeConflict {
+                    uuid_a: entry.uuid.clone(),
+                    title_a: entry.title.clone(),
+                    uuid_b: successor.uuid.clone(),
+                    title_b: successor.title.clone(),
+                    conflict_type: "superseded_not_obsolete".into(),
+                    description: format!(
+                        "'{}' superseded by '{}' but still active",
+                        entry.title, successor.title
+                    ),
+                });
+            }
+        }
+    }
+
+    // 2. Contradicts links between active entries
+    for link in &data.links {
+        if link.is_knowledge_link() && link.relation == "contradicts" {
+            let a = data.knowledge.iter().find(|k| k.uuid == link.knowledge_uuid);
+            let b = data.knowledge.iter().find(|k| k.uuid == link.node_uuid);
+            if let (Some(a), Some(b)) = (a, b) {
+                if a.status == "active" && b.status == "active" {
+                    conflicts.push(KnowledgeConflict {
+                        uuid_a: a.uuid.clone(),
+                        title_a: a.title.clone(),
+                        uuid_b: b.uuid.clone(),
+                        title_b: b.title.clone(),
+                        conflict_type: "contradiction".into(),
+                        description: format!(
+                            "'{}' contradicts '{}', both active",
+                            a.title, b.title
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. Same type + same scope with different conclusions (decision/pattern conflicts)
+    let active: Vec<&crate::types::KnowledgeEntry> = data
+        .knowledge
+        .iter()
+        .filter(|k| {
+            k.status == "active"
+                && !k.scope.is_empty()
+                && (k.knowledge_type == "decision" || k.knowledge_type == "pattern")
+        })
+        .collect();
+    for i in 0..active.len() {
+        for j in (i + 1)..active.len() {
+            let a = active[i];
+            let b = active[j];
+            if a.knowledge_type == b.knowledge_type
+                && a.scope == b.scope
+                && knowledge_similarity(a, b) > 0.4
+                && knowledge_similarity(a, b) < 0.8
+            {
+                // Similar but not duplicate — potential conflict
+                conflicts.push(KnowledgeConflict {
+                    uuid_a: a.uuid.clone(),
+                    title_a: a.title.clone(),
+                    uuid_b: b.uuid.clone(),
+                    title_b: b.title.clone(),
+                    conflict_type: "scope_overlap".into(),
+                    description: format!(
+                        "Same scope '{}', same type '{}' — may conflict",
+                        a.scope, a.knowledge_type
+                    ),
+                });
+            }
+        }
+    }
+
+    conflicts
+}
+
+// ---------------------------------------------------------------------------
+// Observability
+// ---------------------------------------------------------------------------
+
+/// Health metrics for the knowledge base.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct KnowledgeHealth {
+    pub total_knowledge: usize,
+    pub active: usize,
+    pub tentative: usize,
+    pub needs_review: usize,
+    pub obsolete: usize,
+    pub total_links: usize,
+    pub node_links: usize,
+    pub knowledge_links: usize,
+    pub orphan_node_links: usize,
+    pub orphan_knowledge_links: usize,
+    pub duplicate_candidates: usize,
+    pub conflicts: usize,
+    pub avg_confidence: f64,
+    pub avg_observations: f64,
+    pub total_nodes: usize,
+}
+
+/// Compute health metrics for the knowledge base.
+pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => {
+            return KnowledgeHealth {
+                total_knowledge: 0, active: 0, tentative: 0, needs_review: 0, obsolete: 0,
+                total_links: 0, node_links: 0, knowledge_links: 0,
+                orphan_node_links: 0, orphan_knowledge_links: 0,
+                duplicate_candidates: 0, conflicts: 0,
+                avg_confidence: 0.0, avg_observations: 0.0, total_nodes: 0,
+            };
+        }
+    };
+
+    let valid_node_uuids: std::collections::HashSet<&str> = data
+        .extraction
+        .nodes
+        .iter()
+        .filter_map(|n| n.uuid.as_deref())
+        .collect();
+    let valid_knowledge_uuids: std::collections::HashSet<&str> =
+        data.knowledge.iter().map(|k| k.uuid.as_str()).collect();
+
+    let mut active = 0;
+    let mut tentative = 0;
+    let mut needs_review = 0;
+    let mut obsolete = 0;
+    let mut total_conf = 0.0;
+    let mut total_obs = 0u64;
+
+    for k in &data.knowledge {
+        match k.status.as_str() {
+            "tentative" => tentative += 1,
+            "needs_review" => needs_review += 1,
+            "obsolete" => obsolete += 1,
+            _ => active += 1,
+        }
+        total_conf += k.confidence;
+        total_obs += k.observations as u64;
+    }
+
+    let n = data.knowledge.len().max(1);
+    let node_links = data.links.iter().filter(|l| !l.is_knowledge_link()).count();
+    let knowledge_links = data.links.iter().filter(|l| l.is_knowledge_link()).count();
+
+    let orphan_node_links = data
+        .links
+        .iter()
+        .filter(|l| !l.is_knowledge_link() && !valid_node_uuids.contains(l.node_uuid.as_str()))
+        .count();
+    let orphan_knowledge_links = data
+        .links
+        .iter()
+        .filter(|l| {
+            l.is_knowledge_link()
+                && (!valid_knowledge_uuids.contains(l.knowledge_uuid.as_str())
+                    || !valid_knowledge_uuids.contains(l.node_uuid.as_str()))
+        })
+        .count();
+
+    let duplicates = find_duplicates(h5_path, 0.6).len();
+    let conflicts_count = detect_conflicts(h5_path).len();
+
+    KnowledgeHealth {
+        total_knowledge: data.knowledge.len(),
+        active,
+        tentative,
+        needs_review,
+        obsolete,
+        total_links: data.links.len(),
+        node_links,
+        knowledge_links,
+        orphan_node_links,
+        orphan_knowledge_links,
+        duplicate_candidates: duplicates,
+        conflicts: conflicts_count,
+        avg_confidence: total_conf / n as f64,
+        avg_observations: total_obs as f64 / n as f64,
+        total_nodes: data.extraction.nodes.len(),
+    }
 }
 
 // ---------------------------------------------------------------------------

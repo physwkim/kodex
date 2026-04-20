@@ -517,6 +517,14 @@ fn process_request(input: &str) -> String {
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
+        "detect_conflicts" => {
+            let conflicts = crate::learn::detect_conflicts(&h5_path);
+            serde_json::json!(conflicts)
+        }
+        "knowledge_health" => {
+            let health = crate::learn::knowledge_health(&h5_path);
+            serde_json::json!(health)
+        }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 
