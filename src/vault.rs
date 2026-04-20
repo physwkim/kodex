@@ -96,6 +96,9 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
             community,
             norm_label: None,
             degree: None,
+            uuid: None,
+            fingerprint: None,
+            logical_key: None,
         });
 
         filename_to_id.insert(filename, node_id);

@@ -106,6 +106,9 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
         community: None,
         norm_label: None,
         degree: None,
+        uuid: None,
+        fingerprint: None,
+        logical_key: None,
     });
     seen_ids.insert(file_nid.clone());
 
@@ -254,6 +257,9 @@ fn walk(
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 });
             }
 
@@ -324,6 +330,9 @@ fn walk(
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 });
             }
 

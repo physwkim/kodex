@@ -115,6 +115,9 @@ mod tests {
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 },
                 crate::types::Node {
                     id: "main_foo".to_string(),
@@ -127,6 +130,9 @@ mod tests {
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 },
             ],
             edges: vec![crate::types::Edge {

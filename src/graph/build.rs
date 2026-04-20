@@ -99,6 +99,9 @@ mod tests {
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 },
                 Node {
                     id: "main_foo".to_string(),
@@ -111,6 +114,9 @@ mod tests {
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 },
             ],
             edges: vec![Edge {
@@ -152,6 +158,9 @@ mod tests {
                 community: None,
                 norm_label: None,
                 degree: None,
+                uuid: None,
+                fingerprint: None,
+                logical_key: None,
             }],
             edges: vec![],
             ..Default::default()

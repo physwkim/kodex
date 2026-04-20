@@ -7,6 +7,7 @@ pub mod detect;
 pub mod error;
 pub mod export;
 pub mod extract;
+pub mod fingerprint;
 pub mod graph;
 pub mod hooks;
 pub mod id;

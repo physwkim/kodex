@@ -109,6 +109,15 @@ pub struct Node {
     pub norm_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub degree: Option<usize>,
+    /// Stable UUID — survives renames, moves, refactors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    /// Fingerprint for re-extraction matching (normalized signature + body hash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// Human-readable logical key: project/module.py::Class.method
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_key: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

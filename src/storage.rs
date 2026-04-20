@@ -47,6 +47,9 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
     let source_files = read_vlen(&file, "nodes/source_file")?;
     let confidences = read_vlen(&file, "nodes/confidence")?;
     let source_locations = read_vlen(&file, "nodes/source_location").unwrap_or_default();
+    let uuids = read_vlen(&file, "nodes/uuid").unwrap_or_default();
+    let fingerprints = read_vlen(&file, "nodes/fingerprint").unwrap_or_default();
+    let logical_keys = read_vlen(&file, "nodes/logical_key").unwrap_or_default();
 
     let community_ids: Vec<u32> = file
         .dataset("nodes/community")
@@ -76,6 +79,30 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
             community: community_ids.get(i).map(|&c| c as usize),
             norm_label: None,
             degree: None,
+            uuid: {
+                let v = uuids.get(i).cloned().unwrap_or_default();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
+            fingerprint: {
+                let v = fingerprints.get(i).cloned().unwrap_or_default();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
+            logical_key: {
+                let v = logical_keys.get(i).cloned().unwrap_or_default();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
         });
     }
 
@@ -317,8 +344,18 @@ fn save_hdf5_with_knowledge(
     let comm_map = crate::export::node_community_map(communities);
 
     // --- Nodes ---
-    let (ids, labels, file_types, source_files, confidences, source_locations, community_ids) =
-        collect_node_data(graph, &comm_map);
+    let (
+        ids,
+        labels,
+        file_types,
+        source_files,
+        confidences,
+        source_locations,
+        uuids,
+        fingerprints,
+        logical_keys,
+        community_ids,
+    ) = collect_node_data(graph, &comm_map);
 
     let nodes_grp = file
         .create_group("nodes")
@@ -330,6 +367,9 @@ fn save_hdf5_with_knowledge(
     write_vlen(&nodes_grp, "source_file", &source_files)?;
     write_vlen(&nodes_grp, "confidence", &confidences)?;
     write_vlen(&nodes_grp, "source_location", &source_locations)?;
+    write_vlen(&nodes_grp, "uuid", &uuids)?;
+    write_vlen(&nodes_grp, "fingerprint", &fingerprints)?;
+    write_vlen(&nodes_grp, "logical_key", &logical_keys)?;
 
     if !community_ids.is_empty() {
         nodes_grp
@@ -406,12 +446,18 @@ fn collect_node_data(
     Vec<String>,
     Vec<String>,
     Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
     Vec<u32>,
 ) {
     let mut ids = Vec::new();
     let mut labels = Vec::new();
     let mut file_types = Vec::new();
     let mut source_files = Vec::new();
+    let mut uuids = Vec::new();
+    let mut fingerprints = Vec::new();
+    let mut logical_keys = Vec::new();
     let mut confidences = Vec::new();
     let mut source_locations = Vec::new();
     let mut community_ids: Vec<u32> = Vec::new();
@@ -428,6 +474,9 @@ fn collect_node_data(
                     .unwrap_or_else(|| "EXTRACTED".to_string()),
             );
             source_locations.push(node.source_location.clone().unwrap_or_default());
+            uuids.push(node.uuid.clone().unwrap_or_default());
+            fingerprints.push(node.fingerprint.clone().unwrap_or_default());
+            logical_keys.push(node.logical_key.clone().unwrap_or_default());
             community_ids.push(comm_map.get(id).copied().unwrap_or(0) as u32);
         }
     }
@@ -439,6 +488,9 @@ fn collect_node_data(
         source_files,
         confidences,
         source_locations,
+        uuids,
+        fingerprints,
+        logical_keys,
         community_ids,
     )
 }
@@ -683,10 +735,12 @@ pub fn merge_project(
         Vec::new()
     };
 
-    // Merge new extraction
-    existing_extraction
-        .nodes
-        .extend(new_extraction.nodes.clone());
+    // Assign stable IDs to new nodes (match against existing by fingerprint/score)
+    let mut new_nodes = new_extraction.nodes.clone();
+    crate::fingerprint::assign_stable_ids(&existing_extraction.nodes, &mut new_nodes);
+
+    // Merge
+    existing_extraction.nodes.extend(new_nodes);
     existing_extraction
         .edges
         .extend(new_extraction.edges.clone());
@@ -720,6 +774,9 @@ fn load_extraction_from_file(file: &H5File) -> crate::error::Result<ExtractionRe
     let source_files = read_vlen(file, "nodes/source_file")?;
     let confidences = read_vlen(file, "nodes/confidence")?;
     let source_locations = read_vlen(file, "nodes/source_location").unwrap_or_default();
+    let uuids = read_vlen(file, "nodes/uuid").unwrap_or_default();
+    let fingerprints = read_vlen(file, "nodes/fingerprint").unwrap_or_default();
+    let logical_keys = read_vlen(file, "nodes/logical_key").unwrap_or_default();
     let community_ids: Vec<u32> = file
         .dataset("nodes/community")
         .and_then(|ds| ds.read_raw())
@@ -748,6 +805,30 @@ fn load_extraction_from_file(file: &H5File) -> crate::error::Result<ExtractionRe
             community: community_ids.get(i).map(|&c| c as usize),
             norm_label: None,
             degree: None,
+            uuid: {
+                let v = uuids.get(i).cloned().unwrap_or_default();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
+            fingerprint: {
+                let v = fingerprints.get(i).cloned().unwrap_or_default();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
+            logical_key: {
+                let v = logical_keys.get(i).cloned().unwrap_or_default();
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(v)
+                }
+            },
         });
     }
 
@@ -840,6 +921,9 @@ mod tests {
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 },
                 crate::types::Node {
                     id: "b".to_string(),
@@ -852,6 +936,9 @@ mod tests {
                     community: None,
                     norm_label: None,
                     degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
                 },
             ],
             edges: vec![crate::types::Edge {

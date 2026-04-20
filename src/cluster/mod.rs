@@ -80,6 +80,9 @@ mod tests {
                 community: None,
                 norm_label: None,
                 degree: None,
+                uuid: None,
+                fingerprint: None,
+                logical_key: None,
             });
         }
         // Create two clusters: {a,b,c} and {d,e}

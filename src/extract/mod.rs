@@ -529,6 +529,9 @@ fn walk_docstrings(
                         community: None,
                         norm_label: None,
                         degree: None,
+                        uuid: None,
+                        fingerprint: None,
+                        logical_key: None,
                     });
                 }
                 edges.push(crate::types::Edge {
@@ -577,6 +580,9 @@ fn walk_docstrings(
                         community: None,
                         norm_label: None,
                         degree: None,
+                        uuid: None,
+                        fingerprint: None,
+                        logical_key: None,
                     });
                 }
                 edges.push(crate::types::Edge {
@@ -710,6 +716,9 @@ fn add_rationale_node(
             community: None,
             norm_label: None,
             degree: None,
+            uuid: None,
+            fingerprint: None,
+            logical_key: None,
         });
     }
     edges.push(crate::types::Edge {
