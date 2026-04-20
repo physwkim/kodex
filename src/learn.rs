@@ -587,6 +587,7 @@ pub fn link_knowledge_to_nodes(
                 knowledge_uuid: knowledge_uuid.to_string(),
                 node_uuid: node_uuid.clone(),
                 relation: relation.to_string(),
+                target_type: String::new(),
             });
         }
     }
@@ -607,6 +608,125 @@ pub fn clear_knowledge_links(
         crate::storage::save(h5_path, &data)?;
     }
     Ok(removed)
+}
+
+/// Remove a specific link by knowledge_uuid + target_uuid + relation.
+pub fn remove_link(
+    h5_path: &Path,
+    knowledge_uuid: &str,
+    target_uuid: &str,
+    relation: Option<&str>,
+) -> crate::error::Result<bool> {
+    let mut data = crate::storage::load(h5_path)?;
+    let before = data.links.len();
+    data.links.retain(|l| {
+        !(l.knowledge_uuid == knowledge_uuid
+            && l.node_uuid == target_uuid
+            && relation.is_none_or(|r| l.relation == r))
+    });
+    let removed = before != data.links.len();
+    if removed {
+        crate::storage::save(h5_path, &data)?;
+    }
+    Ok(removed)
+}
+
+/// Link two knowledge entries together (knowledge ↔ knowledge).
+pub fn link_knowledge_to_knowledge(
+    h5_path: &Path,
+    source_uuid: &str,
+    target_uuid: &str,
+    relation: &str,
+    bidirectional: bool,
+) -> crate::error::Result<()> {
+    let mut data = crate::storage::load(h5_path)?;
+
+    // Verify both exist
+    let source_exists = data.knowledge.iter().any(|k| k.uuid == source_uuid);
+    let target_exists = data.knowledge.iter().any(|k| k.uuid == target_uuid);
+    if !source_exists {
+        return Err(crate::error::KodexError::Other(format!(
+            "Source knowledge not found: {source_uuid}"
+        )));
+    }
+    if !target_exists {
+        return Err(crate::error::KodexError::Other(format!(
+            "Target knowledge not found: {target_uuid}"
+        )));
+    }
+
+    // Add forward link
+    let exists = data.links.iter().any(|l| {
+        l.knowledge_uuid == source_uuid
+            && l.node_uuid == target_uuid
+            && l.relation == relation
+            && l.is_knowledge_link()
+    });
+    if !exists {
+        data.links.push(crate::types::KnowledgeLink {
+            knowledge_uuid: source_uuid.to_string(),
+            node_uuid: target_uuid.to_string(),
+            relation: relation.to_string(),
+            target_type: "knowledge".to_string(),
+        });
+    }
+
+    // Add reverse link if bidirectional
+    if bidirectional {
+        let reverse_rel = match relation {
+            "supersedes" => "superseded_by",
+            "superseded_by" => "supersedes",
+            "depends_on" => "depended_by",
+            "supports" => "supported_by",
+            "contradicts" => "contradicts",
+            other => other,
+        };
+        let rev_exists = data.links.iter().any(|l| {
+            l.knowledge_uuid == target_uuid
+                && l.node_uuid == source_uuid
+                && l.relation == reverse_rel
+                && l.is_knowledge_link()
+        });
+        if !rev_exists {
+            data.links.push(crate::types::KnowledgeLink {
+                knowledge_uuid: target_uuid.to_string(),
+                node_uuid: source_uuid.to_string(),
+                relation: reverse_rel.to_string(),
+                target_type: "knowledge".to_string(),
+            });
+        }
+    }
+
+    crate::storage::save(h5_path, &data)
+}
+
+/// Get all knowledge entries connected to a given knowledge UUID.
+pub fn knowledge_neighbors(h5_path: &Path, knowledge_uuid: &str) -> Vec<(String, String, String)> {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+
+    data.links
+        .iter()
+        .filter(|l| {
+            l.is_knowledge_link()
+                && (l.knowledge_uuid == knowledge_uuid || l.node_uuid == knowledge_uuid)
+        })
+        .map(|l| {
+            let other = if l.knowledge_uuid == knowledge_uuid {
+                l.node_uuid.clone()
+            } else {
+                l.knowledge_uuid.clone()
+            };
+            let direction = if l.knowledge_uuid == knowledge_uuid {
+                "outgoing"
+            } else {
+                "incoming"
+            };
+            (other, l.relation.clone(), direction.to_string())
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

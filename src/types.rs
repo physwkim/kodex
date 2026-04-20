@@ -260,14 +260,26 @@ pub struct KnowledgeEntry {
 }
 
 // ---------------------------------------------------------------------------
-// KnowledgeLink — knowledge_uuid ↔ node_uuid
+// KnowledgeLink — knowledge ↔ node or knowledge ↔ knowledge
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeLink {
+    /// Source: always a knowledge UUID
     pub knowledge_uuid: String,
+    /// Target: node UUID or another knowledge UUID
     pub node_uuid: String,
+    /// Relationship type: related_to, depends_on, contradicts, supports, etc.
     pub relation: String,
+    /// Target type: "node" (default) or "knowledge"
+    #[serde(default)]
+    pub target_type: String,
+}
+
+impl KnowledgeLink {
+    pub fn is_knowledge_link(&self) -> bool {
+        self.target_type == "knowledge"
+    }
 }
 
 // ---------------------------------------------------------------------------

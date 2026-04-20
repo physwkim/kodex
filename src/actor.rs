@@ -409,6 +409,52 @@ fn process_request(input: &str) -> String {
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
+        "remove_link" => {
+            let k_uuid = match params.get("knowledge_uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "knowledge_uuid required"),
+            };
+            let target = match params.get("target_uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "target_uuid required"),
+            };
+            let relation = params.get("relation").and_then(|v| v.as_str());
+            match crate::learn::remove_link(&h5_path, k_uuid, target, relation) {
+                Ok(true) => serde_json::json!({"status": "removed"}),
+                Ok(false) => serde_json::json!({"status": "not_found"}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "link_knowledge" => {
+            let source = match params.get("source_uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "source_uuid required"),
+            };
+            let target = match params.get("target_uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "target_uuid required"),
+            };
+            let relation = params.get("relation").and_then(|v| v.as_str()).unwrap_or("related_to");
+            let bidirectional = params.get("bidirectional").and_then(|v| v.as_bool()).unwrap_or(true);
+            match crate::learn::link_knowledge_to_knowledge(
+                &h5_path, source, target, relation, bidirectional,
+            ) {
+                Ok(()) => serde_json::json!({"status": "linked", "source": source, "target": target, "relation": relation}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "knowledge_neighbors" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            let neighbors = crate::learn::knowledge_neighbors(&h5_path, uuid);
+            let items: Vec<serde_json::Value> = neighbors
+                .iter()
+                .map(|(other, rel, dir)| serde_json::json!({"uuid": other, "relation": rel, "direction": dir}))
+                .collect();
+            serde_json::json!(items)
+        }
         "detect_stale" => {
             match crate::learn::detect_stale_knowledge(&h5_path) {
                 Ok(n) => serde_json::json!({"status": "checked", "stale_count": n}),

@@ -245,6 +245,7 @@ pub fn append_knowledge_with_uuid(
                 knowledge_uuid: k_uuid.clone(),
                 node_uuid: node_ref.clone(),
                 relation: "related_to".to_string(),
+                target_type: String::new(),
             });
         }
     }
@@ -547,9 +548,11 @@ fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<(
     let ku: Vec<String> = links.iter().map(|l| l.knowledge_uuid.clone()).collect();
     let nu: Vec<String> = links.iter().map(|l| l.node_uuid.clone()).collect();
     let re: Vec<String> = links.iter().map(|l| l.relation.clone()).collect();
+    let tt: Vec<String> = links.iter().map(|l| l.target_type.clone()).collect();
     write_vlen(&grp, "knowledge_uuid", &ku)?;
     write_vlen(&grp, "node_uuid", &nu)?;
     write_vlen(&grp, "relation", &re)?;
+    write_vlen(&grp, "target_type", &tt)?;
     Ok(())
 }
 
@@ -685,11 +688,13 @@ fn read_links(file: &H5File) -> crate::error::Result<Vec<KnowledgeLink>> {
     let ku = read_vlen(file, "links/knowledge_uuid").unwrap_or_default();
     let nu = read_vlen(file, "links/node_uuid").unwrap_or_default();
     let re = read_vlen(file, "links/relation").unwrap_or_default();
+    let tt = read_vlen(file, "links/target_type").unwrap_or_default();
     Ok((0..ku.len())
         .map(|i| KnowledgeLink {
             knowledge_uuid: ku[i].clone(),
             node_uuid: nu.get(i).cloned().unwrap_or_default(),
             relation: re.get(i).cloned().unwrap_or_default(),
+            target_type: tt.get(i).cloned().unwrap_or_default(),
         })
         .collect())
 }
@@ -800,6 +805,7 @@ mod tests {
                 knowledge_uuid: "k-1".into(),
                 node_uuid: "uuid-a".into(),
                 relation: "related_to".into(),
+                target_type: String::new(),
             }],
         };
         save(&h5, &data).unwrap();
@@ -841,6 +847,7 @@ mod tests {
                 knowledge_uuid: "k-1".into(),
                 node_uuid: "n-1".into(),
                 relation: "related_to".into(),
+                target_type: String::new(),
             }],
         };
         save(&h5, &data).unwrap();
