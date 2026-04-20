@@ -64,7 +64,10 @@ kodex.h5 (version 0.5.0)
     ├── knowledge_uuid, node_uuid, relation, target_type
     ├── confidence (f64)     ← link confidence
     ├── created_at (u64)     ← when link was created
-    └── linked_body_hash     ← snapshot for drift detection
+    ├── linked_body_hash     ← body snapshot for drift detection
+    ├── linked_logical_key   ← logical_key snapshot
+    ├── link_reason          ← why this link was created
+    └── link_source          ← human / agent / inferred
 ```
 
 All data in vlen strings (h5py compatible). Powered by [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
@@ -251,23 +254,34 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 |------|-------------|
 | `learn` | Store/reinforce knowledge (returns UUID). Pass `context_uuid` to auto-chain. |
 | `recall` | Search by keyword/type |
-| `recall_for_task` | Ranked retrieval by task context (question + files + nodes) |
-| `get_task_context` | Full briefing: ranked knowledge + stale warnings |
+| `recall_for_task` | Ranked retrieval (question + files + nodes), diversity-collapsed |
+| `recall_for_task_structured` | Same as above + full `ScoreBreakdown` per item |
+| `get_task_context` | Full briefing (markdown or `format=json` for structured `TaskContext`) |
 | `knowledge_context` | Session bootstrap (all knowledge) |
 | `update_knowledge` | Update status/scope/applies_when/superseded_by |
+| `validate_knowledge` | Mark as valid, refresh link snapshots, log evidence |
+| `mark_obsolete` | Mark as obsolete with reason |
 | `forget` | Delete knowledge |
 
 ### Knowledge graph
 | Tool | Description |
 |------|-------------|
 | `link_knowledge` | Connect knowledge ↔ knowledge (bidirectional) |
-| `link_knowledge_to_nodes` | Connect knowledge → code nodes |
+| `link_knowledge_to_nodes` | Connect knowledge → code nodes (with snapshot) |
 | `remove_link` | Remove a specific link by source/target/relation |
 | `clear_knowledge_links` | Remove all links for a knowledge entry |
 | `knowledge_graph` | BFS multi-hop traversal (json or markdown) |
 | `knowledge_neighbors` | 1-hop neighbors of a knowledge entry |
 | `thought_chain` | Trace reasoning chain (leads_to/because/...) |
-| `detect_stale` | Find knowledge linked to deleted nodes |
+
+### Quality management
+| Tool | Description |
+|------|-------------|
+| `detect_stale` | Find stale knowledge (graduated: deleted nodes, drift, age). `detailed=true` for full report. |
+| `find_duplicates` | Detect similar knowledge entries (title + description + type + tags) |
+| `merge_knowledge` | Merge duplicate: absorb observations/tags/evidence/links/scope |
+| `detect_conflicts` | Find contradictions, superseded-but-active, scope overlaps |
+| `knowledge_health` | Health metrics: status counts, orphans, duplicates, overdue, recency |
 
 ### Code graph
 | Tool | Description |
@@ -396,16 +410,61 @@ Staleness detection (graduated):
 | Linked body_hash changed (drift) | 0.2-0.5 | Advisory (no status change) |
 | Not validated for 90+ days | 0.3 | needs_review |
 
-Link snapshots: `linked_body_hash` is captured at link creation. On re-extraction, if the current `body_hash` differs from the snapshot, drift is detected — concrete evidence that code changed since knowledge was linked.
+Link snapshots: `linked_body_hash` and `linked_logical_key` are captured at link creation. On re-extraction, if the current values differ from the snapshot, drift is detected.
 
-Agent can set `applies_when` conditions:
-```json
-{"uuid": "k-1", "applies_when": "auth module modification"}
+### Lifecycle APIs
+
+```
+validate_knowledge(uuid, note="checked against prod")
+  → status=active, refresh link snapshots, log evidence
+
+mark_obsolete(uuid, reason="replaced by v2 auth")
+  → status=obsolete, log reason to evidence
+
+learn(uuid=K, context_uuid=K_prev)
+  → update + auto-chain K_prev →leads_to→ K
 ```
 
-Supersession chain:
+### Merge Rules
+
+When merging duplicate knowledge (`merge_knowledge`):
+| Field | Rule |
+|-------|------|
+| observations | Sum both |
+| confidence | Exponential boost (0.8^n) |
+| tags | Union |
+| description | Append if different |
+| evidence | Concatenate both |
+| applies_when | Join if different |
+| scope | Keep narrower (node > file > module > project > repo) |
+| links | Transfer all (node + knowledge), remove self-referential |
+
+### Retrieval Quality
+
+`recall_for_task` applies:
+1. **10-signal scoring**: node overlap (30), file mention (20), confidence (20), applies_when (15), scope (10), recency (10), keyword (10), type priority (5), observations (10), needs_review penalty (50%)
+2. **Diversity collapse**: entries with >60% title overlap are deduplicated in top-N
+3. **Score breakdown**: `recall_for_task_structured` returns `ScoreBreakdown` with reasons per item
+
+`get_task_context(format="json")` returns structured `TaskContext`:
 ```json
-{"uuid": "k-new", "superseded_by": "", "supersedes": "k-old"}
+{
+  "relevant": [{"knowledge": {...}, "score": {"total": 75, "reasons": ["linked to code in scope"]}}],
+  "warnings": [{"uuid": "...", "reason": "linked nodes may have changed"}],
+  "conflicts": [{"uuid_a": "...", "uuid_b": "...", "description": "..."}]
+}
+```
+
+### Observability
+
+`knowledge_health` returns:
+```
+active: 42, tentative: 3, needs_review: 5, obsolete: 12
+node_links: 87, knowledge_links: 23
+orphan_node_links: 0, orphan_knowledge_links: 1
+duplicate_candidates: 2, conflicts: 1
+validation_overdue: 3, recently_changed_7d: 8, recently_changed_30d: 15
+avg_confidence: 0.74, avg_observations: 3.2
 ```
 
 ## Supported Languages
