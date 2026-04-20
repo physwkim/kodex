@@ -718,3 +718,275 @@ fn test_knowledge_graph_scenario() {
     let graph_md = kodex::learn::render_knowledge_graph(&graph_nodes);
     assert!(graph_md.contains("Knowledge Graph"));
 }
+
+/// Test: node rename preserves UUID + knowledge link integrity
+#[test]
+fn test_rename_preserves_knowledge_links() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("rename.h5");
+
+    // Session 1: create graph with authenticate()
+    let mut extraction = kodex::types::ExtractionResult::default();
+    extraction.nodes.push(kodex::types::Node {
+        id: "auth_authenticate".into(),
+        label: "authenticate()".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project/auth.py".into(),
+        source_location: Some("L42".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: None, fingerprint: None, logical_key: None,
+        body_hash: Some("abcd1234abcd1234".into()),
+    });
+    kodex::storage::merge_project(&h5, "project", &extraction).unwrap();
+
+    // Get the assigned UUID
+    let data1 = kodex::storage::load(&h5).unwrap();
+    let node_uuid = data1.extraction.nodes[0].uuid.clone().unwrap();
+
+    // Learn knowledge linked to this node
+    kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "JWT Auth Pattern", "Token-based auth",
+        Some(&[node_uuid.clone()]), &[], None,
+    ).unwrap();
+
+    // Session 2: rename authenticate() → verify_token(), same body_hash
+    let mut extraction2 = kodex::types::ExtractionResult::default();
+    extraction2.nodes.push(kodex::types::Node {
+        id: "auth_verify_token".into(),
+        label: "verify_token()".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project/auth.py".into(),
+        source_location: Some("L42".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: None, fingerprint: None, logical_key: None,
+        body_hash: Some("abcd1234abcd1234".into()), // same body
+    });
+    kodex::storage::merge_project(&h5, "project", &extraction2).unwrap();
+
+    // Verify UUID was preserved through rename
+    let data2 = kodex::storage::load(&h5).unwrap();
+    let new_node_uuid = data2.extraction.nodes.iter()
+        .find(|n| n.label == "verify_token()")
+        .unwrap()
+        .uuid.clone().unwrap();
+    assert_eq!(new_node_uuid, node_uuid, "Rename should preserve UUID");
+
+    // Knowledge link should still work
+    let knowledge = kodex::learn::query_knowledge(&h5, "JWT", None);
+    assert_eq!(knowledge.len(), 1);
+    assert!(knowledge[0].related_nodes.contains(&node_uuid),
+        "Knowledge should still link to the renamed node");
+
+    // No staleness — node exists with same UUID
+    let stale = kodex::learn::detect_stale_knowledge(&h5).unwrap();
+    assert_eq!(stale, 0, "Renamed node should not trigger staleness");
+}
+
+/// Test: migration from v0.3 to current preserves all data
+#[test]
+fn test_migration_preserves_data() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("migrate.h5");
+
+    // Create a v0.3-style h5 (no scope/status/evidence/created_at/body_hash)
+    let data = kodex::types::KodexData {
+        extraction: kodex::types::ExtractionResult {
+            nodes: vec![kodex::types::Node {
+                id: "a".into(), label: "Alpha".into(),
+                file_type: kodex::types::FileType::Code,
+                source_file: "a.py".into(),
+                source_location: Some("L1".into()),
+                confidence: Some(kodex::types::Confidence::EXTRACTED),
+                confidence_score: Some(1.0),
+                community: None, norm_label: None, degree: None,
+                uuid: Some("node-a".into()),
+                fingerprint: Some("fp-a".into()),
+                logical_key: Some("a.py::Alpha".into()),
+                body_hash: None,
+            }],
+            ..Default::default()
+        },
+        knowledge: vec![kodex::types::KnowledgeEntry {
+            uuid: "k-1".into(),
+            title: "Test".into(),
+            knowledge_type: "pattern".into(),
+            description: "A pattern".into(),
+            confidence: 0.7,
+            observations: 3,
+            tags: vec!["test".into()],
+            ..Default::default() // scope, status, etc. all empty
+        }],
+        links: vec![kodex::types::KnowledgeLink {
+            knowledge_uuid: "k-1".into(),
+            node_uuid: "node-a".into(),
+            relation: "related_to".into(),
+            target_type: String::new(),
+            ..Default::default() // no confidence, created_at, linked_body_hash
+        }],
+    };
+    kodex::storage::save(&h5, &data).unwrap();
+
+    // Simulate older version header
+    {
+        let file = rust_hdf5::file::H5File::open_rw(&h5).unwrap();
+        file.set_attr_string("version", "0.3.0").unwrap();
+        file.close().unwrap();
+    }
+
+    // Load triggers migration
+    let loaded = kodex::storage::load(&h5).unwrap();
+
+    // Verify data preserved
+    assert_eq!(loaded.extraction.nodes.len(), 1);
+    assert_eq!(loaded.extraction.nodes[0].uuid.as_deref(), Some("node-a"));
+    assert_eq!(loaded.knowledge.len(), 1);
+    assert_eq!(loaded.knowledge[0].uuid, "k-1");
+    assert_eq!(loaded.knowledge[0].title, "Test");
+    assert_eq!(loaded.knowledge[0].confidence, 0.7);
+    assert_eq!(loaded.knowledge[0].observations, 3);
+    // Migration should set status to "active"
+    assert_eq!(loaded.knowledge[0].status, "active");
+    // Links preserved
+    assert_eq!(loaded.links.len(), 1);
+    assert_eq!(loaded.links[0].knowledge_uuid, "k-1");
+    assert_eq!(loaded.links[0].node_uuid, "node-a");
+}
+
+/// Test: duplicate detection + merge preserves links and evidence
+#[test]
+fn test_duplicate_merge_preserves_links() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("dedup.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
+
+    // Create two similar knowledge entries
+    let k1 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "Repository Pattern", "All data access through repos",
+        Some(&["node-a".to_string()]), &["arch".into()], None,
+    ).unwrap();
+    let k2 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "Repository Pattern Design", "Data access via repository classes",
+        Some(&["node-b".to_string()]), &["arch".into(), "design".into()], None,
+    ).unwrap();
+
+    // Should detect as duplicate
+    let dupes = kodex::learn::find_duplicates(&h5, 0.4);
+    assert!(!dupes.is_empty(), "Should detect similar entries");
+
+    // Merge k2 into k1
+    kodex::learn::merge_knowledge(&h5, &k1, &k2).unwrap();
+
+    // Verify k1 absorbed k2's data
+    let data = kodex::storage::load(&h5).unwrap();
+    let kept = data.knowledge.iter().find(|k| k.uuid == k1).unwrap();
+    assert!(kept.observations >= 2, "Should absorb observations");
+    assert!(kept.tags.contains(&"design".to_string()), "Should absorb tags");
+
+    // k2 should be obsolete
+    let absorbed = data.knowledge.iter().find(|k| k.uuid == k2).unwrap();
+    assert_eq!(absorbed.status, "obsolete");
+    assert_eq!(absorbed.superseded_by, k1);
+
+    // k1 should now have links to both node-a and node-b
+    let k1_links: Vec<_> = data.links.iter()
+        .filter(|l| l.knowledge_uuid == k1 && !l.is_knowledge_link())
+        .map(|l| l.node_uuid.as_str())
+        .collect();
+    assert!(k1_links.contains(&"node-a"), "Should keep original link");
+    assert!(k1_links.contains(&"node-b"), "Should absorb merged link");
+
+    // Supersedes link should exist
+    let supersedes = data.links.iter().any(|l|
+        l.knowledge_uuid == k1 && l.node_uuid == k2 && l.relation == "supersedes"
+    );
+    assert!(supersedes, "Should have supersedes link");
+}
+
+/// Test: multi-project merge + recall correctness
+#[test]
+fn test_multi_project_recall() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("multi.h5");
+
+    // Project A
+    let mut ext_a = kodex::types::ExtractionResult::default();
+    ext_a.nodes.push(kodex::types::Node {
+        id: "a_handler".into(), label: "AuthHandler".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project-a/auth.py".into(),
+        source_location: Some("L10".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: None, fingerprint: None, logical_key: None,
+        body_hash: Some("aaaa".into()),
+    });
+    kodex::storage::merge_project(&h5, "project-a", &ext_a).unwrap();
+
+    let data_a = kodex::storage::load(&h5).unwrap();
+    let uuid_a = data_a.extraction.nodes[0].uuid.clone().unwrap();
+
+    // Learn knowledge for project A
+    kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "Auth Pattern A", "JWT auth in project A",
+        Some(&[uuid_a.clone()]), &[], None,
+    ).unwrap();
+
+    // Project B
+    let mut ext_b = kodex::types::ExtractionResult::default();
+    ext_b.nodes.push(kodex::types::Node {
+        id: "b_handler".into(), label: "PaymentHandler".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project-b/payment.py".into(),
+        source_location: Some("L5".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: None, fingerprint: None, logical_key: None,
+        body_hash: Some("bbbb".into()),
+    });
+    kodex::storage::merge_project(&h5, "project-b", &ext_b).unwrap();
+
+    let data_b = kodex::storage::load(&h5).unwrap();
+    let uuid_b = data_b.extraction.nodes.iter()
+        .find(|n| n.label == "PaymentHandler")
+        .unwrap().uuid.clone().unwrap();
+
+    kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Convention,
+        "Payment Validation", "Always validate amounts",
+        Some(&[uuid_b.clone()]), &[], None,
+    ).unwrap();
+
+    // Both projects coexist
+    let data = kodex::storage::load(&h5).unwrap();
+    assert_eq!(data.extraction.nodes.len(), 2);
+    assert_eq!(data.knowledge.len(), 2);
+
+    // Recall for auth.py should prioritize Auth Pattern
+    let results = kodex::learn::recall_for_task(
+        &h5, "auth", &["project-a/auth.py".into()], &[uuid_a], 5,
+    );
+    assert!(!results.is_empty());
+    assert_eq!(results[0].title, "Auth Pattern A", "Auth knowledge should rank first for auth file");
+
+    // Recall for payment.py should prioritize Payment Validation
+    let results = kodex::learn::recall_for_task(
+        &h5, "payment", &["project-b/payment.py".into()], &[uuid_b], 5,
+    );
+    assert!(!results.is_empty());
+    assert_eq!(results[0].title, "Payment Validation", "Payment knowledge should rank first for payment file");
+}

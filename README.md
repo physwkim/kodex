@@ -37,11 +37,11 @@ kodex forget --below 0.3                # clean low-confidence knowledge
 ### HDF5 Structure
 
 ```
-kodex.h5 (version 0.4.0)
+kodex.h5 (version 0.5.0)
 ├── /nodes/                  ← code entities
 │   ├── uuid                 ← stable identity (survives renames/moves)
 │   ├── id, label            ← current name
-│   ├── fingerprint          ← matching key for re-extraction
+│   ├── fingerprint          ← matching key (comment/whitespace normalized)
 │   ├── body_hash            ← SHA256 of normalized function/class body
 │   ├── logical_key          ← human-readable (project/file.py::Class.method)
 │   ├── file_type, source_file, source_location, confidence
@@ -50,21 +50,21 @@ kodex.h5 (version 0.4.0)
 │   ├── source, target, relation, confidence
 │   ├── source_file, source_location
 │   └── weight (f64)
+├── /hyperedges/             ← multi-node groups
+│   ├── id, label, nodes, confidence, source_file
 ├── /knowledge/              ← AI-accumulated knowledge
 │   ├── uuid                 ← knowledge identity
 │   ├── titles, types, descriptions, tags
-│   ├── scope               ← repo / project / module / file / node
-│   ├── status              ← active / tentative / obsolete / needs_review
-│   ├── source              ← human / inferred / imported / agent
-│   ├── applies_when        ← condition string ("auth modification", etc.)
-│   ├── supersedes / superseded_by  ← knowledge chain
+│   ├── scope, status, source, applies_when
+│   ├── evidence             ← where this knowledge came from
+│   ├── supersedes / superseded_by
 │   ├── confidence (f64), observations (u32)
-│   └── last_validated_at (u64)
+│   └── created_at, updated_at, last_validated_at (u64)
 └── /links/                  ← knowledge ↔ node or knowledge ↔ knowledge
-    ├── knowledge_uuid       ← source (always a knowledge UUID)
-    ├── node_uuid            ← target (node UUID or knowledge UUID)
-    ├── relation             ← related_to, depends_on, leads_to, contradicts, ...
-    └── target_type          ← "" (node) or "knowledge"
+    ├── knowledge_uuid, node_uuid, relation, target_type
+    ├── confidence (f64)     ← link confidence
+    ├── created_at (u64)     ← when link was created
+    └── linked_body_hash     ← snapshot for drift detection
 ```
 
 All data in vlen strings (h5py compatible). Powered by [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
@@ -129,7 +129,17 @@ Session 2:
 Matching policy:
 1. Exact fingerprint (includes body_hash) → reuse UUID
 2. Score-based (file + line + type + label + body_hash) → reuse if ≥ 0.4
-3. Below threshold → new UUID
+3. Body mismatch penalty (-15) → prevents false matches at same position
+4. Below threshold → new UUID
+
+Identity rules:
+| Scenario | UUID | Reason |
+|----------|------|--------|
+| Rename, same body | Preserved | body_hash + file match |
+| Move to new dir, same body | Preserved | filename + body_hash match |
+| Split function | New UUIDs | body mismatch penalty |
+| Delete + create at same line | New UUID | body mismatch penalty |
+| Reformat only | Preserved | comment/whitespace stripped from hash |
 
 ## Version Migration
 
@@ -139,8 +149,11 @@ kodex.h5 auto-migrates when opened by a newer version:
 v0.1.0 (no uuid/fingerprint)   → auto-generates on load
 v0.2.0 (no knowledge uuid)     → auto-generates on load
 v0.3.0 (no knowledge metadata) → defaults added on load
-v0.4.0 (current)                → no migration needed
+v0.4.0 (no evidence/timestamps)→ defaults added on load
+v0.5.0 (current)                → no migration needed
 ```
+
+Semver-safe version comparison (handles 0.10.0, 1.0.0 correctly).
 
 Old h5 files just work. No manual steps.
 
@@ -291,21 +304,28 @@ kodex export          # kodex.h5 → ~/.claude/memory/kodex_*.md
 
 ## Body-Aware Fingerprint
 
-Functions and classes now have a `body_hash` — SHA256 of normalized (whitespace-stripped) body content. This allows UUID matching to distinguish:
+Functions and classes have a `body_hash` — SHA256 of normalized body content (comments, whitespace, formatting stripped). This allows UUID matching to distinguish:
 
 ```
 Same file, similar position, different body → different entity (new UUID)
 Same body, renamed function               → same entity (preserved UUID)
+Same body, reformatted code               → same entity (preserved UUID)
 ```
 
-Matching policy with body_hash:
-- Fingerprint match (body included): 40 pts
-- Same file: 25 pts
-- Line proximity: 15 pts
-- Same type: 10 pts
-- Label similarity: 15 pts
-- Exact label: 10 pts
-- Body hash match: 20 pts (only when both sides have it)
+Normalization strips: `// /* */ #` comments, all whitespace. Only structural code affects the hash.
+
+Matching signals:
+| Signal | Points | Notes |
+|--------|--------|-------|
+| Fingerprint match | 40 | Includes body content |
+| Same file | 25 | Full path match |
+| Same filename | 15 | Filename only (survives directory moves) |
+| Line proximity | 6-15 | Within 20 lines |
+| Same type | 10 | Code/Document/etc |
+| Label similarity | 0-15 | Token overlap |
+| Exact label | 10 | Full label match |
+| Body hash match | 25 | Only when both have it |
+| Body hash **mismatch** | -15 | Active penalty prevents false matches |
 
 ## Chain of Thought
 
@@ -361,11 +381,22 @@ Link types:
 
 ```
 Status transitions:
-  active → needs_review (stale detection: linked nodes deleted)
+  active → needs_review (linked nodes deleted or >50% lost)
+  active → needs_review (no validation for 90+ days)
   active → obsolete (superseded by newer knowledge)
   needs_review → active (validated by agent)
   tentative → active (confidence grows above threshold)
 ```
+
+Staleness detection (graduated):
+| Condition | Staleness | Action |
+|-----------|-----------|--------|
+| All linked nodes deleted | 1.0 | needs_review + confidence decay |
+| >50% linked nodes deleted | 0.3-0.7 | needs_review |
+| Linked body_hash changed (drift) | 0.2-0.5 | Advisory (no status change) |
+| Not validated for 90+ days | 0.3 | needs_review |
+
+Link snapshots: `linked_body_hash` is captured at link creation. On re-extraction, if the current `body_hash` differs from the snapshot, drift is detected — concrete evidence that code changed since knowledge was linked.
 
 Agent can set `applies_when` conditions:
 ```json
