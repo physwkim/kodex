@@ -532,6 +532,7 @@ fn walk_docstrings(
                         uuid: None,
                         fingerprint: None,
                         logical_key: None,
+                        body_hash: None,
                     });
                 }
                 edges.push(crate::types::Edge {
@@ -583,6 +584,7 @@ fn walk_docstrings(
                         uuid: None,
                         fingerprint: None,
                         logical_key: None,
+                        body_hash: None,
                     });
                 }
                 edges.push(crate::types::Edge {
@@ -719,6 +721,7 @@ fn add_rationale_node(
             uuid: None,
             fingerprint: None,
             logical_key: None,
+            body_hash: None,
         });
     }
     edges.push(crate::types::Edge {

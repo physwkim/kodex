@@ -83,6 +83,7 @@ mod tests {
                 uuid: None,
                 fingerprint: None,
                 logical_key: None,
+                body_hash: None,
             });
         }
         // Create two clusters: {a,b,c} and {d,e}

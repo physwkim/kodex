@@ -326,6 +326,95 @@ fn process_request(input: &str) -> String {
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
+        "recall_for_task" => {
+            let question = params.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let touched_files = extract_string_array(&params, "touched_files");
+            let node_uuids = extract_string_array(&params, "node_uuids");
+            let max = params
+                .get("max_items")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5) as usize;
+            let results = crate::learn::recall_for_task(
+                &h5_path,
+                question,
+                &touched_files,
+                &node_uuids,
+                max,
+            );
+            let items: Vec<serde_json::Value> = results
+                .iter()
+                .map(|k| {
+                    serde_json::json!({
+                        "uuid": k.uuid, "title": k.title,
+                        "type": k.knowledge_type.to_string(),
+                        "description": k.description.lines().next().unwrap_or(""),
+                        "confidence": (k.confidence * 100.0) as u32,
+                        "observations": k.observations,
+                        "related_nodes": k.related_nodes,
+                    })
+                })
+                .collect();
+            serde_json::json!(items)
+        }
+        "get_task_context" => {
+            let question = params.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let touched_files = extract_string_array(&params, "touched_files");
+            let max = params
+                .get("max_items")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10) as usize;
+            serde_json::json!(crate::learn::get_task_context(
+                &h5_path,
+                question,
+                &touched_files,
+                max,
+            ))
+        }
+        "update_knowledge" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            let updates = crate::learn::KnowledgeUpdates {
+                status: params.get("status").and_then(|v| v.as_str()).map(String::from),
+                scope: params.get("scope").and_then(|v| v.as_str()).map(String::from),
+                applies_when: params.get("applies_when").and_then(|v| v.as_str()).map(String::from),
+                superseded_by: params.get("superseded_by").and_then(|v| v.as_str()).map(String::from),
+                validate: params.get("validate").and_then(|v| v.as_bool()).unwrap_or(false),
+            };
+            match crate::learn::update_knowledge(&h5_path, uuid, &updates) {
+                Ok(()) => serde_json::json!({"status": "updated", "uuid": uuid}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "link_knowledge_to_nodes" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            let node_uuids = extract_string_array(&params, "node_uuids");
+            let relation = params.get("relation").and_then(|v| v.as_str()).unwrap_or("related_to");
+            match crate::learn::link_knowledge_to_nodes(&h5_path, uuid, &node_uuids, relation) {
+                Ok(()) => serde_json::json!({"status": "linked", "uuid": uuid, "nodes": node_uuids.len()}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "clear_knowledge_links" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            match crate::learn::clear_knowledge_links(&h5_path, uuid) {
+                Ok(n) => serde_json::json!({"status": "cleared", "uuid": uuid, "removed": n}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "detect_stale" => {
+            match crate::learn::detect_stale_knowledge(&h5_path) {
+                Ok(n) => serde_json::json!({"status": "checked", "stale_count": n}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 

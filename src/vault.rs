@@ -99,6 +99,7 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
             uuid: None,
             fingerprint: None,
             logical_key: None,
+            body_hash: None,
         });
 
         filename_to_id.insert(filename, node_id);

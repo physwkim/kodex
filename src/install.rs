@@ -17,14 +17,28 @@ AI knowledge graph with persistent memory.
 
 ## MCP Tools (auto-available via `kodex serve`)
 
-- `knowledge_context` — read accumulated knowledge at session start
-- `learn` — save a pattern/decision/convention to knowledge base
+### Knowledge lifecycle
+- `learn` — save/reinforce a pattern/decision/convention (returns UUID)
 - `recall` — search knowledge by keyword or type
+- `recall_for_task` — ranked retrieval: question + touched_files + node_uuids → top-N
+- `get_task_context` — full briefing for current task (question + files → ranked knowledge + stale warnings)
+- `knowledge_context` — read all knowledge at session start
+- `update_knowledge` — update status/scope/applies_when on existing entry
+- `forget` — remove knowledge by title/type/confidence
+
+### Knowledge linking
+- `link_knowledge_to_nodes` — connect knowledge UUID to node UUIDs
+- `clear_knowledge_links` — remove all links for a knowledge entry
+- `save_insight` — link nodes with a named pattern
+- `add_edge` — add relationship between code nodes
+
+### Graph
 - `query_graph` — BFS/DFS search over code graph
 - `get_node` — node details by label
 - `god_nodes` — most-connected entities
-- `save_insight` — link nodes with a named pattern
-- `add_edge` — add relationship between nodes
+
+### Maintenance
+- `detect_stale` — find knowledge linked to deleted/changed nodes
 
 ## CLI
 
@@ -32,6 +46,8 @@ AI knowledge graph with persistent memory.
 - `kodex query "how does auth work"` — search graph
 - `kodex explain "ClassName"` — show node details
 - `kodex update .` — re-extract code (AST only)
+- `kodex import` — import Claude Code memories into kodex
+- `kodex export` — export kodex knowledge to Claude Code memories
 "#;
 
 /// Install kodex: skill file + MCP server registration.

@@ -132,6 +132,14 @@ pub fn match_score(old: &Node, new: &Node) -> f64 {
         score += 10.0;
     }
 
+    // Body hash match (strong signal — only counted when both sides have one)
+    if old.body_hash.is_some() && new.body_hash.is_some() {
+        max_score += 20.0;
+        if old.body_hash == new.body_hash {
+            score += 20.0;
+        }
+    }
+
     if max_score == 0.0 {
         return 0.0;
     }
@@ -166,7 +174,7 @@ pub fn assign_stable_ids(existing: &[Node], new_nodes: &mut [Node]) {
                 &node.file_type.to_string(),
                 &node.source_file,
                 node.source_location.as_deref(),
-                None,
+                node.body_hash.as_deref(),
             ));
         }
 
@@ -234,6 +242,7 @@ mod tests {
             uuid: Some(uuid::Uuid::new_v4().to_string()),
             fingerprint: Some(compute_fingerprint(label, "code", file, Some(loc), None)),
             logical_key: Some(logical_key(file, label)),
+            body_hash: None,
         }
     }
 

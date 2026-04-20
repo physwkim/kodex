@@ -37,11 +37,12 @@ kodex forget --below 0.3                # clean low-confidence knowledge
 ### HDF5 Structure
 
 ```
-kodex.h5 (version 0.3.0)
+kodex.h5 (version 0.4.0)
 ├── /nodes/                  ← code entities
 │   ├── uuid                 ← stable identity (survives renames/moves)
 │   ├── id, label            ← current name
 │   ├── fingerprint          ← matching key for re-extraction
+│   ├── body_hash            ← SHA256 of normalized function/class body
 │   ├── logical_key          ← human-readable (project/file.py::Class.method)
 │   ├── file_type, source_file, source_location, confidence
 │   └── community (u32)
@@ -52,7 +53,13 @@ kodex.h5 (version 0.3.0)
 ├── /knowledge/              ← AI-accumulated knowledge
 │   ├── uuid                 ← knowledge identity
 │   ├── titles, types, descriptions, tags
+│   ├── scope               ← repo / project / module / file / node
+│   ├── status              ← active / tentative / obsolete / needs_review
+│   ├── source              ← human / inferred / imported / agent
+│   ├── applies_when        ← condition string ("auth modification", etc.)
+│   ├── supersedes / superseded_by  ← knowledge chain
 │   ├── confidence (f64), observations (u32)
+│   └── last_validated_at (u64)
 └── /links/                  ← knowledge ↔ node connections
     ├── knowledge_uuid
     ├── node_uuid
@@ -125,9 +132,10 @@ Matching policy:
 kodex.h5 auto-migrates when opened by a newer version:
 
 ```
-v0.1.0 (no uuid/fingerprint) → auto-generates on load
-v0.2.0 (no knowledge uuid)   → auto-generates on load
-v0.3.0 (current)              → no migration needed
+v0.1.0 (no uuid/fingerprint)   → auto-generates on load
+v0.2.0 (no knowledge uuid)     → auto-generates on load
+v0.3.0 (no knowledge metadata) → defaults added on load
+v0.4.0 (current)                → no migration needed
 ```
 
 Old h5 files just work. No manual steps.
@@ -223,14 +231,20 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 
 | Tool | Description |
 |------|-------------|
+| `learn` | Store/reinforce knowledge (returns UUID) |
+| `recall` | Search by keyword/type |
+| `recall_for_task` | Ranked retrieval by task context (question + files + nodes) |
+| `get_task_context` | Full briefing: ranked knowledge + stale warnings |
+| `knowledge_context` | Session bootstrap (all knowledge) |
+| `update_knowledge` | Update status/scope/applies_when/superseded_by |
+| `forget` | Delete knowledge |
+| `link_knowledge_to_nodes` | Connect knowledge to code nodes |
+| `clear_knowledge_links` | Remove all links for a knowledge entry |
+| `detect_stale` | Find knowledge linked to deleted nodes |
 | `query_graph` | BFS/DFS traversal |
 | `get_node` | Node details |
 | `god_nodes` | Most-connected entities |
 | `graph_stats` | Counts |
-| `learn` | Store/reinforce knowledge |
-| `recall` | Search all projects |
-| `knowledge_context` | Session bootstrap |
-| `forget` | Delete knowledge |
 | `save_insight` | Link nodes with pattern |
 | `save_note` | Free-text memo |
 | `add_edge` | Add relationship |
@@ -256,6 +270,44 @@ kodex export          # kodex.h5 → ~/.claude/memory/kodex_*.md
 | `project` | `context` |
 | `user` | `preference` |
 | `reference` | `api` |
+
+## Body-Aware Fingerprint
+
+Functions and classes now have a `body_hash` — SHA256 of normalized (whitespace-stripped) body content. This allows UUID matching to distinguish:
+
+```
+Same file, similar position, different body → different entity (new UUID)
+Same body, renamed function               → same entity (preserved UUID)
+```
+
+Matching policy with body_hash:
+- Fingerprint match (body included): 40 pts
+- Same file: 25 pts
+- Line proximity: 15 pts
+- Same type: 10 pts
+- Label similarity: 15 pts
+- Exact label: 10 pts
+- Body hash match: 20 pts (only when both sides have it)
+
+## Knowledge Lifecycle
+
+```
+Status transitions:
+  active → needs_review (stale detection)
+  active → obsolete (superseded by newer knowledge)
+  needs_review → active (validated by agent)
+  tentative → active (confidence grows above threshold)
+```
+
+Agent can set `applies_when` conditions:
+```json
+{"uuid": "k-1", "applies_when": "auth module modification"}
+```
+
+Supersession chain:
+```json
+{"uuid": "k-new", "superseded_by": "", "supersedes": "k-old"}
+```
 
 ## Supported Languages
 

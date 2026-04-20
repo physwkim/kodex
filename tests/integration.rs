@@ -188,6 +188,7 @@ fn test_graph_export_round_trip() {
                 uuid: None,
                 fingerprint: None,
                 logical_key: None,
+                body_hash: None,
             },
             kodex::types::Node {
                 id: "b".to_string(),
@@ -203,6 +204,7 @@ fn test_graph_export_round_trip() {
                 uuid: None,
                 fingerprint: None,
                 logical_key: None,
+                body_hash: None,
             },
         ],
         edges: vec![kodex::types::Edge {
@@ -272,6 +274,7 @@ fn test_cluster_and_analyze() {
                 uuid: None,
                 fingerprint: None,
                 logical_key: None,
+                body_hash: None,
             })
             .collect(),
         edges: [
@@ -368,6 +371,7 @@ fn test_hdf5_round_trip() {
                 uuid: None,
                 fingerprint: None,
                 logical_key: None,
+                body_hash: None,
             },
             kodex::types::Node {
                 id: "y".to_string(),
@@ -383,6 +387,7 @@ fn test_hdf5_round_trip() {
                 uuid: None,
                 fingerprint: None,
                 logical_key: None,
+                body_hash: None,
             },
         ],
         edges: vec![kodex::types::Edge {

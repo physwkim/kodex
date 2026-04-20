@@ -109,6 +109,7 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
         uuid: None,
         fingerprint: None,
         logical_key: None,
+        body_hash: None,
     });
     seen_ids.insert(file_nid.clone());
 
@@ -153,6 +154,40 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
                 &mut seen_call_pairs,
                 &str_path,
             );
+        }
+    }
+
+    // Compute body hashes for functions/classes
+    {
+        use sha2::{Digest, Sha256};
+        // Collect (index, hash) pairs to avoid borrow conflicts
+        let nid_to_idx: HashMap<String, usize> = nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.clone(), i))
+            .collect();
+        let hashes: Vec<(usize, String)> = function_body_ranges
+            .iter()
+            .filter_map(|(caller_nid, start_byte, end_byte)| {
+                let idx = *nid_to_idx.get(caller_nid)?;
+                if *start_byte < source.len() && *end_byte <= source.len() {
+                    let body_bytes = &source[*start_byte..*end_byte];
+                    let normalized: Vec<u8> = body_bytes
+                        .iter()
+                        .copied()
+                        .filter(|b| !b.is_ascii_whitespace())
+                        .collect();
+                    let mut hasher = Sha256::new();
+                    hasher.update(&normalized);
+                    let hash = format!("{:x}", hasher.finalize());
+                    Some((idx, hash[..16].to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (idx, hash) in hashes {
+            nodes[idx].body_hash = Some(hash);
         }
     }
 
@@ -260,6 +295,7 @@ fn walk(
                     uuid: None,
                     fingerprint: None,
                     logical_key: None,
+                    body_hash: None,
                 });
             }
 
@@ -333,6 +369,7 @@ fn walk(
                     uuid: None,
                     fingerprint: None,
                     logical_key: None,
+                    body_hash: None,
                 });
             }
 

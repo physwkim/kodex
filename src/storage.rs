@@ -37,11 +37,11 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
 }
 
 /// Current storage format version.
-const CURRENT_VERSION: &str = "0.3.0";
+const CURRENT_VERSION: &str = "0.4.0";
 
 /// Known versions and their migration paths.
 #[allow(dead_code)]
-const KNOWN_VERSIONS: &[&str] = &["0.1.0", "0.2.0", "0.3.0"];
+const KNOWN_VERSIONS: &[&str] = &["0.1.0", "0.2.0", "0.3.0", "0.4.0"];
 
 pub fn load(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
@@ -103,8 +103,14 @@ fn migrate(data: &mut KodexData, from_version: &str) {
         }
     }
 
-    // Future migrations go here:
-    // if from_version < "0.4.0" { ... }
+    // v0.3.0 → v0.4.0: knowledge entries get new metadata fields (defaulted)
+    if from_version == "0.1.0" || from_version == "0.2.0" || from_version == "0.3.0" {
+        for entry in &mut data.knowledge {
+            if entry.status.is_empty() {
+                entry.status = "active".to_string();
+            }
+        }
+    }
 }
 
 pub fn load_graph(path: &Path) -> crate::error::Result<KodexGraph> {
@@ -221,6 +227,13 @@ pub fn append_knowledge_with_uuid(
             confidence,
             observations: 1,
             tags: tags.to_vec(),
+            scope: String::new(),
+            status: "active".to_string(),
+            source: "agent".to_string(),
+            last_validated_at: 0,
+            applies_when: String::new(),
+            supersedes: String::new(),
+            superseded_by: String::new(),
         });
         new_uuid
     };
@@ -390,7 +403,8 @@ fn write_nodes(
     let grp = file
         .create_group("nodes")
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let (mut ids, mut labels, mut ft, mut sf, mut conf, mut sl, mut uu, mut fp, mut lk) = (
+    let (mut ids, mut labels, mut ft, mut sf, mut conf, mut sl, mut uu, mut fp, mut lk, mut bh) = (
+        vec![],
         vec![],
         vec![],
         vec![],
@@ -417,6 +431,7 @@ fn write_nodes(
             uu.push(n.uuid.clone().unwrap_or_default());
             fp.push(n.fingerprint.clone().unwrap_or_default());
             lk.push(n.logical_key.clone().unwrap_or_default());
+            bh.push(n.body_hash.clone().unwrap_or_default());
             cids.push(comm_map.get(id).copied().unwrap_or(0) as u32);
         }
     }
@@ -429,6 +444,7 @@ fn write_nodes(
     write_vlen(&grp, "uuid", &uu)?;
     write_vlen(&grp, "fingerprint", &fp)?;
     write_vlen(&grp, "logical_key", &lk)?;
+    write_vlen(&grp, "body_hash", &bh)?;
     if !cids.is_empty() {
         grp.new_dataset::<u32>()
             .shape([cids.len()])
@@ -483,13 +499,26 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
     let ty: Vec<String> = knowledge.iter().map(|k| k.knowledge_type.clone()).collect();
     let de: Vec<String> = knowledge.iter().map(|k| k.description.clone()).collect();
     let tg: Vec<String> = knowledge.iter().map(|k| k.tags.join(",")).collect();
+    let sc: Vec<String> = knowledge.iter().map(|k| k.scope.clone()).collect();
+    let st: Vec<String> = knowledge.iter().map(|k| k.status.clone()).collect();
+    let sr: Vec<String> = knowledge.iter().map(|k| k.source.clone()).collect();
+    let aw: Vec<String> = knowledge.iter().map(|k| k.applies_when.clone()).collect();
+    let sp: Vec<String> = knowledge.iter().map(|k| k.supersedes.clone()).collect();
+    let sb: Vec<String> = knowledge.iter().map(|k| k.superseded_by.clone()).collect();
     let co: Vec<f64> = knowledge.iter().map(|k| k.confidence).collect();
     let ob: Vec<u32> = knowledge.iter().map(|k| k.observations).collect();
+    let lv: Vec<u64> = knowledge.iter().map(|k| k.last_validated_at).collect();
     write_vlen(&grp, "uuid", &uu)?;
     write_vlen(&grp, "titles", &ti)?;
     write_vlen(&grp, "types", &ty)?;
     write_vlen(&grp, "descriptions", &de)?;
     write_vlen(&grp, "tags", &tg)?;
+    write_vlen(&grp, "scope", &sc)?;
+    write_vlen(&grp, "status", &st)?;
+    write_vlen(&grp, "source", &sr)?;
+    write_vlen(&grp, "applies_when", &aw)?;
+    write_vlen(&grp, "supersedes", &sp)?;
+    write_vlen(&grp, "superseded_by", &sb)?;
     grp.new_dataset::<f64>()
         .shape([co.len()])
         .create("confidence")
@@ -499,6 +528,11 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
         .shape([ob.len()])
         .create("observations")
         .and_then(|ds| ds.write_raw(&ob))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    grp.new_dataset::<u64>()
+        .shape([lv.len()])
+        .create("last_validated_at")
+        .and_then(|ds| ds.write_raw(&lv))
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     Ok(())
 }
@@ -529,6 +563,7 @@ fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
     let uu = read_vlen(file, "nodes/uuid").unwrap_or_default();
     let fp = read_vlen(file, "nodes/fingerprint").unwrap_or_default();
     let lk = read_vlen(file, "nodes/logical_key").unwrap_or_default();
+    let bh = read_vlen(file, "nodes/body_hash").unwrap_or_default();
     let cids: Vec<u32> = file
         .dataset("nodes/community")
         .and_then(|ds| ds.read_raw())
@@ -554,6 +589,7 @@ fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
             uuid: opt(&uu, i),
             fingerprint: opt(&fp, i),
             logical_key: opt(&lk, i),
+            body_hash: opt(&bh, i),
         });
     }
     let es = read_vlen(file, "edges/source")?;
@@ -591,6 +627,12 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
     let ty = read_vlen(file, "knowledge/types").unwrap_or_default();
     let de = read_vlen(file, "knowledge/descriptions").unwrap_or_default();
     let tg = read_vlen(file, "knowledge/tags").unwrap_or_default();
+    let sc = read_vlen(file, "knowledge/scope").unwrap_or_default();
+    let st = read_vlen(file, "knowledge/status").unwrap_or_default();
+    let sr = read_vlen(file, "knowledge/source").unwrap_or_default();
+    let aw = read_vlen(file, "knowledge/applies_when").unwrap_or_default();
+    let sp = read_vlen(file, "knowledge/supersedes").unwrap_or_default();
+    let sb = read_vlen(file, "knowledge/superseded_by").unwrap_or_default();
     let co: Vec<f64> = file
         .dataset("knowledge/confidence")
         .and_then(|ds| ds.read_raw())
@@ -599,6 +641,11 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
         .dataset("knowledge/observations")
         .and_then(|ds| ds.read_raw())
         .unwrap_or_default();
+    let lv: Vec<u64> = file
+        .dataset("knowledge/last_validated_at")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let s = |v: &[String], i: usize| -> String { v.get(i).cloned().unwrap_or_default() };
     Ok((0..ti.len())
         .map(|i| KnowledgeEntry {
             uuid: uu
@@ -620,6 +667,16 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
                         .collect()
                 })
                 .unwrap_or_default(),
+            scope: s(&sc, i),
+            status: {
+                let val = s(&st, i);
+                if val.is_empty() { "active".to_string() } else { val }
+            },
+            source: s(&sr, i),
+            last_validated_at: lv.get(i).copied().unwrap_or(0),
+            applies_when: s(&aw, i),
+            supersedes: s(&sp, i),
+            superseded_by: s(&sb, i),
         })
         .collect())
 }
@@ -696,6 +753,7 @@ mod tests {
                         uuid: Some("uuid-a".into()),
                         fingerprint: Some("fp-a".into()),
                         logical_key: Some("a.py::Alpha".into()),
+                        body_hash: None,
                     },
                     crate::types::Node {
                         id: "b".into(),
@@ -711,6 +769,7 @@ mod tests {
                         uuid: None,
                         fingerprint: None,
                         logical_key: None,
+                        body_hash: None,
                     },
                 ],
                 edges: vec![crate::types::Edge {
@@ -735,6 +794,7 @@ mod tests {
                 confidence: 0.6,
                 observations: 1,
                 tags: vec!["test".into()],
+                ..Default::default()
             }],
             links: vec![KnowledgeLink {
                 knowledge_uuid: "k-1".into(),
@@ -775,6 +835,7 @@ mod tests {
                 confidence: 0.6,
                 observations: 1,
                 tags: vec![],
+                ..Default::default()
             }],
             links: vec![KnowledgeLink {
                 knowledge_uuid: "k-1".into(),

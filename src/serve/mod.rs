@@ -118,6 +118,7 @@ mod tests {
                     uuid: None,
                     fingerprint: None,
                     logical_key: None,
+                    body_hash: None,
                 },
                 crate::types::Node {
                     id: "main_foo".to_string(),
@@ -133,6 +134,7 @@ mod tests {
                     uuid: None,
                     fingerprint: None,
                     logical_key: None,
+                    body_hash: None,
                 },
             ],
             edges: vec![crate::types::Edge {

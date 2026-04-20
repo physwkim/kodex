@@ -131,6 +131,7 @@ mod tests {
             uuid: None,
             fingerprint: None,
             logical_key: None,
+            body_hash: None,
         }
     }
 

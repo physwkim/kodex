@@ -118,6 +118,9 @@ pub struct Node {
     /// Human-readable logical key: project/module.py::Class.method
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logical_key: Option<String>,
+    /// SHA256 digest of normalized function/class body (whitespace-stripped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_hash: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +227,7 @@ pub struct DetectedFiles {
 // KnowledgeEntry — knowledge entity with its own UUID
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KnowledgeEntry {
     pub uuid: String,
     pub title: String,
@@ -233,6 +236,27 @@ pub struct KnowledgeEntry {
     pub confidence: f64,
     pub observations: u32,
     pub tags: Vec<String>,
+    /// Scope: repo / project / module / file / node
+    #[serde(default)]
+    pub scope: String,
+    /// Status: active / tentative / obsolete / needs_review
+    #[serde(default)]
+    pub status: String,
+    /// Origin: human / inferred / imported / agent
+    #[serde(default)]
+    pub source: String,
+    /// Last time this was validated (unix timestamp, 0 = never)
+    #[serde(default)]
+    pub last_validated_at: u64,
+    /// When this knowledge applies, e.g. "auth modification", "DB migration"
+    #[serde(default)]
+    pub applies_when: String,
+    /// UUID of knowledge entry this supersedes
+    #[serde(default)]
+    pub supersedes: String,
+    /// UUID of knowledge entry that supersedes this one
+    #[serde(default)]
+    pub superseded_by: String,
 }
 
 // ---------------------------------------------------------------------------
