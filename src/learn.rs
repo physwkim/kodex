@@ -747,6 +747,7 @@ pub struct TaskContext {
     pub relevant: Vec<RecallResult>,
     pub warnings: Vec<TaskWarning>,
     pub conflicts: Vec<KnowledgeConflict>,
+    pub recommendations: Vec<crate::recommend::Recommendation>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -772,6 +773,7 @@ pub fn get_task_context_json(
                 relevant: vec![],
                 warnings: vec![],
                 conflicts: vec![],
+                recommendations: vec![],
             }
         }
     };
@@ -830,10 +832,13 @@ pub fn get_task_context_json(
         })
         .collect();
 
+    let recommendations = crate::recommend::compute_recommendations(&relevant, &conflicts, "coding");
+
     TaskContext {
         relevant,
         warnings,
         conflicts,
+        recommendations,
     }
 }
 
@@ -2146,6 +2151,116 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
         recently_changed_7d,
         recently_changed_30d,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review queue
+// ---------------------------------------------------------------------------
+
+/// Get the pending review queue, sorted by priority descending.
+pub fn get_review_queue(h5_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let mut queue: Vec<_> = data.review_queue.into_iter().filter(|q| !q.completed).collect();
+    queue.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
+    queue
+}
+
+/// Enqueue a knowledge entry for review.
+pub fn enqueue_review(
+    h5_path: &Path,
+    knowledge_uuid: &str,
+    reason: &str,
+    priority: u8,
+) -> crate::error::Result<()> {
+    let mut data = crate::storage::load(h5_path)?;
+    // Don't duplicate
+    if data.review_queue.iter().any(|q| q.knowledge_uuid == knowledge_uuid && !q.completed) {
+        return Ok(());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    data.review_queue.push(crate::types::ReviewQueueItem {
+        knowledge_uuid: knowledge_uuid.to_string(),
+        reason: reason.to_string(),
+        created_at: now,
+        priority,
+        completed: false,
+    });
+    crate::storage::save(h5_path, &data)
+}
+
+/// Complete a review queue item (mark as done).
+pub fn complete_review(h5_path: &Path, knowledge_uuid: &str) -> crate::error::Result<()> {
+    let mut data = crate::storage::load(h5_path)?;
+    for item in &mut data.review_queue {
+        if item.knowledge_uuid == knowledge_uuid && !item.completed {
+            item.completed = true;
+        }
+    }
+    crate::storage::save(h5_path, &data)
+}
+
+/// Auto-enqueue stale/conflict/duplicate items for review.
+pub fn refresh_review_queue(h5_path: &Path) -> crate::error::Result<usize> {
+    let stale = detect_stale_detailed(h5_path)?;
+    let conflicts = detect_conflicts(h5_path);
+    let duplicates = find_duplicates(h5_path, 0.6);
+
+    let mut count = 0;
+    for s in &stale {
+        enqueue_review(h5_path, &s.uuid, &format!("stale: {}", s.reason), 7)?;
+        count += 1;
+    }
+    for c in &conflicts {
+        enqueue_review(h5_path, &c.uuid_a, &format!("conflict: {}", c.description), 8)?;
+        count += 1;
+    }
+    for d in &duplicates {
+        enqueue_review(h5_path, &d.uuid_a, &format!("duplicate: {}", d.reason), 5)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+// ---------------------------------------------------------------------------
+// Diff-aware recall
+// ---------------------------------------------------------------------------
+
+/// Recall knowledge relevant to a git diff.
+pub fn recall_for_diff(
+    h5_path: &Path,
+    diff_text: &str,
+    max_items: usize,
+) -> (crate::diff::DiffAnalysis, Vec<RecallResult>) {
+    let analysis = match crate::diff::analyze_diff(diff_text, h5_path) {
+        Ok(a) => a,
+        Err(_) => {
+            return (
+                crate::diff::DiffAnalysis {
+                    hunks_count: 0,
+                    changed_files: vec![],
+                    changed_node_uuids: vec![],
+                    affected_knowledge_uuids: vec![],
+                },
+                vec![],
+            )
+        }
+    };
+
+    let results = recall_for_task_structured(
+        h5_path,
+        "",
+        &analysis.changed_files,
+        &analysis.changed_node_uuids,
+        max_items,
+    );
+
+    (analysis, results)
 }
 
 // ---------------------------------------------------------------------------

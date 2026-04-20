@@ -32,6 +32,7 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     write_hyperedges(&file, &data.extraction.hyperedges)?;
     write_knowledge(&file, &data.knowledge)?;
     write_links(&file, &data.links)?;
+    write_review_queue(&file, &data.review_queue)?;
     file.close()
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
     Ok(())
@@ -53,6 +54,7 @@ pub fn load(path: &Path) -> crate::error::Result<KodexData> {
         extraction: read_extraction(&file)?,
         knowledge: read_knowledge(&file)?,
         links: read_links(&file)?,
+        review_queue: read_review_queue(&file)?,
     };
 
     // Auto-migrate if needed
@@ -149,6 +151,10 @@ pub fn save_hdf5(
         links: existing
             .as_ref()
             .map(|d| d.links.clone())
+            .unwrap_or_default(),
+        review_queue: existing
+            .as_ref()
+            .map(|d| d.review_queue.clone())
             .unwrap_or_default(),
     };
     save(path, &data)
@@ -270,6 +276,8 @@ pub fn append_knowledge_with_uuid(
             evidence: String::new(),
             created_at: now,
             updated_at: now,
+            author: String::new(),
+            trigger: String::new(),
         });
         new_uuid
     };
@@ -572,6 +580,8 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
     let sp: Vec<String> = knowledge.iter().map(|k| k.supersedes.clone()).collect();
     let sb: Vec<String> = knowledge.iter().map(|k| k.superseded_by.clone()).collect();
     let ev: Vec<String> = knowledge.iter().map(|k| k.evidence.clone()).collect();
+    let au: Vec<String> = knowledge.iter().map(|k| k.author.clone()).collect();
+    let tr: Vec<String> = knowledge.iter().map(|k| k.trigger.clone()).collect();
     let co: Vec<f64> = knowledge.iter().map(|k| k.confidence).collect();
     let ob: Vec<u32> = knowledge.iter().map(|k| k.observations).collect();
     let lv: Vec<u64> = knowledge.iter().map(|k| k.last_validated_at).collect();
@@ -589,6 +599,8 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
     write_vlen(&grp, "supersedes", &sp)?;
     write_vlen(&grp, "superseded_by", &sb)?;
     write_vlen(&grp, "evidence", &ev)?;
+    write_vlen(&grp, "author", &au)?;
+    write_vlen(&grp, "trigger", &tr)?;
     grp.new_dataset::<f64>()
         .shape([co.len()])
         .create("confidence")
@@ -683,6 +695,65 @@ fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<(
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
     }
     Ok(())
+}
+
+fn write_review_queue(
+    file: &H5File,
+    queue: &[crate::types::ReviewQueueItem],
+) -> crate::error::Result<()> {
+    if queue.is_empty() {
+        return Ok(());
+    }
+    let grp = file
+        .create_group("review_queue")
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    let ku: Vec<String> = queue.iter().map(|q| q.knowledge_uuid.clone()).collect();
+    let re: Vec<String> = queue.iter().map(|q| q.reason.clone()).collect();
+    let ca: Vec<u64> = queue.iter().map(|q| q.created_at).collect();
+    let pr: Vec<u32> = queue.iter().map(|q| q.priority as u32).collect();
+    let co: Vec<String> = queue
+        .iter()
+        .map(|q| if q.completed { "1" } else { "0" }.to_string())
+        .collect();
+    write_vlen(&grp, "knowledge_uuid", &ku)?;
+    write_vlen(&grp, "reason", &re)?;
+    write_vlen(&grp, "completed", &co)?;
+    grp.new_dataset::<u64>()
+        .shape([ca.len()])
+        .create("created_at")
+        .and_then(|ds| ds.write_raw(&ca))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    grp.new_dataset::<u32>()
+        .shape([pr.len()])
+        .create("priority")
+        .and_then(|ds| ds.write_raw(&pr))
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    Ok(())
+}
+
+fn read_review_queue(
+    file: &H5File,
+) -> crate::error::Result<Vec<crate::types::ReviewQueueItem>> {
+    let ku = read_vlen(file, "review_queue/knowledge_uuid").unwrap_or_default();
+    let re = read_vlen(file, "review_queue/reason").unwrap_or_default();
+    let co = read_vlen(file, "review_queue/completed").unwrap_or_default();
+    let ca: Vec<u64> = file
+        .dataset("review_queue/created_at")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    let pr: Vec<u32> = file
+        .dataset("review_queue/priority")
+        .and_then(|ds| ds.read_raw())
+        .unwrap_or_default();
+    Ok((0..ku.len())
+        .map(|i| crate::types::ReviewQueueItem {
+            knowledge_uuid: ku[i].clone(),
+            reason: re.get(i).cloned().unwrap_or_default(),
+            created_at: ca.get(i).copied().unwrap_or(0),
+            priority: pr.get(i).copied().unwrap_or(5) as u8,
+            completed: co.get(i).map(|s| s == "1").unwrap_or(false),
+        })
+        .collect())
 }
 
 fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
@@ -798,6 +869,8 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
     let sp = read_vlen(file, "knowledge/supersedes").unwrap_or_default();
     let sb = read_vlen(file, "knowledge/superseded_by").unwrap_or_default();
     let ev = read_vlen(file, "knowledge/evidence").unwrap_or_default();
+    let au = read_vlen(file, "knowledge/author").unwrap_or_default();
+    let tr = read_vlen(file, "knowledge/trigger").unwrap_or_default();
     let co: Vec<f64> = file
         .dataset("knowledge/confidence")
         .and_then(|ds| ds.read_raw())
@@ -853,6 +926,8 @@ fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
             evidence: s(&ev, i),
             created_at: ca.get(i).copied().unwrap_or(0),
             updated_at: ua.get(i).copied().unwrap_or(0),
+            author: s(&au, i),
+            trigger: s(&tr, i),
         })
         .collect())
 }
@@ -1000,6 +1075,7 @@ mod tests {
                 target_type: String::new(),
                 ..Default::default()
             }],
+            review_queue: vec![],
         };
         save(&h5, &data).unwrap();
         let loaded = load(&h5).unwrap();
@@ -1043,6 +1119,7 @@ mod tests {
                 target_type: String::new(),
                 ..Default::default()
             }],
+            review_queue: vec![],
         };
         save(&h5, &data).unwrap();
 

@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod analyze;
+pub mod diff;
 pub mod benchmark;
 pub mod cache;
 pub mod cluster;
@@ -16,6 +17,8 @@ pub mod ingest;
 pub mod install;
 pub mod knowledge;
 pub mod learn;
+pub mod reasoning;
+pub mod recommend;
 pub mod registry;
 pub mod report;
 pub mod security;

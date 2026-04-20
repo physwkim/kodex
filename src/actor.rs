@@ -564,6 +564,50 @@ fn process_request(input: &str) -> String {
             let health = crate::learn::knowledge_health(&h5_path);
             serde_json::json!(health)
         }
+        // Gen3: review queue
+        "get_review_queue" => {
+            let queue = crate::learn::get_review_queue(&h5_path);
+            serde_json::json!(queue)
+        }
+        "complete_review" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            match crate::learn::complete_review(&h5_path, uuid) {
+                Ok(()) => serde_json::json!({"status": "completed", "uuid": uuid}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "refresh_review_queue" => {
+            match crate::learn::refresh_review_queue(&h5_path) {
+                Ok(n) => serde_json::json!({"status": "refreshed", "enqueued": n}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        // Gen3: diff-aware recall
+        "recall_for_diff" => {
+            let diff_text = params.get("diff").and_then(|v| v.as_str()).unwrap_or("");
+            let max = params.get("max_items").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+            let (analysis, results) = crate::learn::recall_for_diff(&h5_path, diff_text, max);
+            serde_json::json!({
+                "analysis": analysis,
+                "relevant_knowledge": results,
+            })
+        }
+        // Gen3: knowledge graph reasoning
+        "reason" => {
+            let uuids = extract_string_array(&params, "uuids");
+            let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+            let data = match crate::storage::load(&h5_path) {
+                Ok(d) => d,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let result = crate::reasoning::propagate_confidence(
+                &data.knowledge, &data.links, &uuids, depth,
+            );
+            serde_json::json!(result)
+        }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 

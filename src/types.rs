@@ -266,6 +266,25 @@ pub struct KnowledgeEntry {
     /// When last updated (unix timestamp)
     #[serde(default)]
     pub updated_at: u64,
+    /// Who created this: human email or "agent:claude-opus"
+    #[serde(default)]
+    pub author: String,
+    /// What triggered this: "PR#123", "commit:abc", "manual", "import"
+    #[serde(default)]
+    pub trigger: String,
+}
+
+// ---------------------------------------------------------------------------
+// ReviewQueueItem — persistent review backlog
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReviewQueueItem {
+    pub knowledge_uuid: String,
+    pub reason: String,
+    pub created_at: u64,
+    pub priority: u8,
+    pub completed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +337,7 @@ pub struct KodexData {
     pub extraction: ExtractionResult,
     pub knowledge: Vec<KnowledgeEntry>,
     pub links: Vec<KnowledgeLink>,
+    pub review_queue: Vec<ReviewQueueItem>,
 }
 
 impl KodexData {

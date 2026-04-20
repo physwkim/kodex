@@ -610,6 +610,7 @@ fn test_knowledge_graph_scenario() {
         extraction,
         knowledge: vec![],
         links: vec![],
+        review_queue: vec![],
     };
     kodex::storage::save(&h5, &data).unwrap();
 
@@ -826,8 +827,9 @@ fn test_migration_preserves_data() {
             node_uuid: "node-a".into(),
             relation: "related_to".into(),
             target_type: String::new(),
-            ..Default::default() // no confidence, created_at, linked_body_hash
+            ..Default::default()
         }],
+        review_queue: vec![],
     };
     kodex::storage::save(&h5, &data).unwrap();
 
