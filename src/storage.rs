@@ -150,15 +150,13 @@ pub fn append_knowledge(
     related_nodes: &[String],
     tags: &[String],
 ) -> crate::error::Result<()> {
+    let nodes = if related_nodes.is_empty() {
+        None
+    } else {
+        Some(related_nodes)
+    };
     append_knowledge_with_uuid(
-        h5_path,
-        None,
-        title,
-        knowledge_type,
-        description,
-        confidence,
-        related_nodes,
-        tags,
+        h5_path, None, title, knowledge_type, description, confidence, nodes, tags,
     )
     .map(|_| ())
 }
@@ -167,6 +165,11 @@ pub fn append_knowledge(
 /// If uuid is provided, finds and updates existing entry.
 /// If uuid is None, creates new entry with fresh UUID.
 /// Returns the UUID of the created or updated entry.
+///
+/// `related_nodes`:
+/// - `None` → don't touch existing links
+/// - `Some(&[])` → clear all links for this knowledge
+/// - `Some(&[...])` → replace links with these nodes
 #[allow(clippy::too_many_arguments)]
 pub fn append_knowledge_with_uuid(
     h5_path: &Path,
@@ -175,7 +178,7 @@ pub fn append_knowledge_with_uuid(
     knowledge_type: &str,
     description: &str,
     confidence: f64,
-    related_nodes: &[String],
+    related_nodes: Option<&[String]>,
     tags: &[String],
 ) -> crate::error::Result<String> {
     let mut data = if h5_path.exists() {
@@ -221,10 +224,10 @@ pub fn append_knowledge_with_uuid(
         });
         new_uuid
     };
-    // Replace links for this knowledge (not accumulate)
-    if !related_nodes.is_empty() {
+    // Handle links: None = don't touch, Some([]) = clear, Some([...]) = replace
+    if let Some(nodes) = related_nodes {
         data.links.retain(|l| l.knowledge_uuid != k_uuid);
-        for node_ref in related_nodes {
+        for node_ref in nodes {
             data.links.push(KnowledgeLink {
                 knowledge_uuid: k_uuid.clone(),
                 node_uuid: node_ref.clone(),
@@ -374,76 +377,7 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
     Ok(before - data.extraction.nodes.len())
 }
 
-// Backward-compat aliases
 
-#[allow(clippy::type_complexity)]
-pub fn unpack_knowledge(
-    entries: Vec<(String, String, String, f64, u32, String, String)>,
-) -> (
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    Vec<f64>,
-    Vec<u32>,
-    Vec<String>,
-    Vec<String>,
-) {
-    let (mut t, mut ty, mut d, mut c, mut o, mut r, mut tg) =
-        (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
-    for e in entries {
-        t.push(e.0);
-        ty.push(e.1);
-        d.push(e.2);
-        c.push(e.3);
-        o.push(e.4);
-        r.push(e.5);
-        tg.push(e.6);
-    }
-    (t, ty, d, c, o, r, tg)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn save_hdf5_with_knowledge_pub(
-    graph: &KodexGraph,
-    _communities: &HashMap<usize, Vec<String>>,
-    path: &Path,
-    k_titles: &[String],
-    k_types: &[String],
-    k_descriptions: &[String],
-    k_confidences: &[f64],
-    k_observations: &[u32],
-    _k_related: &[String],
-    k_tags: &[String],
-) -> crate::error::Result<()> {
-    let extraction = graph_to_extraction(graph);
-    let knowledge: Vec<KnowledgeEntry> = (0..k_titles.len())
-        .map(|i| KnowledgeEntry {
-            uuid: uuid::Uuid::new_v4().to_string(),
-            title: k_titles[i].clone(),
-            knowledge_type: k_types.get(i).cloned().unwrap_or_default(),
-            description: k_descriptions.get(i).cloned().unwrap_or_default(),
-            confidence: k_confidences.get(i).copied().unwrap_or(0.5),
-            observations: k_observations.get(i).copied().unwrap_or(1),
-            tags: k_tags
-                .get(i)
-                .map(|t| {
-                    t.split(',')
-                        .filter(|s| !s.is_empty())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default(),
-        })
-        .collect();
-    save(
-        path,
-        &KodexData {
-            extraction,
-            knowledge,
-            links: vec![],
-        },
-    )
-}
 
 // HDF5 internals
 
@@ -824,5 +758,69 @@ mod tests {
         assert_eq!(na.uuid.as_deref(), Some("uuid-a"));
         assert_eq!(na.source_location.as_deref(), Some("L1"));
         assert_eq!(loaded.extraction.edges[0].source_file, "a.py");
+    }
+
+    #[test]
+    fn test_links_clear_vs_noop() {
+        let dir = TempDir::new().unwrap();
+        let h5 = dir.path().join("test_links.h5");
+        // Create initial data with one knowledge + one link
+        let data = KodexData {
+            extraction: ExtractionResult::default(),
+            knowledge: vec![KnowledgeEntry {
+                uuid: "k-1".into(),
+                title: "Pattern".into(),
+                knowledge_type: "pattern".into(),
+                description: "desc".into(),
+                confidence: 0.6,
+                observations: 1,
+                tags: vec![],
+            }],
+            links: vec![KnowledgeLink {
+                knowledge_uuid: "k-1".into(),
+                node_uuid: "n-1".into(),
+                relation: "related_to".into(),
+            }],
+        };
+        save(&h5, &data).unwrap();
+
+        // Update with None for related_nodes → links should be untouched
+        append_knowledge_with_uuid(
+            &h5, Some("k-1"), "Pattern", "pattern", "more info", 0.6, None, &[],
+        )
+        .unwrap();
+        let loaded = load(&h5).unwrap();
+        assert_eq!(loaded.links.len(), 1, "None should not touch links");
+
+        // Update with Some(&[]) → links should be cleared
+        append_knowledge_with_uuid(
+            &h5,
+            Some("k-1"),
+            "Pattern",
+            "pattern",
+            "",
+            0.6,
+            Some(&[]),
+            &[],
+        )
+        .unwrap();
+        let loaded = load(&h5).unwrap();
+        assert_eq!(loaded.links.len(), 0, "Some(&[]) should clear links");
+
+        // Update with Some(&[new_node]) → should add link
+        append_knowledge_with_uuid(
+            &h5,
+            Some("k-1"),
+            "Pattern",
+            "pattern",
+            "",
+            0.6,
+            Some(&["n-2".to_string()]),
+            &[],
+        )
+        .unwrap();
+        let loaded = load(&h5).unwrap();
+        assert_eq!(loaded.links.len(), 1);
+        assert_eq!(loaded.links[0].node_uuid, "n-2");
     }
 }

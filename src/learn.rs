@@ -89,28 +89,29 @@ pub fn learn(
     related_nodes: &[String],
     tags: &[String],
 ) -> crate::error::Result<()> {
-    learn_with_uuid(
-        h5_path,
-        None,
-        knowledge_type,
-        title,
-        description,
-        related_nodes,
-        tags,
-    )
-    .map(|_| ())
+    let nodes = if related_nodes.is_empty() {
+        None
+    } else {
+        Some(related_nodes)
+    };
+    learn_with_uuid(h5_path, None, knowledge_type, title, description, nodes, tags).map(|_| ())
 }
 
 /// Learn with explicit UUID. Returns the UUID of the created/updated entry.
 /// - uuid=Some → update existing entry
 /// - uuid=None → create new entry with fresh UUID
+///
+/// `related_nodes`:
+/// - `None` → don't touch existing links
+/// - `Some(&[])` → clear all links
+/// - `Some(&[...])` → replace links with these nodes
 pub fn learn_with_uuid(
     h5_path: &Path,
     knowledge_uuid: Option<&str>,
     knowledge_type: KnowledgeType,
     title: &str,
     description: &str,
-    related_nodes: &[String],
+    related_nodes: Option<&[String]>,
     tags: &[String],
 ) -> crate::error::Result<String> {
     crate::storage::append_knowledge_with_uuid(
@@ -302,7 +303,7 @@ mod tests {
             KnowledgeType::Pattern,
             "Repository Pattern",
             "Confirmed: ProductRepo also follows this",
-            &["product_repo".to_string()],
+            Some(&["product_repo".to_string()]),
             &[],
         )
         .unwrap();

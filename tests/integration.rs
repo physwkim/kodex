@@ -467,7 +467,7 @@ fn test_knowledge_learn_and_recall() {
         kodex::learn::KnowledgeType::Pattern,
         "Test Pattern",
         "Seen again",
-        &["node_b".to_string()],
+        Some(&["node_b".to_string()]),
         &[],
     )
     .unwrap();

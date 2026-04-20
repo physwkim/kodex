@@ -239,7 +239,7 @@ fn process_request(input: &str) -> String {
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let related = extract_string_array(&params, "related_nodes");
+            let related = extract_optional_string_array(&params, "related_nodes");
             let tags = extract_string_array(&params, "tags");
             let kt = parse_knowledge_type(kt_str);
             match crate::learn::learn_with_uuid(
@@ -248,7 +248,7 @@ fn process_request(input: &str) -> String {
                 kt,
                 title,
                 desc,
-                &related,
+                related.as_deref(),
                 &tags,
             ) {
                 Ok(uuid) => {
@@ -353,6 +353,16 @@ fn extract_string_array(params: &serde_json::Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Like extract_string_array but returns None when the key is absent.
+/// This lets callers distinguish "key not provided" from "key = []".
+fn extract_optional_string_array(params: &serde_json::Value, key: &str) -> Option<Vec<String>> {
+    params.get(key).and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    })
 }
 
 fn parse_knowledge_type(s: &str) -> crate::learn::KnowledgeType {
