@@ -143,6 +143,53 @@ pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
 // --- Claude Code MCP ---
 
 fn install_mcp_claude(target_dir: &Path) -> String {
+    let kodex_bin = find_kodex_binary();
+    let mut results = Vec::new();
+
+    // 1. Register MCP server in ~/.claude.json (user scope)
+    let claude_json_path = target_dir.join(".claude.json");
+    let mut claude_json = if claude_json_path.exists() {
+        let text = std::fs::read_to_string(&claude_json_path).unwrap_or_default();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    let cj_obj = claude_json.as_object_mut().unwrap();
+    let already = cj_obj
+        .get("mcpServers")
+        .and_then(|v| v.as_object())
+        .map(|s| s.contains_key("kodex"))
+        .unwrap_or(false);
+
+    if already {
+        results.push("MCP: already registered in .claude.json".to_string());
+    } else {
+        let mcp_servers = cj_obj
+            .entry("mcpServers")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(servers) = mcp_servers.as_object_mut() {
+            servers.insert(
+                "kodex".to_string(),
+                serde_json::json!({
+                    "type": "stdio",
+                    "command": kodex_bin,
+                    "args": ["serve"]
+                }),
+            );
+        }
+        match serde_json::to_string_pretty(&claude_json) {
+            Ok(json) => match std::fs::write(&claude_json_path, json) {
+                Ok(()) => {
+                    results.push(format!("MCP: registered in {}", claude_json_path.display()))
+                }
+                Err(e) => results.push(format!("MCP: failed to write: {e}")),
+            },
+            Err(e) => results.push(format!("MCP: failed to serialize: {e}")),
+        }
+    }
+
+    // 2. Register hook in ~/.claude/settings.json
     let settings_path = target_dir.join(".claude/settings.json");
     if let Some(parent) = settings_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -157,31 +204,11 @@ fn install_mcp_claude(target_dir: &Path) -> String {
 
     let obj = settings.as_object_mut().unwrap();
 
-    // Check if already registered
-    if let Some(servers) = obj.get("mcpServers").and_then(|v| v.as_object()) {
-        if servers.contains_key("kodex") {
-            return "MCP: already registered in .claude/settings.json".to_string();
-        }
+    // Remove stale mcpServers from settings.json (wrong location)
+    if obj.contains_key("mcpServers") {
+        obj.remove("mcpServers");
     }
 
-    // Find kodex binary path
-    let kodex_bin = find_kodex_binary();
-
-    // Add MCP server entry
-    let mcp_servers = obj
-        .entry("mcpServers")
-        .or_insert_with(|| serde_json::json!({}));
-    if let Some(servers) = mcp_servers.as_object_mut() {
-        servers.insert(
-            "kodex".to_string(),
-            serde_json::json!({
-                "command": kodex_bin,
-                "args": ["serve"]
-            }),
-        );
-    }
-
-    // Add hook: sync Claude memory writes to kodex
     let kodex_bin_clone = kodex_bin.clone();
     let hooks = obj.entry("hooks").or_insert_with(|| serde_json::json!({}));
     if let Some(hooks_obj) = hooks.as_object_mut() {
@@ -199,47 +226,77 @@ fn install_mcp_claude(target_dir: &Path) -> String {
                     }]
                 }]),
             );
+            match serde_json::to_string_pretty(&settings) {
+                Ok(json) => match std::fs::write(&settings_path, &json) {
+                    Ok(()) => {
+                        results.push(format!("Hook: registered in {}", settings_path.display()))
+                    }
+                    Err(e) => results.push(format!("Hook: failed: {e}")),
+                },
+                Err(e) => results.push(format!("Hook: failed: {e}")),
+            }
+        } else {
+            results.push("Hook: already registered".to_string());
         }
     }
 
-    match serde_json::to_string_pretty(&settings) {
-        Ok(json) => match std::fs::write(&settings_path, json) {
-            Ok(()) => format!("MCP + hook: registered in {}", settings_path.display()),
-            Err(e) => format!("MCP: failed to write settings: {e}"),
-        },
-        Err(e) => format!("MCP: failed to serialize: {e}"),
+    // Always save settings.json (may have removed stale mcpServers)
+    if let Ok(json) = serde_json::to_string_pretty(&settings) {
+        let _ = std::fs::write(&settings_path, json);
     }
+
+    results.join("\n")
 }
 
 fn uninstall_mcp_claude(target_dir: &Path) -> String {
-    let settings_path = target_dir.join(".claude/settings.json");
-    if !settings_path.exists() {
-        return "MCP: no settings file".to_string();
-    }
+    let mut results = Vec::new();
 
-    let text = match std::fs::read_to_string(&settings_path) {
-        Ok(t) => t,
-        Err(_) => return "MCP: failed to read settings".to_string(),
-    };
-
-    let mut settings: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => return "MCP: invalid settings JSON".to_string(),
-    };
-
-    if let Some(servers) = settings
-        .get_mut("mcpServers")
-        .and_then(|v| v.as_object_mut())
-    {
-        if servers.remove("kodex").is_some() {
-            if let Ok(json) = serde_json::to_string_pretty(&settings) {
-                let _ = std::fs::write(&settings_path, json);
+    // Remove from ~/.claude.json
+    let claude_json_path = target_dir.join(".claude.json");
+    if claude_json_path.exists() {
+        if let Ok(text) = std::fs::read_to_string(&claude_json_path) {
+            if let Ok(mut cj) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(servers) = cj.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+                    if servers.remove("kodex").is_some() {
+                        if let Ok(json) = serde_json::to_string_pretty(&cj) {
+                            let _ = std::fs::write(&claude_json_path, json);
+                        }
+                        results.push("MCP: removed from .claude.json".to_string());
+                    }
+                }
             }
-            return "MCP: removed from .claude/settings.json".to_string();
         }
     }
 
-    "MCP: not registered".to_string()
+    // Also clean from settings.json (legacy location)
+    let settings_path = target_dir.join(".claude/settings.json");
+    if settings_path.exists() {
+        if let Ok(text) = std::fs::read_to_string(&settings_path) {
+            if let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&text) {
+                let mut changed = false;
+                if let Some(servers) = settings
+                    .get_mut("mcpServers")
+                    .and_then(|v| v.as_object_mut())
+                {
+                    if servers.remove("kodex").is_some() {
+                        changed = true;
+                    }
+                }
+                if changed {
+                    if let Ok(json) = serde_json::to_string_pretty(&settings) {
+                        let _ = std::fs::write(&settings_path, json);
+                    }
+                    results.push("MCP: removed from .claude/settings.json (legacy)".to_string());
+                }
+            }
+        }
+    }
+
+    if results.is_empty() {
+        results.push("MCP: not registered".to_string());
+    }
+
+    results.join("\n")
 }
 
 // --- Cursor MCP ---
