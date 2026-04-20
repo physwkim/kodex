@@ -229,6 +229,7 @@ fn process_request(input: &str) -> String {
             serde_json::json!({"nodes": graph.node_count(), "edges": graph.edge_count(), "communities": communities.len()})
         }
         "learn" => {
+            let knowledge_uuid = params.get("uuid").and_then(|v| v.as_str());
             let kt_str = params
                 .get("type")
                 .and_then(|v| v.as_str())
@@ -241,9 +242,17 @@ fn process_request(input: &str) -> String {
             let related = extract_string_array(&params, "related_nodes");
             let tags = extract_string_array(&params, "tags");
             let kt = parse_knowledge_type(kt_str);
-            match crate::learn::learn(&h5_path, kt, title, desc, &related, &tags) {
-                Ok(()) => {
-                    serde_json::json!({"status": "learned", "title": title})
+            match crate::learn::learn_with_uuid(
+                &h5_path,
+                knowledge_uuid,
+                kt,
+                title,
+                desc,
+                &related,
+                &tags,
+            ) {
+                Ok(uuid) => {
+                    serde_json::json!({"status": "learned", "uuid": uuid, "title": title})
                 }
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -256,7 +265,7 @@ fn process_request(input: &str) -> String {
                 .iter()
                 .map(|k| {
                     serde_json::json!({
-                        "title": k.title, "type": k.knowledge_type.to_string(),
+                        "uuid": k.uuid, "title": k.title, "type": k.knowledge_type.to_string(),
                         "description": k.description.lines().next().unwrap_or(""),
                         "confidence": (k.confidence * 100.0) as u32,
                         "observations": k.observations, "related_nodes": k.related_nodes,

@@ -457,9 +457,13 @@ fn test_knowledge_learn_and_recall() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].title, "Test Pattern");
 
-    // Reinforce
-    kodex::learn::learn(
+    let results = kodex::learn::query_knowledge(&h5, "test", None);
+    let uuid = results[0].uuid.clone();
+
+    // Reinforce using UUID
+    kodex::learn::learn_with_uuid(
         &h5,
+        Some(&uuid),
         kodex::learn::KnowledgeType::Pattern,
         "Test Pattern",
         "Seen again",

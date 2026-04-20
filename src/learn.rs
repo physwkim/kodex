@@ -55,6 +55,7 @@ impl std::fmt::Display for KnowledgeType {
 /// A piece of learned knowledge.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Knowledge {
+    pub uuid: String,
     pub knowledge_type: KnowledgeType,
     pub title: String,
     pub description: String,
@@ -88,13 +89,37 @@ pub fn learn(
     related_nodes: &[String],
     tags: &[String],
 ) -> crate::error::Result<()> {
-    crate::storage::append_knowledge(
+    learn_with_uuid(
         h5_path,
+        None,
+        knowledge_type,
+        title,
+        description,
+        related_nodes,
+        tags,
+    )
+    .map(|_| ())
+}
+
+/// Learn with explicit UUID. Returns the UUID of the created/updated entry.
+/// - uuid=Some → update existing entry
+/// - uuid=None → create new entry with fresh UUID
+pub fn learn_with_uuid(
+    h5_path: &Path,
+    knowledge_uuid: Option<&str>,
+    knowledge_type: KnowledgeType,
+    title: &str,
+    description: &str,
+    related_nodes: &[String],
+    tags: &[String],
+) -> crate::error::Result<String> {
+    crate::storage::append_knowledge_with_uuid(
+        h5_path,
+        knowledge_uuid,
         title,
         &knowledge_type.to_string(),
         description,
-        0.6, // initial confidence
-        1,
+        0.6,
         related_nodes,
         tags,
     )
@@ -102,46 +127,48 @@ pub fn learn(
 
 /// Query knowledge by keyword, type, or tag. Reads from HDF5.
 pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
-    let entries = match crate::storage::load_knowledge_entries(h5_path) {
-        Ok(e) => e,
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
         Err(_) => return Vec::new(),
     };
     let query_lower = query.to_lowercase();
 
-    entries
+    let links = data.links;
+    data.knowledge
         .into_iter()
-        .filter_map(|(title, ktype, desc, conf, obs, related, tags)| {
+        .filter(|k| {
             if let Some(tf) = type_filter {
-                if ktype != tf {
-                    return None;
+                if k.knowledge_type != tf {
+                    return false;
                 }
             }
-            if !query.is_empty()
-                && !title.to_lowercase().contains(&query_lower)
-                && !desc.to_lowercase().contains(&query_lower)
-                && !tags.to_lowercase().contains(&query_lower)
-            {
-                return None;
+            if query.is_empty() {
+                return true;
             }
-            Some(Knowledge {
-                knowledge_type: parse_knowledge_type(&ktype),
-                title,
-                description: desc,
-                confidence: conf,
-                observations: obs,
-                related_nodes: related
-                    .split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(String::from)
-                    .collect(),
-                tags: tags
-                    .split(',')
-                    .filter(|s| !s.is_empty())
-                    .map(String::from)
-                    .collect(),
+            k.title.to_lowercase().contains(&query_lower)
+                || k.description.to_lowercase().contains(&query_lower)
+                || k.tags
+                    .iter()
+                    .any(|t| t.to_lowercase().contains(&query_lower))
+        })
+        .map(|k| {
+            let related: Vec<String> = links
+                .iter()
+                .filter(|l| l.knowledge_uuid == k.uuid)
+                .map(|l| l.node_uuid.clone())
+                .collect();
+            Knowledge {
+                uuid: k.uuid,
+                knowledge_type: parse_knowledge_type(&k.knowledge_type),
+                title: k.title,
+                description: k.description,
+                confidence: k.confidence,
+                observations: k.observations,
+                related_nodes: related,
+                tags: k.tags,
                 first_seen: 0,
                 last_seen: 0,
-            })
+            }
         })
         .collect()
 }
@@ -266,10 +293,12 @@ mod tests {
         assert_eq!(items[0].title, "Repository Pattern");
         assert_eq!(items[0].observations, 1);
         let conf1 = items[0].confidence;
+        let uuid = items[0].uuid.clone();
 
-        // Reinforce
-        learn(
+        // Reinforce using UUID
+        learn_with_uuid(
             &h5,
+            Some(&uuid),
             KnowledgeType::Pattern,
             "Repository Pattern",
             "Confirmed: ProductRepo also follows this",

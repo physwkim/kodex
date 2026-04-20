@@ -150,6 +150,34 @@ pub fn append_knowledge(
     related_nodes: &[String],
     tags: &[String],
 ) -> crate::error::Result<()> {
+    append_knowledge_with_uuid(
+        h5_path,
+        None,
+        title,
+        knowledge_type,
+        description,
+        confidence,
+        related_nodes,
+        tags,
+    )
+    .map(|_| ())
+}
+
+/// Core knowledge upsert. UUID is the only lookup key.
+/// If uuid is provided, finds and updates existing entry.
+/// If uuid is None, creates new entry with fresh UUID.
+/// Returns the UUID of the created or updated entry.
+#[allow(clippy::too_many_arguments)]
+pub fn append_knowledge_with_uuid(
+    h5_path: &Path,
+    knowledge_uuid: Option<&str>,
+    title: &str,
+    knowledge_type: &str,
+    description: &str,
+    confidence: f64,
+    related_nodes: &[String],
+    tags: &[String],
+) -> crate::error::Result<String> {
     let mut data = if h5_path.exists() {
         load(h5_path)?
     } else {
@@ -157,10 +185,20 @@ pub fn append_knowledge(
             "HDF5 file does not exist. Run `kodex run` first.".to_string(),
         ));
     };
-    let existing = data.knowledge.iter_mut().find(|k| k.title == title);
+    // UUID is the only lookup key. No title fallback.
+    let existing =
+        knowledge_uuid.and_then(|uuid| data.knowledge.iter_mut().find(|k| k.uuid == uuid));
     let k_uuid = if let Some(entry) = existing {
+        // Update existing entry (UUID stays the same)
         entry.observations += 1;
         entry.confidence = 1.0 - (1.0 - entry.confidence) * 0.8;
+        // Title can change — it's display-only, not a key
+        if !title.is_empty() {
+            entry.title = title.to_string();
+        }
+        if !knowledge_type.is_empty() {
+            entry.knowledge_type = knowledge_type.to_string();
+        }
         if !description.is_empty() && entry.description != description {
             entry.description = format!("{}\n---\n{}", entry.description, description);
         }
@@ -196,7 +234,8 @@ pub fn append_knowledge(
             });
         }
     }
-    save(h5_path, &data)
+    save(h5_path, &data)?;
+    Ok(k_uuid)
 }
 
 #[allow(clippy::type_complexity)]
@@ -274,14 +313,26 @@ pub fn merge_project(
     } else {
         KodexData::default()
     };
+    // Save existing project nodes for UUID matching BEFORE removing them
+    let old_project_nodes: Vec<_> = data
+        .extraction
+        .nodes
+        .iter()
+        .filter(|n| n.source_file.starts_with(project_name))
+        .cloned()
+        .collect();
+
+    // Remove old project slice
     data.extraction
         .nodes
         .retain(|n| !n.source_file.starts_with(project_name));
     data.extraction
         .edges
         .retain(|e| !e.source_file.starts_with(project_name));
+
+    // Match new nodes against old project nodes to preserve UUIDs
     let mut new_nodes = new_extraction.nodes.clone();
-    crate::fingerprint::assign_stable_ids(&data.extraction.nodes, &mut new_nodes);
+    crate::fingerprint::assign_stable_ids(&old_project_nodes, &mut new_nodes);
     data.extraction.nodes.extend(new_nodes);
     data.extraction.edges.extend(new_extraction.edges.clone());
     save(h5_path, &data)
