@@ -1081,3 +1081,197 @@ fn test_update_knowledge_timestamps() {
     assert!(entry2.updated_at >= created, "updated_at should be set after update");
     assert_eq!(entry2.scope, "module");
 }
+
+/// Gen3 test: graph reasoning changes actual recall ranking
+#[test]
+fn test_reasoning_affects_ranking() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("reason.h5");
+
+    // Create a graph with one node
+    let mut ext = kodex::types::ExtractionResult::default();
+    ext.nodes.push(kodex::types::Node {
+        id: "auth".into(), label: "AuthHandler".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project/auth.py".into(),
+        source_location: Some("L10".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: Some("node-auth".into()),
+        fingerprint: None, logical_key: None,
+        body_hash: Some("aaaa".into()),
+    });
+    let data = kodex::types::KodexData {
+        extraction: ext, knowledge: vec![], links: vec![], review_queue: vec![],
+    };
+    kodex::storage::save(&h5, &data).unwrap();
+
+    // K1: directly linked to node-auth (high base relevance)
+    let k1 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "JWT Auth", "Token-based auth", Some(std::slice::from_ref(&"node-auth".to_string())),
+        &[], None,
+    ).unwrap();
+
+    // K2: NOT linked to any node (low base relevance)
+    let k2 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Decision,
+        "Session Config", "Session settings",
+        None, &[], None,
+    ).unwrap();
+
+    // K1 supports K2 — reasoning should boost K2
+    kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", false).unwrap();
+
+    // Recall with node-auth context — K1 scores high, K2 gets reasoning boost
+    let results = kodex::learn::recall_for_task_structured(
+        &h5, "", &["project/auth.py".into()], &["node-auth".into()], 10,
+    );
+
+    assert!(results.len() >= 2, "Should return both entries");
+
+    // K2 should have a reasoning boost in its score
+    let k2_result = results.iter().find(|r| r.knowledge.uuid == k2).unwrap();
+    assert!(
+        k2_result.score.reasons.iter().any(|r| r.contains("graph reasoning")),
+        "K2 should have graph reasoning in its reasons: {:?}", k2_result.score.reasons
+    );
+}
+
+/// Gen3 test: task_type changes recommendations
+#[test]
+fn test_task_type_recommendations() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("recs.h5");
+    {
+        let e = kodex::types::ExtractionResult::default();
+        let g = kodex::graph::build_from_extraction(&e);
+        let c = kodex::cluster::cluster(&g);
+        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+    }
+
+    // Create a bug_pattern knowledge
+    kodex::learn::learn(
+        &h5, kodex::learn::KnowledgeType::BugPattern,
+        "Off-by-one in pagination", "Page count wrong by 1",
+        &[], &[],
+    ).unwrap();
+
+    // Create a convention knowledge
+    kodex::learn::learn(
+        &h5, kodex::learn::KnowledgeType::Convention,
+        "Always validate input", "All endpoints must validate",
+        &[], &[],
+    ).unwrap();
+
+    // Create a tech_debt knowledge
+    kodex::learn::learn(
+        &h5, kodex::learn::KnowledgeType::TechDebt,
+        "Legacy auth module", "Needs rewrite",
+        &[], &[],
+    ).unwrap();
+
+    // bugfix context: should recommend test for bug_pattern
+    let bugfix_ctx = kodex::learn::get_task_context_json(
+        &h5, "pagination", &[], 10, "bugfix",
+    );
+    let has_test_rec = bugfix_ctx.recommendations.iter().any(|r| r.category == "test");
+    assert!(has_test_rec, "bugfix should produce test recommendations: {:?}",
+        bugfix_ctx.recommendations.iter().map(|r| &r.category).collect::<Vec<_>>());
+
+    // refactor context: should recommend opportunity for tech_debt
+    let refactor_ctx = kodex::learn::get_task_context_json(
+        &h5, "auth", &[], 10, "refactor",
+    );
+    let has_opportunity = refactor_ctx.recommendations.iter().any(|r| r.category == "opportunity");
+    assert!(has_opportunity, "refactor should produce opportunity recommendations: {:?}",
+        refactor_ctx.recommendations.iter().map(|r| &r.category).collect::<Vec<_>>());
+
+    // coding context: should NOT produce test or opportunity recs for these types
+    let coding_ctx = kodex::learn::get_task_context_json(
+        &h5, "pagination", &[], 10, "coding",
+    );
+    let has_test_in_coding = coding_ctx.recommendations.iter().any(|r| r.category == "test");
+    assert!(!has_test_in_coding, "coding should not produce test recommendations from bug_pattern");
+}
+
+/// Gen3 test: recall_for_diff boosts affected knowledge
+#[test]
+fn test_recall_for_diff_boost() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let h5 = dir.path().join("diff_recall.h5");
+
+    // Create graph with two nodes in different files
+    let mut ext = kodex::types::ExtractionResult::default();
+    ext.nodes.push(kodex::types::Node {
+        id: "auth_fn".into(), label: "authenticate()".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project/auth.py".into(),
+        source_location: Some("L10".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: Some("node-auth".into()),
+        fingerprint: None, logical_key: None,
+        body_hash: Some("aaaa".into()),
+    });
+    ext.nodes.push(kodex::types::Node {
+        id: "payment_fn".into(), label: "process_payment()".into(),
+        file_type: kodex::types::FileType::Code,
+        source_file: "project/payment.py".into(),
+        source_location: Some("L20".into()),
+        confidence: Some(kodex::types::Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None, norm_label: None, degree: None,
+        uuid: Some("node-pay".into()),
+        fingerprint: None, logical_key: None,
+        body_hash: Some("bbbb".into()),
+    });
+    let data = kodex::types::KodexData {
+        extraction: ext, knowledge: vec![], links: vec![], review_queue: vec![],
+    };
+    kodex::storage::save(&h5, &data).unwrap();
+
+    // K1: linked to auth node
+    let k1 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Pattern,
+        "JWT Auth Pattern", "Token auth",
+        Some(std::slice::from_ref(&"node-auth".to_string())), &[], None,
+    ).unwrap();
+
+    // K2: linked to payment node
+    let _k2 = kodex::learn::learn_with_uuid(
+        &h5, None, kodex::learn::KnowledgeType::Convention,
+        "Payment Validation", "Always validate amounts",
+        Some(std::slice::from_ref(&"node-pay".to_string())), &[], None,
+    ).unwrap();
+
+    // Diff that changes auth.py only
+    let diff = r#"diff --git a/project/auth.py b/project/auth.py
+--- a/project/auth.py
++++ b/project/auth.py
+@@ -10,3 +10,5 @@ def authenticate():
++    validate_token()
++    check_expiry()
+"#;
+
+    let (analysis, results) = kodex::learn::recall_for_diff(&h5, diff, 10);
+
+    // Analysis should find auth.py changed
+    assert!(analysis.changed_files.iter().any(|f| f.contains("auth")),
+        "Should detect auth.py change");
+
+    // K1 should be affected (linked to node-auth which is in auth.py)
+    assert!(analysis.affected_knowledge_uuids.contains(&k1),
+        "K1 should be in affected list");
+
+    // K1 should rank first (affected by diff + linked to changed node)
+    assert!(!results.is_empty());
+    assert_eq!(results[0].knowledge.uuid, k1,
+        "JWT Auth should rank first for auth.py diff");
+
+    // K1 should have "directly affected by diff" in reasons
+    assert!(results[0].score.reasons.iter().any(|r| r.contains("affected by diff")),
+        "Should have diff boost reason: {:?}", results[0].score.reasons);
+}
