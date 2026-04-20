@@ -7,29 +7,52 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct DiffHunk {
     pub file: String,
+    pub old_file: String,
     pub start_line: u32,
     pub end_line: u32,
+    pub old_start_line: u32,
+    pub old_end_line: u32,
 }
 
 /// Parse unified diff output into hunks.
+/// Tracks both old-side (deletions) and new-side (additions) for rename/delete handling.
 pub fn parse_diff(diff_text: &str) -> Vec<DiffHunk> {
     let mut hunks = Vec::new();
     let mut current_file = String::new();
+    let mut old_file = String::new();
 
     for line in diff_text.lines() {
+        // --- a/path/to/file.py (old file, used for deletes/renames)
+        if let Some(path) = line.strip_prefix("--- a/") {
+            old_file = path.to_string();
+            continue;
+        }
         // +++ b/path/to/file.py
         if let Some(path) = line.strip_prefix("+++ b/") {
             current_file = path.to_string();
             continue;
         }
-        // @@ -old,count +new_start,count @@
+        // +++ /dev/null (file deleted)
+        if line == "+++ /dev/null" {
+            current_file = old_file.clone();
+            continue;
+        }
+        // @@ -old_start,old_count +new_start,new_count @@
         if line.starts_with("@@ ") {
-            if let Some(hunk) = parse_hunk_header(line) {
-                if !current_file.is_empty() {
+            if let Some((old, new)) = parse_hunk_header_both(line) {
+                let file = if current_file.is_empty() {
+                    old_file.clone()
+                } else {
+                    current_file.clone()
+                };
+                if !file.is_empty() {
                     hunks.push(DiffHunk {
-                        file: current_file.clone(),
-                        start_line: hunk.0,
-                        end_line: hunk.0 + hunk.1.saturating_sub(1),
+                        file: file.clone(),
+                        old_file: old_file.clone(),
+                        start_line: new.0,
+                        end_line: new.0 + new.1.saturating_sub(1),
+                        old_start_line: old.0,
+                        old_end_line: old.0 + old.1.saturating_sub(1),
                     });
                 }
             }
@@ -39,37 +62,57 @@ pub fn parse_diff(diff_text: &str) -> Vec<DiffHunk> {
     hunks
 }
 
-/// Parse "@@ -old,count +new_start,count @@" → (new_start, count)
-fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
-    // Find the +N,M part
+/// Parse "@@ -old_start,old_count +new_start,new_count @@"
+fn parse_hunk_header_both(line: &str) -> Option<((u32, u32), (u32, u32))> {
+    // Parse -N,M
+    let minus = line.find('-')?;
+    let after_minus = &line[minus + 1..];
+    let space = after_minus.find(' ')?;
+    let old_nums = &after_minus[..space];
+    let old_parts: Vec<&str> = old_nums.split(',').collect();
+    let old_start: u32 = old_parts.first()?.parse().ok()?;
+    let old_count: u32 = old_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    // Parse +N,M
     let plus = line.find('+')?;
-    let rest = &line[plus + 1..];
-    let end = rest.find(|c: char| !c.is_ascii_digit() && c != ',')?;
-    let nums = &rest[..end];
-    let parts: Vec<&str> = nums.split(',').collect();
-    let start: u32 = parts.first()?.parse().ok()?;
-    let count: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
-    Some((start, count))
+    let after_plus = &line[plus + 1..];
+    let end = after_plus.find(|c: char| !c.is_ascii_digit() && c != ',')?;
+    let new_nums = &after_plus[..end];
+    let new_parts: Vec<&str> = new_nums.split(',').collect();
+    let new_start: u32 = new_parts.first()?.parse().ok()?;
+    let new_count: u32 = new_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    Some(((old_start, old_count), (new_start, new_count)))
 }
 
 /// Map diff hunks to node UUIDs by matching file + line range.
+/// Checks both new-side and old-side ranges to handle deletions/renames.
 pub fn diff_to_node_uuids(hunks: &[DiffHunk], data: &crate::types::KodexData) -> Vec<String> {
     let mut uuids = HashSet::new();
 
     for hunk in hunks {
-        let hunk_filename = hunk.file.rsplit('/').next().unwrap_or(&hunk.file);
+        let new_filename = hunk.file.rsplit('/').next().unwrap_or(&hunk.file);
+        let old_filename = hunk.old_file.rsplit('/').next().unwrap_or(&hunk.old_file);
 
         for node in &data.extraction.nodes {
-            // Match by filename
             let node_filename = node.source_file.rsplit('/').next().unwrap_or(&node.source_file);
-            if node_filename != hunk_filename && !node.source_file.ends_with(&hunk.file) {
-                continue;
-            }
 
-            // Match by line range
             if let Some(loc) = &node.source_location {
                 let node_line: u32 = loc.trim_start_matches('L').parse().unwrap_or(0);
-                if node_line >= hunk.start_line && node_line <= hunk.end_line + 5 {
+
+                // Match new-side (additions/modifications)
+                let new_match = (node_filename == new_filename
+                    || node.source_file.ends_with(&hunk.file))
+                    && node_line >= hunk.start_line
+                    && node_line <= hunk.end_line + 5;
+
+                // Match old-side (deletions/renames)
+                let old_match = (node_filename == old_filename
+                    || node.source_file.ends_with(&hunk.old_file))
+                    && node_line >= hunk.old_start_line
+                    && node_line <= hunk.old_end_line + 5;
+
+                if new_match || old_match {
                     if let Some(uuid) = &node.uuid {
                         uuids.insert(uuid.clone());
                     }
@@ -92,7 +135,8 @@ pub fn analyze_diff(
 
     let changed_files: Vec<String> = hunks
         .iter()
-        .map(|h| h.file.clone())
+        .flat_map(|h| [h.file.clone(), h.old_file.clone()])
+        .filter(|f| !f.is_empty())
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -147,14 +191,34 @@ mod tests {
         let hunks = parse_diff(diff);
         assert_eq!(hunks.len(), 2);
         assert_eq!(hunks[0].file, "src/auth.py");
+        assert_eq!(hunks[0].old_file, "src/auth.py");
         assert_eq!(hunks[0].start_line, 10);
+        assert_eq!(hunks[0].old_start_line, 10);
         assert_eq!(hunks[1].start_line, 33);
+        assert_eq!(hunks[1].old_start_line, 30);
     }
 
     #[test]
-    fn test_parse_hunk_header() {
-        assert_eq!(parse_hunk_header("@@ -10,5 +15,8 @@ def foo():"), Some((15, 8)));
-        assert_eq!(parse_hunk_header("@@ -1 +1,3 @@"), Some((1, 3)));
-        assert_eq!(parse_hunk_header("@@ -0,0 +1 @@"), Some((1, 1)));
+    fn test_parse_hunk_header_both() {
+        let r = parse_hunk_header_both("@@ -10,5 +15,8 @@ def foo():");
+        assert_eq!(r, Some(((10, 5), (15, 8))));
+        let r = parse_hunk_header_both("@@ -1 +1,3 @@");
+        assert_eq!(r, Some(((1, 1), (1, 3))));
+    }
+
+    #[test]
+    fn test_parse_file_deletion() {
+        let diff = r#"diff --git a/old.py b/old.py
+--- a/old.py
++++ /dev/null
+@@ -1,10 +0,0 @@
+-def removed():
+-    pass
+"#;
+        let hunks = parse_diff(diff);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].file, "old.py");
+        assert_eq!(hunks[0].old_file, "old.py");
+        assert_eq!(hunks[0].old_start_line, 1);
     }
 }

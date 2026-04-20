@@ -666,6 +666,15 @@ pub fn recall_for_task_structured(
     let ctx = ScoringContext::new(touched_files, &node_uuid_set, &query_tokens);
     let links = &data.links;
 
+    // Compute graph reasoning adjustments for all seed UUIDs
+    let seed_uuids: Vec<String> = node_uuids.to_vec();
+    let reasoning = crate::reasoning::propagate_confidence(
+        &data.knowledge,
+        &data.links,
+        &seed_uuids,
+        3,
+    );
+
     let mut scored: Vec<RecallResult> = data
         .knowledge
         .iter()
@@ -688,7 +697,17 @@ pub fn recall_for_task_structured(
                 created_at: k.created_at,
                 updated_at: k.updated_at,
             };
-            let score = relevance_score_detailed(&knowledge, k, &ctx);
+            let mut score = relevance_score_detailed(&knowledge, k, &ctx);
+            // Apply graph reasoning adjustment (±0.3 max, scaled to ±10 points)
+            if let Some(&adj) = reasoning.adjustments.get(&k.uuid) {
+                let reasoning_pts = adj * 33.0; // ±0.3 → ±10
+                score.total += reasoning_pts;
+                if reasoning_pts.abs() > 0.5 {
+                    score.reasons.push(format!(
+                        "graph reasoning: {reasoning_pts:+.1}"
+                    ));
+                }
+            }
             RecallResult { knowledge, score }
         })
         .collect();
@@ -2169,16 +2188,17 @@ pub fn get_review_queue(h5_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
 }
 
 /// Enqueue a knowledge entry for review.
+/// Enqueue a knowledge entry for review. Returns true if actually enqueued.
 pub fn enqueue_review(
     h5_path: &Path,
     knowledge_uuid: &str,
     reason: &str,
     priority: u8,
-) -> crate::error::Result<()> {
+) -> crate::error::Result<bool> {
     let mut data = crate::storage::load(h5_path)?;
     // Don't duplicate
     if data.review_queue.iter().any(|q| q.knowledge_uuid == knowledge_uuid && !q.completed) {
-        return Ok(());
+        return Ok(false);
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2191,7 +2211,8 @@ pub fn enqueue_review(
         priority,
         completed: false,
     });
-    crate::storage::save(h5_path, &data)
+    crate::storage::save(h5_path, &data)?;
+    Ok(true)
 }
 
 /// Complete a review queue item (mark as done).
@@ -2213,16 +2234,19 @@ pub fn refresh_review_queue(h5_path: &Path) -> crate::error::Result<usize> {
 
     let mut count = 0;
     for s in &stale {
-        enqueue_review(h5_path, &s.uuid, &format!("stale: {}", s.reason), 7)?;
-        count += 1;
+        if enqueue_review(h5_path, &s.uuid, &format!("stale: {}", s.reason), 7)? {
+            count += 1;
+        }
     }
     for c in &conflicts {
-        enqueue_review(h5_path, &c.uuid_a, &format!("conflict: {}", c.description), 8)?;
-        count += 1;
+        if enqueue_review(h5_path, &c.uuid_a, &format!("conflict: {}", c.description), 8)? {
+            count += 1;
+        }
     }
     for d in &duplicates {
-        enqueue_review(h5_path, &d.uuid_a, &format!("duplicate: {}", d.reason), 5)?;
-        count += 1;
+        if enqueue_review(h5_path, &d.uuid_a, &format!("duplicate: {}", d.reason), 5)? {
+            count += 1;
+        }
     }
     Ok(count)
 }
