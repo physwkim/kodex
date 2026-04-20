@@ -83,7 +83,9 @@ pub fn watch(
                     } else if pending_vault {
                         pending_vault = false;
                         last_rebuild = Instant::now();
-                        reverse_sync_vault(watch_path, vault_path.unwrap());
+                        if let Some(vp) = vault_path {
+                            reverse_sync_vault(watch_path, vp);
+                        }
                     }
                 }
             }

@@ -142,6 +142,7 @@ pub fn run(config: &WorkspaceConfig, vault_override: Option<&Path>) -> Result<()
     println!("kodex workspace: {} projects", config.projects.len());
 
     // Step 1: Build each project
+    #[allow(unused_mut)]
     let mut all_extractions: Vec<(String, ExtractionResult)> = Vec::new();
 
     for project_path in &config.projects {

@@ -41,7 +41,7 @@ pub fn export_all(
     community_labels: &std::collections::HashMap<usize, String>,
     out_dir: &Path,
 ) {
-    let _ = kodex::storage::save_hdf5(graph, communities, &out_dir.join("kodex.h5"));
+    let _ = kodex::storage::save_hdf5(graph, communities, &kodex::registry::global_h5());
     let _ = kodex::export::to_html(
         graph,
         communities,

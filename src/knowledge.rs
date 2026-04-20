@@ -3,7 +3,7 @@ use std::path::Path;
 /// Save an AI-discovered insight as a vault note.
 ///
 /// An insight connects multiple nodes with a named pattern or concept.
-/// The vault .md file is the source of truth; HDF5/JSON are rebuilt from vault on next load.
+/// Vault .md files are optional Obsidian views. HDF5 is the source of truth.
 pub fn save_insight(
     _graph_path: &Path,
     vault_path: Option<&Path>,
@@ -12,7 +12,8 @@ pub fn save_insight(
     node_ids: &[String],
     pattern: Option<&str>,
 ) -> crate::error::Result<()> {
-    let vault = vault_path.unwrap_or_else(|| Path::new("kodex-out/vault"));
+    let default_vault = crate::registry::kodex_home().join("vault");
+    let vault = vault_path.unwrap_or(&default_vault);
     write_insight_note(vault, label, description, node_ids, pattern)
 }
 
@@ -24,7 +25,8 @@ pub fn save_note(
     content: &str,
     related_nodes: &[String],
 ) -> crate::error::Result<()> {
-    let vault = vault_path.unwrap_or_else(|| Path::new("kodex-out/vault"));
+    let default_vault = crate::registry::kodex_home().join("vault");
+    let vault = vault_path.unwrap_or(&default_vault);
     write_free_note(vault, title, content, related_nodes)
 }
 
@@ -38,11 +40,11 @@ pub fn add_edge(
 ) -> crate::error::Result<()> {
     // Edge-only additions don't need a separate file — they'll be
     // captured as wikilinks in existing node notes, or as an insight note.
-    let vault = Path::new("kodex-out/vault");
+    let vault = crate::registry::kodex_home().join("vault");
     let label = format!("{source} → {target}");
     let desc = description.unwrap_or(relation);
     write_insight_note(
-        vault,
+        &vault,
         &label,
         desc,
         &[source.to_string(), target.to_string()],

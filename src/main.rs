@@ -36,21 +36,21 @@ enum Commands {
         #[arg(long, default_value_t = 2000)]
         budget: usize,
         /// Path to graph data
-        #[arg(long, default_value = "kodex-out/kodex.h5")]
-        graph: PathBuf,
+        #[arg(long)]
+        graph: Option<PathBuf>,
     },
     /// Find shortest path between two nodes
     Path {
         source: String,
         target: String,
-        #[arg(long, default_value = "kodex-out/kodex.h5")]
-        graph: PathBuf,
+        #[arg(long)]
+        graph: Option<PathBuf>,
     },
     /// Explain a node and its neighbors
     Explain {
         node: String,
-        #[arg(long, default_value = "kodex-out/kodex.h5")]
-        graph: PathBuf,
+        #[arg(long)]
+        graph: Option<PathBuf>,
     },
     /// Watch directory for changes and auto-rebuild
     Watch {
@@ -62,8 +62,8 @@ enum Commands {
     },
     /// Measure token reduction benchmark
     Benchmark {
-        #[arg(default_value = "kodex-out/kodex.h5")]
-        graph: PathBuf,
+        #[arg()]
+        graph: Option<PathBuf>,
     },
     /// Manage git hooks
     Hook {
@@ -97,8 +97,8 @@ enum Commands {
     },
     /// Start MCP stdio server
     Serve {
-        #[arg(default_value = "kodex-out/kodex.h5")]
-        graph: PathBuf,
+        #[arg()]
+        graph: Option<PathBuf>,
     },
     /// List registered projects
     List,
@@ -121,6 +121,10 @@ enum Commands {
     Actor,
 }
 
+fn resolve_h5(graph: &Option<PathBuf>) -> PathBuf {
+    graph.clone().unwrap_or_else(kodex::registry::global_h5)
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -132,14 +136,14 @@ fn main() {
             budget,
             graph,
         }) => {
-            commands::query::query(&question, dfs, budget, &graph);
+            commands::query::query(&question, dfs, budget, &resolve_h5(&graph));
         }
         Some(Commands::Path {
             source,
             target,
             graph,
-        }) => commands::path(&source, &target, &graph),
-        Some(Commands::Explain { node, graph }) => commands::explain(&node, &graph),
+        }) => commands::path(&source, &target, &resolve_h5(&graph)),
+        Some(Commands::Explain { node, graph }) => commands::explain(&node, &resolve_h5(&graph)),
         Some(Commands::Watch {
             path,
             debounce,
@@ -149,7 +153,7 @@ fn main() {
                 eprintln!("Watch error: {e}");
             }
         }
-        Some(Commands::Benchmark { graph }) => commands::benchmark(&graph),
+        Some(Commands::Benchmark { graph }) => commands::benchmark(&resolve_h5(&graph)),
         Some(Commands::Hook { action }) => {
             let path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let result = match action.as_str() {
@@ -177,7 +181,7 @@ fn main() {
         Some(Commands::Workspace { action, vault }) => {
             commands::workspace::workspace(&action, vault.as_deref());
         }
-        Some(Commands::Serve { graph }) => commands::serve::serve(&graph),
+        Some(Commands::Serve { graph }) => commands::serve::serve(&resolve_h5(&graph)),
         Some(Commands::List) => {
             let entries = kodex::registry::list();
             if entries.is_empty() {

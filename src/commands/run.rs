@@ -1,4 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "extract")]
+use std::path::PathBuf;
 
 pub fn run_pipeline(path: &Path) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());

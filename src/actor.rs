@@ -274,6 +274,41 @@ fn process_request(input: &str) -> String {
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
+        "save_insight" => {
+            let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let desc = params
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let nodes = extract_string_array(&params, "nodes");
+            let pattern = params.get("pattern").and_then(|v| v.as_str());
+            match crate::knowledge::save_insight(&h5_path, None, label, desc, &nodes, pattern) {
+                Ok(()) => serde_json::json!({"status": "saved", "label": label}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "save_note" => {
+            let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("");
+            let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let related = extract_string_array(&params, "related_nodes");
+            match crate::knowledge::save_note(&h5_path, None, title, content, &related) {
+                Ok(()) => serde_json::json!({"status": "saved", "title": title}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "add_edge" => {
+            let source = params.get("source").and_then(|v| v.as_str()).unwrap_or("");
+            let target = params.get("target").and_then(|v| v.as_str()).unwrap_or("");
+            let relation = params
+                .get("relation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("related_to");
+            let desc = params.get("description").and_then(|v| v.as_str());
+            match crate::knowledge::add_edge(&h5_path, source, target, relation, desc) {
+                Ok(()) => serde_json::json!({"status": "saved"}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };
 
