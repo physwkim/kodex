@@ -33,7 +33,7 @@ pub fn save_hdf5(
     communities: &HashMap<usize, Vec<String>>,
     path: &Path,
 ) -> crate::error::Result<()> {
-    save_hdf5_with_knowledge(graph, communities, path, &[], &[], &[], &[], &[], &[], &[])
+    save_hdf5_with_knowledge(graph, communities, path, &[], &[], &[], &[], &[], &[], &[], &[])
 }
 
 /// Load a graph from HDF5 format.
@@ -338,6 +338,7 @@ fn save_hdf5_with_knowledge(
     graph: &KodexGraph,
     communities: &HashMap<usize, Vec<String>>,
     path: &Path,
+    k_uuids: &[String],
     k_titles: &[String],
     k_types: &[String],
     k_descriptions: &[String],
@@ -427,6 +428,7 @@ fn save_hdf5_with_knowledge(
             .create_group("knowledge")
             .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
 
+        write_vlen(&k_grp, "uuid", k_uuids)?;
         write_vlen(&k_grp, "titles", k_titles)?;
         write_vlen(&k_grp, "types", k_types)?;
         write_vlen(&k_grp, "descriptions", k_descriptions)?;
