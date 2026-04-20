@@ -69,7 +69,7 @@ pub fn diff_to_node_uuids(hunks: &[DiffHunk], data: &crate::types::KodexData) ->
             // Match by line range
             if let Some(loc) = &node.source_location {
                 let node_line: u32 = loc.trim_start_matches('L').parse().unwrap_or(0);
-                if node_line >= hunk.start_line && node_line <= hunk.end_line + 10 {
+                if node_line >= hunk.start_line && node_line <= hunk.end_line + 5 {
                     if let Some(uuid) = &node.uuid {
                         uuids.insert(uuid.clone());
                     }
