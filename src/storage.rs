@@ -987,6 +987,9 @@ fn graph_to_extraction(graph: &KodexGraph) -> ExtractionResult {
     }
 }
 
+/// Default chunk size for compressed vlen string datasets.
+const VLEN_CHUNK_SIZE: usize = 512;
+
 fn write_vlen(
     group: &rust_hdf5::group::H5Group,
     name: &str,
@@ -997,7 +1000,12 @@ fn write_vlen(
     }
     let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
     group
-        .write_vlen_strings(name, &refs)
+        .write_vlen_strings_compressed(
+            name,
+            &refs,
+            VLEN_CHUNK_SIZE,
+            rust_hdf5::FilterPipeline::lz4(),
+        )
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))
 }
 

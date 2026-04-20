@@ -136,7 +136,20 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
             continue;
         }
 
-        let response = process_request(trimmed);
+        let owned = trimmed.to_string();
+        let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process_request(&owned))) {
+            Ok(r) => r,
+            Err(_) => {
+                let id = serde_json::from_str::<serde_json::Value>(trimmed)
+                    .ok()
+                    .and_then(|r| r.get("id").cloned())
+                    .unwrap_or(serde_json::Value::Null);
+                format!(
+                    r#"{{"jsonrpc":"2.0","error":{{"code":-32000,"message":"Internal error (panic caught)"}},"id":{}}}"#,
+                    serde_json::to_string(&id).unwrap_or_default(),
+                )
+            }
+        };
         if writeln!(writer, "{response}").is_err() {
             break;
         }
