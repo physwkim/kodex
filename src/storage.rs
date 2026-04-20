@@ -279,8 +279,9 @@ pub fn append_knowledge_with_uuid(
         data.links
             .retain(|l| l.knowledge_uuid != k_uuid || l.is_knowledge_link());
         for node_ref in nodes {
-            // Snapshot body_hash at link time for drift detection
+            // Snapshot at link time for drift detection
             let linked_bh = data.node_body_hash(node_ref);
+            let linked_lk = data.node_logical_key(node_ref);
             data.links.push(KnowledgeLink {
                 knowledge_uuid: k_uuid.clone(),
                 node_uuid: node_ref.clone(),
@@ -289,6 +290,9 @@ pub fn append_knowledge_with_uuid(
                 confidence: 1.0,
                 created_at: now,
                 linked_body_hash: linked_bh,
+                linked_logical_key: linked_lk,
+                source: "agent".to_string(),
+                ..Default::default()
             });
         }
     }
@@ -657,7 +661,13 @@ fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<(
     write_vlen(&grp, "node_uuid", &nu)?;
     write_vlen(&grp, "relation", &re)?;
     write_vlen(&grp, "target_type", &tt)?;
+    let lre: Vec<String> = links.iter().map(|l| l.reason.clone()).collect();
+    let lsr: Vec<String> = links.iter().map(|l| l.source.clone()).collect();
+    let llk: Vec<String> = links.iter().map(|l| l.linked_logical_key.clone()).collect();
     write_vlen(&grp, "linked_body_hash", &lbh)?;
+    write_vlen(&grp, "link_reason", &lre)?;
+    write_vlen(&grp, "link_source", &lsr)?;
+    write_vlen(&grp, "linked_logical_key", &llk)?;
     if !lco.is_empty() {
         grp.new_dataset::<f64>()
             .shape([lco.len()])
@@ -853,6 +863,9 @@ fn read_links(file: &H5File) -> crate::error::Result<Vec<KnowledgeLink>> {
     let re = read_vlen(file, "links/relation").unwrap_or_default();
     let tt = read_vlen(file, "links/target_type").unwrap_or_default();
     let lbh = read_vlen(file, "links/linked_body_hash").unwrap_or_default();
+    let lre = read_vlen(file, "links/link_reason").unwrap_or_default();
+    let lsr = read_vlen(file, "links/link_source").unwrap_or_default();
+    let llk = read_vlen(file, "links/linked_logical_key").unwrap_or_default();
     let lco: Vec<f64> = file
         .dataset("links/confidence")
         .and_then(|ds| ds.read_raw())
@@ -868,6 +881,9 @@ fn read_links(file: &H5File) -> crate::error::Result<Vec<KnowledgeLink>> {
             relation: re.get(i).cloned().unwrap_or_default(),
             target_type: tt.get(i).cloned().unwrap_or_default(),
             linked_body_hash: lbh.get(i).cloned().unwrap_or_default(),
+            reason: lre.get(i).cloned().unwrap_or_default(),
+            source: lsr.get(i).cloned().unwrap_or_default(),
+            linked_logical_key: llk.get(i).cloned().unwrap_or_default(),
             confidence: lco.get(i).copied().unwrap_or(1.0),
             created_at: lca.get(i).copied().unwrap_or(0),
         })

@@ -292,6 +292,15 @@ pub struct KnowledgeLink {
     /// Snapshot of target node's body_hash at link creation time
     #[serde(default)]
     pub linked_body_hash: String,
+    /// Why this link was created
+    #[serde(default)]
+    pub reason: String,
+    /// Who created this link: human / agent / inferred
+    #[serde(default)]
+    pub source: String,
+    /// Snapshot of target node's logical_key at link creation time
+    #[serde(default)]
+    pub linked_logical_key: String,
 }
 
 impl KnowledgeLink {
@@ -312,13 +321,22 @@ pub struct KodexData {
 }
 
 impl KodexData {
-    /// Look up body_hash for a node by UUID. Used for link snapshots.
+    /// Look up body_hash for a node by UUID.
     pub fn node_body_hash(&self, node_uuid: &str) -> String {
+        self.node_field(node_uuid, |n| n.body_hash.clone())
+    }
+
+    /// Look up logical_key for a node by UUID.
+    pub fn node_logical_key(&self, node_uuid: &str) -> String {
+        self.node_field(node_uuid, |n| n.logical_key.clone())
+    }
+
+    fn node_field(&self, node_uuid: &str, f: impl Fn(&Node) -> Option<String>) -> String {
         self.extraction
             .nodes
             .iter()
             .find(|n| n.uuid.as_deref() == Some(node_uuid))
-            .and_then(|n| n.body_hash.clone())
+            .and_then(&f)
             .unwrap_or_default()
     }
 }

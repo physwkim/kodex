@@ -634,29 +634,22 @@ fn relevance_score_detailed(
     b
 }
 
-/// Score a knowledge entry's relevance (simple f64).
-fn relevance_score(
-    k: &Knowledge,
-    entry: &crate::types::KnowledgeEntry,
-    ctx: &ScoringContext<'_>,
-) -> f64 {
-    relevance_score_detailed(k, entry, ctx).total
+
+/// A recall result with score breakdown.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecallResult {
+    pub knowledge: Knowledge,
+    pub score: ScoreBreakdown,
 }
 
-/// Recall knowledge ranked by relevance to the current task.
-///
-/// Input signals:
-/// - `question`: natural language query
-/// - `touched_files`: currently edited files
-/// - `node_uuids`: UUIDs of nodes in the current neighborhood
-/// - `max_items`: top-N to return
-pub fn recall_for_task(
+/// Recall knowledge ranked by relevance, with score breakdown and diversity.
+pub fn recall_for_task_structured(
     h5_path: &Path,
     question: &str,
     touched_files: &[String],
     node_uuids: &[String],
     max_items: usize,
-) -> Vec<Knowledge> {
+) -> Vec<RecallResult> {
     let data = match crate::storage::load(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
@@ -673,7 +666,7 @@ pub fn recall_for_task(
     let ctx = ScoringContext::new(touched_files, &node_uuid_set, &query_tokens);
     let links = &data.links;
 
-    let mut scored: Vec<(f64, Knowledge)> = data
+    let mut scored: Vec<RecallResult> = data
         .knowledge
         .iter()
         .filter(|k| k.status != "obsolete")
@@ -695,18 +688,158 @@ pub fn recall_for_task(
                 created_at: k.created_at,
                 updated_at: k.updated_at,
             };
-            let score = relevance_score(&knowledge, k, &ctx);
-            (score, knowledge)
+            let score = relevance_score_detailed(&knowledge, k, &ctx);
+            RecallResult { knowledge, score }
         })
         .collect();
 
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    scored.into_iter().take(max_items).map(|(_, k)| k).collect()
+    scored.sort_by(|a, b| {
+        b.score
+            .total
+            .partial_cmp(&a.score.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Diversity: collapse similar entries (same type + >60% title overlap)
+    let mut result = Vec::new();
+    let mut seen_titles: Vec<String> = Vec::new();
+    for item in scored {
+        if result.len() >= max_items {
+            break;
+        }
+        let title_lower = item.knowledge.title.to_lowercase();
+        let is_dup = seen_titles.iter().any(|prev| {
+            let tokens_a: Vec<&str> = prev.split_whitespace().collect();
+            let tokens_b: Vec<&str> = title_lower.split_whitespace().collect();
+            if tokens_a.is_empty() || tokens_b.is_empty() {
+                return false;
+            }
+            let common = tokens_a.iter().filter(|t| tokens_b.contains(t)).count();
+            let total = tokens_a.len().max(tokens_b.len());
+            common as f64 / total as f64 > 0.6
+        });
+        if !is_dup {
+            seen_titles.push(title_lower);
+            result.push(item);
+        }
+    }
+
+    result
 }
 
-/// Build a task-specific briefing for the agent.
+/// Recall knowledge ranked by relevance (simple Knowledge vec).
+pub fn recall_for_task(
+    h5_path: &Path,
+    question: &str,
+    touched_files: &[String],
+    node_uuids: &[String],
+    max_items: usize,
+) -> Vec<Knowledge> {
+    recall_for_task_structured(h5_path, question, touched_files, node_uuids, max_items)
+        .into_iter()
+        .map(|r| r.knowledge)
+        .collect()
+}
+
+/// Structured task context for machine consumption.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskContext {
+    pub relevant: Vec<RecallResult>,
+    pub warnings: Vec<TaskWarning>,
+    pub conflicts: Vec<KnowledgeConflict>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskWarning {
+    pub uuid: String,
+    pub title: String,
+    pub status: String,
+    pub confidence: u32,
+    pub reason: String,
+}
+
+/// Get structured task context (JSON-friendly).
+pub fn get_task_context_json(
+    h5_path: &Path,
+    question: &str,
+    touched_files: &[String],
+    max_items: usize,
+) -> TaskContext {
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => {
+            return TaskContext {
+                relevant: vec![],
+                warnings: vec![],
+                conflicts: vec![],
+            }
+        }
+    };
+
+    let file_node_uuids: Vec<String> = data
+        .extraction
+        .nodes
+        .iter()
+        .filter(|n| {
+            touched_files.iter().any(|f| {
+                let filename = f.rsplit('/').next().unwrap_or(f);
+                n.source_file.contains(filename)
+            })
+        })
+        .filter_map(|n| n.uuid.clone())
+        .collect();
+
+    let relevant =
+        recall_for_task_structured(h5_path, question, touched_files, &file_node_uuids, max_items);
+
+    // Warnings
+    let warned_uuids: Vec<&str> = data
+        .knowledge
+        .iter()
+        .filter(|k| k.status == "needs_review" || k.confidence < 0.4)
+        .map(|k| k.uuid.as_str())
+        .collect();
+    let warnings: Vec<TaskWarning> = relevant
+        .iter()
+        .filter(|r| warned_uuids.contains(&r.knowledge.uuid.as_str()))
+        .map(|r| {
+            let entry = data.knowledge.iter().find(|e| e.uuid == r.knowledge.uuid);
+            let status = entry.map(|e| e.status.as_str()).unwrap_or("active");
+            TaskWarning {
+                uuid: r.knowledge.uuid.clone(),
+                title: r.knowledge.title.clone(),
+                status: status.to_string(),
+                confidence: (r.knowledge.confidence * 100.0) as u32,
+                reason: if status == "needs_review" {
+                    "linked nodes may have changed".into()
+                } else {
+                    "low confidence".into()
+                },
+            }
+        })
+        .collect();
+
+    // Conflicts
+    let all_conflicts = detect_conflicts(h5_path);
+    let conflicts: Vec<KnowledgeConflict> = all_conflicts
+        .into_iter()
+        .filter(|c| {
+            relevant
+                .iter()
+                .any(|r| r.knowledge.uuid == c.uuid_a || r.knowledge.uuid == c.uuid_b)
+        })
+        .collect();
+
+    TaskContext {
+        relevant,
+        warnings,
+        conflicts,
+    }
+}
+
+/// Build a task-specific briefing for the agent (markdown string).
 ///
-/// Returns structured context: relevant knowledge (with reasons), warnings, conflicts.
+/// Returns: relevant knowledge (with reasons), warnings, conflicts.
 pub fn get_task_context(
     h5_path: &Path,
     question: &str,
@@ -908,6 +1041,87 @@ pub struct KnowledgeUpdates {
     pub validate: bool,
 }
 
+/// Validate a knowledge entry — mark as still accurate.
+pub fn validate_knowledge(
+    h5_path: &Path,
+    knowledge_uuid: &str,
+    note: Option<&str>,
+) -> crate::error::Result<()> {
+    let mut data = crate::storage::load(h5_path)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let entry = data
+        .knowledge
+        .iter_mut()
+        .find(|k| k.uuid == knowledge_uuid)
+        .ok_or_else(|| {
+            crate::error::KodexError::Other(format!("UUID not found: {knowledge_uuid}"))
+        })?;
+
+    entry.status = "active".to_string();
+    entry.last_validated_at = now;
+    entry.updated_at = now;
+    if let Some(n) = note {
+        if !n.is_empty() {
+            entry.evidence = format!("{}\n[validated] {n}", entry.evidence);
+        }
+    }
+
+    // Refresh link snapshots — update body_hash/logical_key to current values
+    for link in &mut data.links {
+        if link.knowledge_uuid == knowledge_uuid && !link.is_knowledge_link() {
+            link.linked_body_hash = data
+                .extraction
+                .nodes
+                .iter()
+                .find(|n| n.uuid.as_deref() == Some(link.node_uuid.as_str()))
+                .and_then(|n| n.body_hash.clone())
+                .unwrap_or_default();
+            link.linked_logical_key = data
+                .extraction
+                .nodes
+                .iter()
+                .find(|n| n.uuid.as_deref() == Some(link.node_uuid.as_str()))
+                .and_then(|n| n.logical_key.clone())
+                .unwrap_or_default();
+        }
+    }
+
+    crate::storage::save(h5_path, &data)
+}
+
+/// Mark knowledge as obsolete with a reason.
+pub fn mark_obsolete(
+    h5_path: &Path,
+    knowledge_uuid: &str,
+    reason: &str,
+) -> crate::error::Result<()> {
+    update_knowledge(
+        h5_path,
+        knowledge_uuid,
+        &KnowledgeUpdates {
+            status: Some("obsolete".into()),
+            ..Default::default()
+        },
+    )?;
+    // Append reason to evidence
+    if !reason.is_empty() {
+        let mut data = crate::storage::load(h5_path)?;
+        if let Some(entry) = data.knowledge.iter_mut().find(|k| k.uuid == knowledge_uuid) {
+            entry.evidence = format!("{}\n[obsolete] {reason}", entry.evidence);
+            entry.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+        }
+        crate::storage::save(h5_path, &data)?;
+    }
+    Ok(())
+}
+
 /// Link knowledge to specific nodes (additive — doesn't remove existing links).
 pub fn link_knowledge_to_nodes(
     h5_path: &Path,
@@ -937,8 +1151,8 @@ pub fn link_knowledge_to_nodes(
                 && l.relation == relation
         });
         if !exists {
-            // Snapshot body_hash for drift detection
             let linked_bh = data.node_body_hash(node_uuid);
+            let linked_lk = data.node_logical_key(node_uuid);
             data.links.push(crate::types::KnowledgeLink {
                 knowledge_uuid: knowledge_uuid.to_string(),
                 node_uuid: node_uuid.clone(),
@@ -947,6 +1161,9 @@ pub fn link_knowledge_to_nodes(
                 confidence: 1.0,
                 created_at: now,
                 linked_body_hash: linked_bh,
+                linked_logical_key: linked_lk,
+                source: "agent".to_string(),
+                ..Default::default()
             });
         }
     }
@@ -1133,23 +1350,51 @@ pub fn merge_knowledge(
             crate::error::KodexError::Other(format!("UUID not found: {uuid_absorb}"))
         })?;
 
-    // Absorb observations and tags
-    let absorb_obs = data.knowledge[absorb_idx].observations;
-    let absorb_tags = data.knowledge[absorb_idx].tags.clone();
-    let absorb_desc = data.knowledge[absorb_idx].description.clone();
+    // Absorb metadata from absorbed into keeper
+    let absorb = data.knowledge[absorb_idx].clone();
 
     let keep = &mut data.knowledge[keep_idx];
-    keep.observations += absorb_obs;
-    keep.confidence = 1.0 - (1.0 - keep.confidence) * 0.8_f64.powi(absorb_obs as i32);
-    for tag in absorb_tags {
-        if !keep.tags.contains(&tag) {
-            keep.tags.push(tag);
+    keep.observations += absorb.observations;
+    keep.confidence = 1.0 - (1.0 - keep.confidence) * 0.8_f64.powi(absorb.observations as i32);
+    for tag in &absorb.tags {
+        if !keep.tags.contains(tag) {
+            keep.tags.push(tag.clone());
         }
     }
-    // Append description if different
-    if !absorb_desc.is_empty() && keep.description != absorb_desc {
-        keep.description = format!("{}\n---\n{}", keep.description, absorb_desc);
+    // Description: append if different
+    if !absorb.description.is_empty() && keep.description != absorb.description {
+        keep.description = format!("{}\n---\n{}", keep.description, absorb.description);
     }
+    // Evidence: merge both
+    if !absorb.evidence.is_empty() {
+        if keep.evidence.is_empty() {
+            keep.evidence = absorb.evidence.clone();
+        } else {
+            keep.evidence = format!("{}\n{}", keep.evidence, absorb.evidence);
+        }
+    }
+    // applies_when: keep the more specific one (non-empty wins, both → merge)
+    if keep.applies_when.is_empty() && !absorb.applies_when.is_empty() {
+        keep.applies_when = absorb.applies_when.clone();
+    } else if !absorb.applies_when.is_empty() && keep.applies_when != absorb.applies_when {
+        keep.applies_when = format!("{}, {}", keep.applies_when, absorb.applies_when);
+    }
+    // scope: keep the narrower scope (file > module > project > repo)
+    let scope_rank = |s: &str| match s {
+        "node" => 5,
+        "file" => 4,
+        "module" => 3,
+        "project" => 2,
+        "repo" => 1,
+        _ => 0,
+    };
+    if scope_rank(&absorb.scope) > scope_rank(&keep.scope) {
+        keep.scope = absorb.scope.clone();
+    }
+    keep.updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
 
     // Transfer ALL outgoing links from absorbed to keeper (node + knowledge)
     let keep_uuid = uuid_keep.to_string();
@@ -1767,6 +2012,9 @@ pub struct KnowledgeHealth {
     pub avg_confidence: f64,
     pub avg_observations: f64,
     pub total_nodes: usize,
+    pub validation_overdue: usize,
+    pub recently_changed_7d: usize,
+    pub recently_changed_30d: usize,
 }
 
 /// Compute health metrics for the knowledge base.
@@ -1780,6 +2028,7 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
                 orphan_node_links: 0, orphan_knowledge_links: 0,
                 duplicate_candidates: 0, conflicts: 0,
                 avg_confidence: 0.0, avg_observations: 0.0, total_nodes: 0,
+                validation_overdue: 0, recently_changed_7d: 0, recently_changed_30d: 0,
             };
         }
     };
@@ -1810,6 +2059,32 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
         total_conf += k.confidence;
         total_obs += k.observations as u64;
     }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let validation_overdue = data
+        .knowledge
+        .iter()
+        .filter(|k| {
+            k.status == "active"
+                && k.last_validated_at > 0
+                && now > k.last_validated_at
+                && (now - k.last_validated_at) / 86400 > 90
+        })
+        .count();
+    let recently_changed_7d = data
+        .knowledge
+        .iter()
+        .filter(|k| k.updated_at > 0 && now > k.updated_at && (now - k.updated_at) / 86400 < 7)
+        .count();
+    let recently_changed_30d = data
+        .knowledge
+        .iter()
+        .filter(|k| k.updated_at > 0 && now > k.updated_at && (now - k.updated_at) / 86400 < 30)
+        .count();
 
     let n = data.knowledge.len().max(1);
     let node_links = data.links.iter().filter(|l| !l.is_knowledge_link()).count();
@@ -1849,6 +2124,9 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
         avg_confidence: total_conf / n as f64,
         avg_observations: total_obs as f64 / n as f64,
         total_nodes: data.extraction.nodes.len(),
+        validation_overdue,
+        recently_changed_7d,
+        recently_changed_30d,
     }
 }
 

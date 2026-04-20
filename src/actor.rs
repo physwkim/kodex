@@ -365,12 +365,51 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10) as usize;
-            serde_json::json!(crate::learn::get_task_context(
-                &h5_path,
-                question,
-                &touched_files,
-                max,
-            ))
+            let format = params.get("format").and_then(|v| v.as_str()).unwrap_or("markdown");
+            if format == "json" {
+                serde_json::json!(crate::learn::get_task_context_json(
+                    &h5_path, question, &touched_files, max,
+                ))
+            } else {
+                serde_json::json!(crate::learn::get_task_context(
+                    &h5_path, question, &touched_files, max,
+                ))
+            }
+        }
+        "recall_for_task_structured" => {
+            let question = params.get("question").and_then(|v| v.as_str()).unwrap_or("");
+            let touched_files = extract_string_array(&params, "touched_files");
+            let node_uuids = extract_string_array(&params, "node_uuids");
+            let max = params
+                .get("max_items")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5) as usize;
+            let results = crate::learn::recall_for_task_structured(
+                &h5_path, question, &touched_files, &node_uuids, max,
+            );
+            serde_json::json!(results)
+        }
+        "validate_knowledge" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            let note = params.get("note").and_then(|v| v.as_str());
+            match crate::learn::validate_knowledge(&h5_path, uuid, note) {
+                Ok(()) => serde_json::json!({"status": "validated", "uuid": uuid}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        "mark_obsolete" => {
+            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
+                Some(u) => u,
+                None => return error_response(&id, "uuid required"),
+            };
+            let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::learn::mark_obsolete(&h5_path, uuid, reason) {
+                Ok(()) => serde_json::json!({"status": "obsoleted", "uuid": uuid}),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
         }
         "update_knowledge" => {
             let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
