@@ -366,9 +366,10 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10) as usize;
             let format = params.get("format").and_then(|v| v.as_str()).unwrap_or("markdown");
+            let task_type = params.get("task_type").and_then(|v| v.as_str()).unwrap_or("coding");
             if format == "json" {
                 serde_json::json!(crate::learn::get_task_context_json(
-                    &h5_path, question, &touched_files, max,
+                    &h5_path, question, &touched_files, max, task_type,
                 ))
             } else {
                 serde_json::json!(crate::learn::get_task_context(

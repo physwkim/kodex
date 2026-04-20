@@ -666,12 +666,18 @@ pub fn recall_for_task_structured(
     let ctx = ScoringContext::new(touched_files, &node_uuid_set, &query_tokens);
     let links = &data.links;
 
-    // Compute graph reasoning adjustments for all seed UUIDs
-    let seed_uuids: Vec<String> = node_uuids.to_vec();
+    // Resolve node UUIDs → linked knowledge UUIDs for graph reasoning
+    let seed_knowledge_uuids: Vec<String> = links
+        .iter()
+        .filter(|l| !l.is_knowledge_link() && node_uuids.contains(&l.node_uuid))
+        .map(|l| l.knowledge_uuid.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     let reasoning = crate::reasoning::propagate_confidence(
         &data.knowledge,
         &data.links,
-        &seed_uuids,
+        &seed_knowledge_uuids,
         3,
     );
 
@@ -784,6 +790,7 @@ pub fn get_task_context_json(
     question: &str,
     touched_files: &[String],
     max_items: usize,
+    task_type: &str,
 ) -> TaskContext {
     let data = match crate::storage::load(h5_path) {
         Ok(d) => d,
@@ -851,7 +858,8 @@ pub fn get_task_context_json(
         })
         .collect();
 
-    let recommendations = crate::recommend::compute_recommendations(&relevant, &conflicts, "coding");
+    let tt = if task_type.is_empty() { "coding" } else { task_type };
+    let recommendations = crate::recommend::compute_recommendations(&relevant, &conflicts, tt);
 
     TaskContext {
         relevant,
@@ -2276,13 +2284,35 @@ pub fn recall_for_diff(
         }
     };
 
-    let results = recall_for_task_structured(
+    let mut results = recall_for_task_structured(
         h5_path,
         "",
         &analysis.changed_files,
         &analysis.changed_node_uuids,
-        max_items,
+        max_items * 2, // fetch extra for re-ranking
     );
+
+    // Boost knowledge directly affected by the diff
+    let affected: std::collections::HashSet<&str> = analysis
+        .affected_knowledge_uuids
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    for item in &mut results {
+        if affected.contains(item.knowledge.uuid.as_str()) {
+            item.score.total += 20.0;
+            item.score.reasons.push("directly affected by diff".into());
+        }
+    }
+
+    // Re-sort after boost and trim to max_items
+    results.sort_by(|a, b| {
+        b.score
+            .total
+            .partial_cmp(&a.score.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(max_items);
 
     (analysis, results)
 }
