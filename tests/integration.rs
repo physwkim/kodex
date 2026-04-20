@@ -749,7 +749,7 @@ fn test_rename_preserves_knowledge_links() {
     kodex::learn::learn_with_uuid(
         &h5, None, kodex::learn::KnowledgeType::Pattern,
         "JWT Auth Pattern", "Token-based auth",
-        Some(&[node_uuid.clone()]), &[], None,
+        Some(std::slice::from_ref(&node_uuid)), &[], None,
     ).unwrap();
 
     // Session 2: rename authenticate() → verify_token(), same body_hash
@@ -942,7 +942,7 @@ fn test_multi_project_recall() {
     kodex::learn::learn_with_uuid(
         &h5, None, kodex::learn::KnowledgeType::Pattern,
         "Auth Pattern A", "JWT auth in project A",
-        Some(&[uuid_a.clone()]), &[], None,
+        Some(std::slice::from_ref(&uuid_a)), &[], None,
     ).unwrap();
 
     // Project B
@@ -968,7 +968,7 @@ fn test_multi_project_recall() {
     kodex::learn::learn_with_uuid(
         &h5, None, kodex::learn::KnowledgeType::Convention,
         "Payment Validation", "Always validate amounts",
-        Some(&[uuid_b.clone()]), &[], None,
+        Some(std::slice::from_ref(&uuid_b)), &[], None,
     ).unwrap();
 
     // Both projects coexist
