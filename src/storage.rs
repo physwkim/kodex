@@ -323,8 +323,12 @@ pub fn forget_knowledge(
         return Ok(0);
     }
     data.knowledge.retain(|k| !remove_uuids.contains(&k.uuid));
-    data.links
-        .retain(|l| !remove_uuids.contains(&l.knowledge_uuid));
+    // Clean links in both directions: as source AND as target (knowledge↔knowledge)
+    data.links.retain(|l| {
+        let source_removed = remove_uuids.contains(&l.knowledge_uuid);
+        let target_removed = l.is_knowledge_link() && remove_uuids.contains(&l.node_uuid);
+        !source_removed && !target_removed
+    });
     save(h5_path, &data)?;
     Ok(before - data.knowledge.len())
 }
