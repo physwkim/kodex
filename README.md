@@ -145,6 +145,8 @@ Old h5 files just work. No manual steps.
 | `kodex install <platform>` | Register MCP + skill |
 | `kodex list` | Show registered projects |
 | `kodex forget [--title\|--type\|--project\|--below]` | Delete knowledge |
+| `kodex import` | Import Claude Code memories into kodex |
+| `kodex export` | Export kodex knowledge to Claude Code memories |
 | `kodex benchmark` | Token reduction ratio |
 | `kodex watch <path>` | Auto-rebuild on changes |
 
@@ -178,9 +180,17 @@ Auto-adds to `.claude/settings.json`:
 {
   "mcpServers": {
     "kodex": { "command": "kodex", "args": ["serve"] }
+  },
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Write",
+      "command": "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then kodex import 2>/dev/null; fi"
+    }]
   }
 }
 ```
+
+The hook auto-syncs Claude memory writes into kodex — every time Claude saves a memory file, kodex imports it.
 
 Also: `kodex install cursor`, `kodex install vscode`, `kodex install codex`, `kodex install kiro`
 
@@ -224,6 +234,28 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 | `save_insight` | Link nodes with pattern |
 | `save_note` | Free-text memo |
 | `add_edge` | Add relationship |
+
+## Claude Memory Sync
+
+Bidirectional sync between kodex knowledge and Claude Code's `~/.claude/memory/` system.
+
+```bash
+kodex import          # ~/.claude/**/memory/*.md → kodex.h5
+kodex export          # kodex.h5 → ~/.claude/memory/kodex_*.md
+```
+
+**Auto-sync** (installed by `kodex install claude`):
+- PostToolUse hook triggers `kodex import` whenever Claude writes to `~/.claude/memory/`
+- Imported memories tagged `imported`/`claude-memory` to prevent circular sync
+- Export skips already-imported entries
+
+**Type mapping:**
+| Claude memory type | kodex knowledge type |
+|---|---|
+| `feedback` | `preference` |
+| `project` | `context` |
+| `user` | `preference` |
+| `reference` | `api` |
 
 ## Supported Languages
 
