@@ -104,8 +104,18 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
         "recall" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
+            // Search local project + global workspace
             let h5 = std::path::Path::new("kodex-out/kodex.h5");
-            let results = kodex::learn::query_knowledge(h5, query, type_filter);
+            let ws = kodex::registry::workspace_h5();
+            let mut results = kodex::learn::query_knowledge(h5, query, type_filter);
+            if ws.exists() {
+                let ws_results = kodex::learn::query_knowledge(&ws, query, type_filter);
+                for r in ws_results {
+                    if !results.iter().any(|existing| existing.title == r.title) {
+                        results.push(r);
+                    }
+                }
+            }
             let items: Vec<serde_json::Value> = results
                 .iter()
                 .map(|k| {
@@ -122,12 +132,26 @@ fn handle_jsonrpc(input: &str, graph: &kodex::graph::KodexGraph) -> String {
             serde_json::json!(items)
         }
         "knowledge_context" => {
+            // Include both local and workspace knowledge
             let h5 = std::path::Path::new("kodex-out/kodex.h5");
+            let ws = kodex::registry::workspace_h5();
             let max = params
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(20) as usize;
-            serde_json::json!(kodex::learn::knowledge_context(h5, max))
+            let local = kodex::learn::knowledge_context(h5, max);
+            let global = if ws.exists() {
+                kodex::learn::knowledge_context(&ws, max)
+            } else {
+                String::new()
+            };
+            if global.is_empty() {
+                serde_json::json!(local)
+            } else {
+                serde_json::json!(format!(
+                    "{local}\n\n## Global Knowledge (all projects)\n\n{global}"
+                ))
+            }
         }
         _ => serde_json::json!({"error": format!("Unknown method: {method}")}),
     };

@@ -13,6 +13,7 @@ pub mod ingest;
 pub mod install;
 pub mod knowledge;
 pub mod learn;
+pub mod registry;
 pub mod report;
 pub mod security;
 pub mod serve;

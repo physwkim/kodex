@@ -100,6 +100,8 @@ enum Commands {
         #[arg(default_value = "kodex-out/kodex.h5")]
         graph: PathBuf,
     },
+    /// List registered projects
+    List,
 }
 
 fn main() {
@@ -159,6 +161,19 @@ fn main() {
             commands::workspace::workspace(&action, vault.as_deref());
         }
         Some(Commands::Serve { graph }) => commands::serve::serve(&graph),
+        Some(Commands::List) => {
+            let entries = kodex::registry::list();
+            if entries.is_empty() {
+                println!("No projects registered. Run `kodex run <path>` first.");
+            } else {
+                println!("Registered projects ({}):", entries.len());
+                for (key, entry) in &entries {
+                    let exists = if entry.h5_path.exists() { "✓" } else { "✗" };
+                    println!("  {exists} {key}: {}", entry.path.display());
+                }
+                println!("\nWorkspace: {}", kodex::registry::workspace_h5().display());
+            }
+        }
         None => {
             if let Some(path) = cli.path {
                 commands::run::run_pipeline(&path);

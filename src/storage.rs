@@ -253,6 +253,34 @@ pub fn load_knowledge_entries(
     Ok(entries)
 }
 
+/// Public wrapper for save_hdf5_with_knowledge (used by registry workspace sync).
+#[allow(clippy::too_many_arguments)]
+pub fn save_hdf5_with_knowledge_pub(
+    graph: &KodexGraph,
+    communities: &HashMap<usize, Vec<String>>,
+    path: &Path,
+    k_titles: &[String],
+    k_types: &[String],
+    k_descriptions: &[String],
+    k_confidences: &[f64],
+    k_observations: &[u32],
+    k_related: &[String],
+    k_tags: &[String],
+) -> crate::error::Result<()> {
+    save_hdf5_with_knowledge(
+        graph,
+        communities,
+        path,
+        k_titles,
+        k_types,
+        k_descriptions,
+        k_confidences,
+        k_observations,
+        k_related,
+        k_tags,
+    )
+}
+
 /// Save graph + knowledge to HDF5.
 #[allow(clippy::too_many_arguments)]
 fn save_hdf5_with_knowledge(

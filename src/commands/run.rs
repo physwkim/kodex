@@ -95,6 +95,12 @@ pub fn run_pipeline(path: &Path) {
         Err(e) => eprintln!("  vault error: {e}"),
     }
 
+    // Register in global workspace
+    match kodex::registry::register(path) {
+        Ok(key) => println!("  registered as '{key}' in ~/.kodex/"),
+        Err(e) => eprintln!("  registry warning: {e}"),
+    }
+
     println!(
         "  done! Data: {} | Vault: {}",
         out_dir.display(),
