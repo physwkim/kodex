@@ -60,10 +60,11 @@ kodex.h5 (version 0.4.0)
 │   ├── supersedes / superseded_by  ← knowledge chain
 │   ├── confidence (f64), observations (u32)
 │   └── last_validated_at (u64)
-└── /links/                  ← knowledge ↔ node connections
-    ├── knowledge_uuid
-    ├── node_uuid
-    └── relation
+└── /links/                  ← knowledge ↔ node or knowledge ↔ knowledge
+    ├── knowledge_uuid       ← source (always a knowledge UUID)
+    ├── node_uuid            ← target (node UUID or knowledge UUID)
+    ├── relation             ← related_to, depends_on, leads_to, contradicts, ...
+    └── target_type          ← "" (node) or "knowledge"
 ```
 
 All data in vlen strings (h5py compatible). Powered by [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
@@ -100,8 +101,11 @@ kodex run ./my-project
 
 kodex serve (MCP)
   ├─ learn → knowledge entry with UUID → kodex.h5
-  ├─ recall → search all projects
-  ├─ forget → remove by title/type/confidence
+  ├─ learn(context_uuid=K1) → auto-chain: K1 →leads_to→ K2
+  ├─ recall_for_task → ranked by relevance to current files/nodes
+  ├─ thought_chain → trace reasoning: root → ... → leaf
+  ├─ knowledge_graph → BFS multi-hop over knowledge network
+  ├─ link_knowledge → connect knowledge ↔ knowledge
   └─ query_graph → BFS/DFS over code graph
 ```
 
@@ -123,8 +127,8 @@ Session 2:
 ```
 
 Matching policy:
-1. Exact fingerprint → reuse UUID
-2. Score-based (file proximity + label similarity + type) → reuse if ≥ 0.6
+1. Exact fingerprint (includes body_hash) → reuse UUID
+2. Score-based (file + line + type + label + body_hash) → reuse if ≥ 0.4
 3. Below threshold → new UUID
 
 ## Version Migration
@@ -229,18 +233,32 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 
 ## MCP Tools
 
+### Knowledge lifecycle
 | Tool | Description |
 |------|-------------|
-| `learn` | Store/reinforce knowledge (returns UUID) |
+| `learn` | Store/reinforce knowledge (returns UUID). Pass `context_uuid` to auto-chain. |
 | `recall` | Search by keyword/type |
 | `recall_for_task` | Ranked retrieval by task context (question + files + nodes) |
 | `get_task_context` | Full briefing: ranked knowledge + stale warnings |
 | `knowledge_context` | Session bootstrap (all knowledge) |
 | `update_knowledge` | Update status/scope/applies_when/superseded_by |
 | `forget` | Delete knowledge |
-| `link_knowledge_to_nodes` | Connect knowledge to code nodes |
+
+### Knowledge graph
+| Tool | Description |
+|------|-------------|
+| `link_knowledge` | Connect knowledge ↔ knowledge (bidirectional) |
+| `link_knowledge_to_nodes` | Connect knowledge → code nodes |
+| `remove_link` | Remove a specific link by source/target/relation |
 | `clear_knowledge_links` | Remove all links for a knowledge entry |
+| `knowledge_graph` | BFS multi-hop traversal (json or markdown) |
+| `knowledge_neighbors` | 1-hop neighbors of a knowledge entry |
+| `thought_chain` | Trace reasoning chain (leads_to/because/...) |
 | `detect_stale` | Find knowledge linked to deleted nodes |
+
+### Code graph
+| Tool | Description |
+|------|-------------|
 | `query_graph` | BFS/DFS traversal |
 | `get_node` | Node details |
 | `god_nodes` | Most-connected entities |
@@ -289,11 +307,61 @@ Matching policy with body_hash:
 - Exact label: 10 pts
 - Body hash match: 20 pts (only when both sides have it)
 
+## Chain of Thought
+
+Agent reasoning forms chains automatically via `context_uuid`:
+
+```
+Session 1:
+  learn("auth is slow")                    → K1
+  learn("N+1 query found", context=K1)     → K2  (K1 →leads_to→ K2)
+  learn("eager loading applied", context=K2) → K3  (K2 →leads_to→ K3)
+
+Session 2:
+  thought_chain(uuid=K2)
+
+  ## Thought Chain (3 steps)
+  1. **auth is slow** (pattern, 60%)
+     ↓ leads_to
+  2. **N+1 query found** (bug_pattern, 60%)
+     ↓ leads_to
+  3. **eager loading applied** (decision, 60%)
+```
+
+Chain relations: `leads_to`, `because`, `resolved_by`, `therefore`, `implies`
+
+Any node in the chain → auto-walks backward to root, forward to leaf.
+
+## Knowledge Graph
+
+Knowledge entries connect to each other and to code nodes, forming an Obsidian-like graph:
+
+```
+knowledge_graph()                    # entire graph
+knowledge_graph(uuid="K1", depth=3)  # 3 hops from K1
+knowledge_graph(format="markdown")   # agent-readable
+
+  JWT Auth ──supports──→ Stateless API
+  JWT Auth ──depends_on─→ Token Rotation
+  JWT Auth ←─contradicts─ Session Auth
+  JWT Auth ──related_to─→ authenticate()  (code node)
+```
+
+Link types:
+| Relation | Reverse | Use |
+|----------|---------|-----|
+| `related_to` | `related_to` | General association |
+| `depends_on` | `depended_by` | Prerequisite |
+| `supports` | `supported_by` | Reinforcement |
+| `contradicts` | `contradicts` | Conflict |
+| `supersedes` | `superseded_by` | Replacement |
+| `leads_to` | — | Chain of thought |
+
 ## Knowledge Lifecycle
 
 ```
 Status transitions:
-  active → needs_review (stale detection)
+  active → needs_review (stale detection: linked nodes deleted)
   active → obsolete (superseded by newer knowledge)
   needs_review → active (validated by agent)
   tentative → active (confidence grows above threshold)
