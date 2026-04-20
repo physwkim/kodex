@@ -81,18 +81,26 @@ pub fn run_actor() {
         .set_nonblocking(true)
         .expect("failed to set non-blocking");
 
-    let mut last_activity = std::time::Instant::now();
+    let last_activity = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+    let active_connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                last_activity = std::time::Instant::now();
-                // Handle in current thread (sequential — ensures h5 safety)
-                handle_connection(stream);
+                *last_activity.lock().unwrap() = std::time::Instant::now();
+                let la = last_activity.clone();
+                let ac = active_connections.clone();
+                ac.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                std::thread::spawn(move || {
+                    handle_connection(stream);
+                    ac.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                    *la.lock().unwrap() = std::time::Instant::now();
+                });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // Check idle timeout
-                if last_activity.elapsed().as_secs() > IDLE_TIMEOUT_SECS {
+                let idle = last_activity.lock().unwrap().elapsed().as_secs();
+                let conns = active_connections.load(std::sync::atomic::Ordering::Relaxed);
+                if conns == 0 && idle > IDLE_TIMEOUT_SECS {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(100));
