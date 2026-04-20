@@ -29,6 +29,7 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
         .ok();
     write_nodes(&file, &graph, &communities)?;
     write_edges(&file, &graph)?;
+    write_hyperedges(&file, &data.extraction.hyperedges)?;
     write_knowledge(&file, &data.knowledge)?;
     write_links(&file, &data.links)?;
     file.close()
@@ -195,6 +196,14 @@ pub fn append_knowledge_with_uuid(
         ));
     };
     // UUID is the only lookup key. No title fallback.
+    // If a UUID is provided but doesn't exist, return an error (don't silently create).
+    if let Some(uuid) = knowledge_uuid {
+        if !data.knowledge.iter().any(|k| k.uuid == uuid) {
+            return Err(crate::error::KodexError::Other(format!(
+                "Knowledge UUID not found: {uuid}. Use uuid=None to create new entry."
+            )));
+        }
+    }
     let existing =
         knowledge_uuid.and_then(|uuid| data.knowledge.iter_mut().find(|k| k.uuid == uuid));
     let k_uuid = if let Some(entry) = existing {
@@ -563,6 +572,32 @@ fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error:
     Ok(())
 }
 
+fn write_hyperedges(
+    file: &H5File,
+    hyperedges: &[crate::types::Hyperedge],
+) -> crate::error::Result<()> {
+    if hyperedges.is_empty() {
+        return Ok(());
+    }
+    let grp = file
+        .create_group("hyperedges")
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
+    let ids: Vec<String> = hyperedges.iter().map(|h| h.id.clone()).collect();
+    let labels: Vec<String> = hyperedges.iter().map(|h| h.label.clone()).collect();
+    let nodes: Vec<String> = hyperedges.iter().map(|h| h.nodes.join(",")).collect();
+    let conf: Vec<String> = hyperedges.iter().map(|h| h.confidence.to_string()).collect();
+    let sf: Vec<String> = hyperedges
+        .iter()
+        .map(|h| h.source_file.clone().unwrap_or_default())
+        .collect();
+    write_vlen(&grp, "id", &ids)?;
+    write_vlen(&grp, "label", &labels)?;
+    write_vlen(&grp, "nodes", &nodes)?;
+    write_vlen(&grp, "confidence", &conf)?;
+    write_vlen(&grp, "source_file", &sf)?;
+    Ok(())
+}
+
 fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<()> {
     if links.is_empty() {
         return Ok(());
@@ -646,7 +681,39 @@ fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
             original_tgt: None,
         });
     }
+    ext.hyperedges = read_hyperedges(file)?;
     Ok(ext)
+}
+
+fn read_hyperedges(file: &H5File) -> crate::error::Result<Vec<crate::types::Hyperedge>> {
+    let ids = read_vlen(file, "hyperedges/id").unwrap_or_default();
+    let labels = read_vlen(file, "hyperedges/label").unwrap_or_default();
+    let nodes_csv = read_vlen(file, "hyperedges/nodes").unwrap_or_default();
+    let conf = read_vlen(file, "hyperedges/confidence").unwrap_or_default();
+    let sf = read_vlen(file, "hyperedges/source_file").unwrap_or_default();
+    let opt =
+        |v: &[String], i: usize| -> Option<String> { v.get(i).cloned().filter(|s| !s.is_empty()) };
+    Ok((0..ids.len())
+        .map(|i| crate::types::Hyperedge {
+            id: ids[i].clone(),
+            label: labels.get(i).cloned().unwrap_or_default(),
+            nodes: nodes_csv
+                .get(i)
+                .map(|n| {
+                    n.split(',')
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            confidence: Confidence::from_str_loose(
+                conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"),
+            )
+            .unwrap_or(Confidence::EXTRACTED),
+            confidence_score: None,
+            source_file: opt(&sf, i),
+        })
+        .collect())
 }
 
 fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
@@ -731,6 +798,7 @@ fn graph_to_extraction(graph: &KodexGraph) -> ExtractionResult {
             .filter_map(|id| graph.get_node(id).cloned())
             .collect(),
         edges: graph.edges().map(|(_, _, e)| e.clone()).collect(),
+        hyperedges: graph.hyperedges.clone(),
         ..Default::default()
     }
 }
