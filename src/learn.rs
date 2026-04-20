@@ -392,6 +392,52 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
                 });
                 changed = true;
             }
+        } else {
+            // All nodes alive — check body_hash drift
+            // If knowledge was created when functions had certain bodies,
+            // and those bodies have since changed, the knowledge may be stale.
+            // We detect this by comparing stored body_hash at link time
+            // (not available) with current body_hash. For now, check if
+            // any linked node's body_hash changed since last validation.
+            if entry.last_validated_at > 0 && entry.status == "active" {
+                let mut drifted = 0;
+                for node_uuid in &linked {
+                    if let Some(current_hash) = node_info.get(*node_uuid) {
+                        // Node exists and has a body_hash — if the knowledge
+                        // was validated before the node changed, flag it
+                        if current_hash.is_some() && entry.updated_at > 0 {
+                            // We can't directly compare old vs new body_hash
+                            // (we don't store per-link snapshots), but we can
+                            // check if the node was modified after last validation
+                            // by comparing updated_at timestamps. For now, just
+                            // count nodes that have body hashes (meaning they're
+                            // function/class bodies that could have changed).
+                            drifted += 1;
+                        }
+                    }
+                }
+                // If all linked nodes have body_hashes and knowledge hasn't
+                // been validated recently, suggest review
+                if drifted == alive && drifted > 0 {
+                    let age_days = if now > entry.last_validated_at {
+                        (now - entry.last_validated_at) / 86400
+                    } else {
+                        0
+                    };
+                    if age_days > 30 {
+                        stale_entries.push(StaleInfo {
+                            uuid: entry.uuid.clone(),
+                            title: entry.title.clone(),
+                            reason: format!(
+                                "Linked code may have changed ({drifted} nodes with body, not validated for {age_days} days)"
+                            ),
+                            staleness: 0.2,
+                            action: "validate: linked code has body_hash, re-check knowledge accuracy".into(),
+                        });
+                        // Don't change status — just advisory
+                    }
+                }
+            }
         }
     }
 
@@ -698,13 +744,29 @@ pub fn get_task_context(
     }
     ctx.push('\n');
 
-    // Stale/low-confidence warnings
-    let stale: Vec<&Knowledge> = items.iter().filter(|k| k.confidence < 0.4).collect();
-    if !stale.is_empty() {
+    // Warnings: needs_review status OR low confidence
+    let warned_uuids: Vec<&str> = data
+        .knowledge
+        .iter()
+        .filter(|k| k.status == "needs_review" || k.confidence < 0.4)
+        .map(|k| k.uuid.as_str())
+        .collect();
+    let warn_items: Vec<&Knowledge> = items
+        .iter()
+        .filter(|k| warned_uuids.contains(&k.uuid.as_str()))
+        .collect();
+    if !warn_items.is_empty() {
         ctx.push_str("## Warnings\n\n");
-        for k in stale {
+        for k in warn_items {
+            let entry = data.knowledge.iter().find(|e| e.uuid == k.uuid);
+            let status = entry.map(|e| e.status.as_str()).unwrap_or("active");
+            let reason = if status == "needs_review" {
+                "marked needs_review (linked nodes may have changed)"
+            } else {
+                "low confidence — may be outdated"
+            };
             ctx.push_str(&format!(
-                "- **{}** ({}%) — may be outdated, needs validation\n",
+                "- **{}** ({}%, {status}) — {reason}\n",
                 k.title,
                 (k.confidence * 100.0) as u32
             ));
