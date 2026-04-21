@@ -60,6 +60,8 @@ pub fn run_pipeline(path: &Path) {
                     );
                 }
             }
+            // Add hierarchy nodes (project → crate → module → file)
+            kodex::hierarchy::add_hierarchy(&mut result, path);
             println!(
                 "  extracted {} nodes, {} edges",
                 result.nodes.len(),

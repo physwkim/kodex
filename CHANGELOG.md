@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.3 (2026-04-21)
+
+- Hierarchy nodes: project → crate → module → file → function structure
+- Crate detection via Cargo.toml presence
+- `get_node("epics-base-rs")` now works (crate-level navigation)
+- Skill file: query guidance for code identifiers
+
 ## v0.2.2 (2026-04-21)
 
 - Auto-link: new knowledge entries automatically linked to matching code nodes by keyword (title/description → node label matching, max 5 links, confidence 0.7, source="inferred")

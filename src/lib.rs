@@ -10,6 +10,7 @@ pub mod export;
 pub mod extract;
 pub mod fingerprint;
 pub mod graph;
+pub mod hierarchy;
 pub mod hooks;
 pub mod id;
 pub mod import;
