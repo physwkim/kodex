@@ -22,7 +22,7 @@ walkdir = "2"
 dirs = "6"
 globset = "0.4"
 uuid = { version = "1", features = ["v4"] }
-rust-hdf5 = { path = "../rust-hdf5", features = ["zstd"] }
+rust-hdf5 = { version = "0.2.7", features = ["zstd"] }
 
 # Optional dependencies
 tree-sitter = { version = "0.24", optional = true }

@@ -2,6 +2,9 @@
 
 ## v0.3.0 (2026-04-21)
 
+- rust-hdf5 0.2.7 from crates.io (no local path dependency)
+- Cache memory limits: max 2 entries, max 64MB, evict on overflow
+
 - **In-memory cache**: path-keyed cache avoids re-reading h5 on repeated operations. No test interference (each test uses unique temp path).
 - **Incremental save**: save_knowledge_only uses open_rw + delete_group + recreate (knowledge/links only, nodes untouched)
 - **load_knowledge_only**: 13 functions skip loading nodes/edges entirely
