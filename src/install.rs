@@ -15,6 +15,10 @@ const SKILL_CONTENT: &str = r#"# kodex
 
 AI knowledge graph with persistent memory.
 
+## Usage
+At session start, call `knowledge_context` to load knowledge from previous sessions. Use `learn` to save patterns, decisions, and conventions. Use `recall_for_task` for task-relevant knowledge.
+When querying kodex, use specific code identifiers (function/class/module names) not natural language descriptions. Translate user questions into concrete keywords before calling query_graph or recall.
+
 ## MCP Tools (auto-available via `kodex serve`)
 
 ### Knowledge lifecycle
