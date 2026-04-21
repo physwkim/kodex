@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.5 (2026-04-21)
+
+- Auto-collect: CLAUDE.md instructs Claude to learn patterns/bugs/decisions automatically
+- Git commit ingestion: classify commit messages → bug_pattern/decision/architecture/lesson/convention/performance
+- README ingestion: extract project overview as architecture knowledge
+- `kodex ingest <path>` CLI command for manual ingestion
+- `kodex run` now auto-ingests git commits + README after merge
+- Post-merge stale detection: marks affected knowledge as needs_review
+
 ## v0.2.4 (2026-04-21)
 
 - Multi-language package detection: Cargo.toml, pyproject.toml, package.json, go.mod, pom.xml, build.gradle, Gemfile, composer.json, mix.exs, Package.swift, pubspec.yaml, .csproj, __init__.py

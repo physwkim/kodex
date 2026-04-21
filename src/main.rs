@@ -121,6 +121,13 @@ enum Commands {
     Import,
     /// Export kodex knowledge to Claude Code memories
     Export,
+    /// Ingest knowledge from git commits and README
+    Ingest {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, default_value_t = 100)]
+        max_commits: usize,
+    },
     /// Run actor daemon (internal, started by serve)
     Actor,
 }
@@ -239,6 +246,18 @@ fn main() {
                 Ok(0) => println!("No new knowledge to export."),
                 Ok(n) => println!("Exported {n} entries to ~/.claude/memory/"),
                 Err(e) => eprintln!("Export error: {e}"),
+            }
+        }
+        Some(Commands::Ingest { path, max_commits }) => {
+            let h5 = kodex::registry::global_h5();
+            if !h5.exists() {
+                eprintln!("No kodex.h5 found. Run `kodex run` first.");
+                return;
+            }
+            match kodex::ingest_knowledge::ingest_project(&h5, &path, max_commits) {
+                Ok(0) => println!("No new knowledge to ingest."),
+                Ok(n) => println!("Ingested {n} knowledge entries from git/README"),
+                Err(e) => eprintln!("Ingest error: {e}"),
             }
         }
         Some(Commands::Actor) => kodex::actor::run_actor(),

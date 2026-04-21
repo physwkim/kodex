@@ -15,6 +15,7 @@ pub mod hooks;
 pub mod id;
 pub mod import;
 pub mod ingest;
+pub mod ingest_knowledge;
 pub mod install;
 pub mod knowledge;
 pub mod learn;

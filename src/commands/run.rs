@@ -93,8 +93,22 @@ pub fn run_pipeline(path: &Path) {
     let _ = std::fs::create_dir_all(kodex::registry::kodex_home());
 
     match kodex::storage::merge_project(&h5_path, project_name, &extraction) {
-        Ok(()) => println!("  merged into {}", h5_path.display()),
+        Ok(()) => {
+            println!("  merged into {}", h5_path.display());
+            // Post-merge: detect stale knowledge + refresh review queue
+            let stale = kodex::learn::detect_stale_knowledge(&h5_path).unwrap_or(0);
+            if stale > 0 {
+                println!("  {stale} knowledge entries marked for review (stale)");
+            }
+        }
         Err(e) => eprintln!("  HDF5 error: {e}"),
+    }
+
+    // Ingest external knowledge (git commits, README)
+    match kodex::ingest_knowledge::ingest_project(&h5_path, path, 50) {
+        Ok(0) => {}
+        Ok(n) => println!("  ingested {n} knowledge entries from git/README"),
+        Err(e) => eprintln!("  ingest: {e}"),
     }
 
     // Register project
