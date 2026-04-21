@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.6 (2026-04-21)
+
+- Session continuity: knowledge_context shows recent (7 days) items first, then grouped by type
+- Git hook: post-commit auto-runs `kodex ingest` for immediate knowledge capture
+- Fuzzy query matching: score_nodes uses exact → token → edit distance (Levenshtein ≤ 2), also searches source_file and logical_key
+- Project-scoped recall: knowledge tagged with current project gets +15pt boost, inferred from touched_files path
+
 ## v0.2.5 (2026-04-21)
 
 - Auto-collect: CLAUDE.md instructs Claude to learn patterns/bugs/decisions automatically

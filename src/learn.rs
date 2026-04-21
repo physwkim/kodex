@@ -221,35 +221,96 @@ fn parse_knowledge_type(s: &str) -> KnowledgeType {
 
 /// Get a knowledge context summary from HDF5 for Claude.
 pub fn knowledge_context(h5_path: &Path, max_items: usize) -> String {
-    let items = query_knowledge(h5_path, "", None);
-    build_index_content(&items, max_items)
-}
+    let data = match crate::storage::load(h5_path) {
+        Ok(d) => d,
+        Err(_) => return "# Knowledge Index\n\nNo knowledge accumulated yet.\n".to_string(),
+    };
 
-fn build_index_content(items: &[Knowledge], max_items: usize) -> String {
-    if items.is_empty() {
-        return "# Knowledge Index\n\nNo knowledge accumulated yet.\n".to_string();
-    }
+    let links = &data.links;
+    let mut items: Vec<Knowledge> = data
+        .knowledge
+        .iter()
+        .filter(|k| k.status != "obsolete")
+        .map(|k| {
+            let related: Vec<String> = links
+                .iter()
+                .filter(|l| l.knowledge_uuid == k.uuid && !l.is_knowledge_link())
+                .map(|l| l.node_uuid.clone())
+                .collect();
+            Knowledge {
+                uuid: k.uuid.clone(),
+                knowledge_type: parse_knowledge_type(&k.knowledge_type),
+                title: k.title.clone(),
+                description: k.description.clone(),
+                confidence: k.confidence,
+                observations: k.observations,
+                related_nodes: related,
+                tags: k.tags.clone(),
+                created_at: k.created_at,
+                updated_at: k.updated_at,
+            }
+        })
+        .collect();
+
+    // Sort: recently updated first, then by confidence
+    items.sort_by(|a, b| {
+        b.updated_at.cmp(&a.updated_at).then(
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+
+    // Split into recent (last 7 days) and rest
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let week_ago = now.saturating_sub(7 * 86400);
+
+    let recent: Vec<&Knowledge> = items.iter().filter(|k| k.updated_at > week_ago).collect();
+    let rest: Vec<&Knowledge> = items.iter().filter(|k| k.updated_at <= week_ago).collect();
 
     let mut ctx = format!("# Knowledge Index ({} items)\n\n", items.len());
-    ctx.push_str("> Auto-generated. Read this file at session start. Details in individual _KNOWLEDGE_*.md files.\n\n");
 
-    // Group by type
-    let mut by_type: HashMap<String, Vec<&Knowledge>> = HashMap::new();
+    if !recent.is_empty() {
+        ctx.push_str(&format!(
+            "## Recent ({} items, last 7 days)\n\n",
+            recent.len()
+        ));
+        for k in recent.iter().take(max_items / 2) {
+            let conf = (k.confidence * 100.0) as u32;
+            let summary = k.description.lines().next().unwrap_or("");
+            ctx.push_str(&format!("- **{}** ({conf}%) — {summary}\n", k.title));
+        }
+        ctx.push('\n');
+    }
+
+    // Rest grouped by type
+    if !rest.is_empty() {
+        let remaining = max_items.saturating_sub(recent.len().min(max_items / 2));
+        ctx.push_str(&build_by_type(&rest, remaining));
+    }
+
+    ctx
+}
+
+fn build_by_type(items: &[&Knowledge], max_items: usize) -> String {
+    let mut by_type: HashMap<String, Vec<&&Knowledge>> = HashMap::new();
     for k in items.iter().take(max_items) {
         by_type
             .entry(k.knowledge_type.to_string())
             .or_default()
             .push(k);
     }
-
     let mut types: Vec<_> = by_type.into_iter().collect();
     types.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
 
+    let mut ctx = String::new();
     for (type_name, items) in types {
         ctx.push_str(&format!("## {type_name}\n\n"));
         for k in items {
             let conf = (k.confidence * 100.0) as u32;
-            // One line per item: title + first sentence of description
             let summary = k.description.lines().next().unwrap_or("");
             let summary = if summary.len() > 80 {
                 let end = floor_char_boundary(summary, 80);
@@ -264,7 +325,6 @@ fn build_index_content(items: &[Knowledge], max_items: usize) -> String {
         }
         ctx.push('\n');
     }
-
     ctx
 }
 
@@ -458,6 +518,8 @@ struct ScoringContext<'a> {
     now: u64,
     /// Filenames extracted from touched_files (cached)
     touched_filenames: Vec<&'a str>,
+    /// Current project name (for project affinity scoring)
+    project: String,
 }
 
 impl<'a> ScoringContext<'a> {
@@ -470,16 +532,23 @@ impl<'a> ScoringContext<'a> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let touched_filenames = touched_files
+        let touched_filenames: Vec<&str> = touched_files
             .iter()
             .map(|f| f.rsplit('/').next().unwrap_or(f.as_str()))
             .collect();
+        // Infer project from touched_files (first path component)
+        let project = touched_files
+            .first()
+            .and_then(|f| f.split('/').next())
+            .unwrap_or("")
+            .to_string();
         Self {
             touched_files,
             node_uuids,
             query_tokens,
             now,
             touched_filenames,
+            project,
         }
     }
 }
@@ -618,6 +687,18 @@ fn relevance_score_detailed(
         };
         if b.recency > 0.0 {
             b.reasons.push("recently validated".into());
+        }
+    }
+
+    // 10. Project affinity (0-15)
+    if !ctx.project.is_empty() {
+        let project_tag = format!("project:{}", ctx.project);
+        if k.tags.iter().any(|t| t == &project_tag)
+            || k.description.contains(&ctx.project)
+            || k.title.to_lowercase().contains(&ctx.project.to_lowercase())
+        {
+            b.scope_match += 15.0;
+            b.reasons.push("same project".into());
         }
     }
 

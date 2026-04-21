@@ -3,13 +3,47 @@ use std::collections::HashSet;
 use crate::export::strip_diacritics;
 use crate::graph::KodexGraph;
 
-/// Score nodes by keyword matching (diacritics-insensitive).
+/// Score nodes by keyword matching with fuzzy support.
+/// Matches: exact substring > token overlap > edit distance.
 pub fn score_nodes(graph: &KodexGraph, terms: &[String]) -> Vec<(usize, String)> {
     let mut scored: Vec<(usize, String)> = Vec::new();
     for id in graph.node_ids() {
         if let Some(node) = graph.get_node(id) {
             let label = strip_diacritics(&node.label).to_lowercase();
-            let score = terms.iter().filter(|t| label.contains(t.as_str())).count();
+            let source = node.source_file.to_lowercase();
+            let logical = node.logical_key.as_deref().unwrap_or("").to_lowercase();
+
+            let mut score = 0usize;
+            for term in terms {
+                // Exact substring in label (strongest)
+                if label.contains(term.as_str()) {
+                    score += 10;
+                    continue;
+                }
+                // Exact substring in source_file or logical_key
+                if source.contains(term.as_str()) || logical.contains(term.as_str()) {
+                    score += 5;
+                    continue;
+                }
+                // Token overlap: split label into parts and match
+                let label_tokens: Vec<&str> = label
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|s| s.len() > 1)
+                    .collect();
+                if label_tokens.iter().any(|lt| lt.contains(term.as_str())) {
+                    score += 7;
+                    continue;
+                }
+                // Fuzzy: edit distance ≤ 2 for tokens > 4 chars
+                if term.len() > 4 {
+                    for lt in &label_tokens {
+                        if lt.len() > 4 && edit_distance(term, lt) <= 2 {
+                            score += 3;
+                            break;
+                        }
+                    }
+                }
+            }
             if score > 0 {
                 scored.push((score, id.clone()));
             }
@@ -17,6 +51,22 @@ pub fn score_nodes(graph: &KodexGraph, terms: &[String]) -> Vec<(usize, String)>
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0));
     scored
+}
+
+/// Simple edit distance (Levenshtein).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev = (0..=b.len()).collect::<Vec<_>>();
+    for (i, ca) in a.iter().enumerate() {
+        let mut curr = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        prev = curr;
+    }
+    prev[b.len()]
 }
 
 /// Breadth-first traversal from start nodes.

@@ -4,9 +4,10 @@ const HOOK_MARKER: &str = "# >>> kodex >>>";
 const HOOK_MARKER_END: &str = "# <<< kodex <<<";
 
 const HOOK_SCRIPT: &str = r#"
-# Auto-rebuild graph for code-only changes (no LLM cost)
+# Auto-rebuild graph and ingest commit knowledge
 if command -v kodex >/dev/null 2>&1; then
     kodex update . &
+    kodex ingest . --max-commits 5 &
 fi
 "#;
 
