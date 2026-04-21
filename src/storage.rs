@@ -290,6 +290,16 @@ pub fn append_knowledge_with_uuid(
         });
         new_uuid
     };
+    // Auto-link: if no related_nodes provided for NEW entries, match by keyword
+    let auto_linked = if related_nodes.is_none() && knowledge_uuid.is_none() {
+        auto_link_knowledge(&data, &k_uuid, title, description, now)
+    } else {
+        vec![]
+    };
+    if !auto_linked.is_empty() {
+        data.links.extend(auto_linked);
+    }
+
     // Handle node links: None = don't touch, Some([]) = clear, Some([...]) = replace
     // Only affects node links — knowledge↔knowledge links are preserved
     if let Some(nodes) = related_nodes {
@@ -474,6 +484,70 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
 }
 
 // HDF5 internals
+
+/// Auto-link new knowledge to code nodes by matching keywords in title/description
+/// against node labels. Returns links to add.
+fn auto_link_knowledge(
+    data: &KodexData,
+    knowledge_uuid: &str,
+    title: &str,
+    description: &str,
+    now: u64,
+) -> Vec<KnowledgeLink> {
+    let title_lower = title.to_lowercase();
+    let desc_lower = description.to_lowercase();
+
+    // Extract meaningful tokens (>3 chars) from title and first line of description
+    let desc_first = desc_lower.lines().next().unwrap_or("");
+    let tokens: std::collections::HashSet<&str> = title_lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .chain(desc_first.split(|c: char| !c.is_alphanumeric() && c != '_'))
+        .filter(|t| t.len() > 3)
+        .collect();
+
+    if tokens.is_empty() {
+        return vec![];
+    }
+
+    let mut links = Vec::new();
+    let mut matched = 0;
+    const MAX_AUTO_LINKS: usize = 5;
+
+    for node in &data.extraction.nodes {
+        if matched >= MAX_AUTO_LINKS {
+            break;
+        }
+        let label_lower = node.label.to_lowercase();
+        // Match if any token appears in node label
+        let is_match = tokens.iter().any(|t| label_lower.contains(t));
+        if is_match {
+            if let Some(uuid) = &node.uuid {
+                // Don't duplicate existing links
+                let exists = data
+                    .links
+                    .iter()
+                    .any(|l| l.knowledge_uuid == knowledge_uuid && l.node_uuid == *uuid);
+                if !exists {
+                    links.push(KnowledgeLink {
+                        knowledge_uuid: knowledge_uuid.to_string(),
+                        node_uuid: uuid.clone(),
+                        relation: "related_to".to_string(),
+                        target_type: String::new(),
+                        confidence: 0.7, // lower than explicit links
+                        created_at: now,
+                        linked_body_hash: node.body_hash.clone().unwrap_or_default(),
+                        linked_logical_key: node.logical_key.clone().unwrap_or_default(),
+                        source: "inferred".to_string(),
+                        ..Default::default()
+                    });
+                    matched += 1;
+                }
+            }
+        }
+    }
+
+    links
+}
 
 /// Write nodes directly from extraction data (bypasses graph to avoid node loss).
 fn write_nodes_direct(

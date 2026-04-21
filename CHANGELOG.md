@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.2 (2026-04-21)
+
+- Auto-link: new knowledge entries automatically linked to matching code nodes by keyword (title/description → node label matching, max 5 links, confidence 0.7, source="inferred")
+
 ## v0.2.1 (2026-04-21)
 
 - **Critical fix**: save writes extraction data directly, no graph rebuild (was losing nodes/edges on every learn call)
