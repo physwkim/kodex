@@ -96,9 +96,11 @@ Claude C → kodex serve → ┘
 
 ```
 kodex run ./my-project
-  ├─ detect → extract (tree-sitter) → build → cluster → analyze
+  ├─ detect → extract (tree-sitter) → hierarchy → cluster → analyze
+  ├─ hierarchy: project → crate/package → module → file → function
   ├─ merge into ~/.kodex/kodex.h5 (preserves other projects)
   ├─ assign stable UUIDs via fingerprint matching
+  ├─ ingest git commits + README → auto-learn knowledge
   ├─ register in ~/.kodex/registry.json
   └─ generate graph.html + GRAPH_REPORT.md
 
@@ -175,6 +177,7 @@ Old h5 files just work. No manual steps.
 | `kodex forget [--title\|--type\|--project\|--below]` | Delete knowledge |
 | `kodex import` | Import Claude Code memories into kodex |
 | `kodex export` | Export kodex knowledge to Claude Code memories |
+| `kodex ingest <path>` | Ingest git commits + README as knowledge |
 | `kodex benchmark` | Token reduction ratio |
 | `kodex watch <path>` | Auto-rebuild on changes |
 
@@ -203,22 +206,14 @@ Wrong?
 kodex install claude
 ```
 
-Auto-adds to `.claude/settings.json`:
+Auto-adds MCP server to `~/.claude.json` and hook to `~/.claude/settings.json`:
 ```json
-{
-  "mcpServers": {
-    "kodex": { "command": "kodex", "args": ["serve"] }
-  },
-  "hooks": {
-    "PostToolUse": [{
-      "matcher": "Write",
-      "hooks": [{
-        "type": "command",
-        "command": "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then kodex import 2>/dev/null; fi"
-      }]
-    }]
-  }
-}
+// ~/.claude.json
+{ "mcpServers": { "kodex": { "type": "stdio", "command": "kodex", "args": ["serve"] } } }
+
+// ~/.claude/settings.json
+{ "hooks": { "PostToolUse": [{ "matcher": "Write", "hooks": [{ "type": "command",
+  "command": "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then kodex import 2>/dev/null; fi" }] }] } }
 ```
 
 The hook auto-syncs Claude memory writes into kodex — every time Claude saves a memory file, kodex imports it.
@@ -261,7 +256,7 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 | `recall_for_task_structured` | Same + full `ScoreBreakdown` per item |
 | `recall_for_diff` | Git diff text → affected knowledge ranked with +20pt boost |
 | `get_task_context` | Briefing with recommendations. `format=json` for `TaskContext`. `task_type` for action-oriented recs. |
-| `knowledge_context` | Session bootstrap (all knowledge) |
+| `knowledge_context` | Compact session summary: established + recent + type counts |
 | `update_knowledge` | Update status/scope/applies_when/superseded_by |
 | `validate_knowledge` | Mark valid, refresh link snapshots, log evidence |
 | `mark_obsolete` | Mark obsolete with reason |
@@ -539,6 +534,46 @@ duplicate_candidates: 2, conflicts: 1
 validation_overdue: 3, recently_changed_7d: 8, recently_changed_30d: 15
 avg_confidence: 0.74, avg_observations: 3.2
 ```
+
+## Hierarchy Nodes
+
+`kodex run` generates project structure nodes automatically:
+
+```
+epics-rs → crates → epics-base-rs → record → mod.rs → clamp_position()
+                  → motor-rs → motor_record.rs → process()
+                  → ad-core-rs → ...
+```
+
+- Detects package boundaries via markers (Cargo.toml, package.json, pyproject.toml, go.mod, pom.xml, etc.)
+- Creates `contains` edges: project → package → module → file → function
+- `get_node("epics-base-rs")` works for crate-level navigation
+
+Supported markers: Cargo.toml, pyproject.toml, setup.py, package.json, go.mod, pom.xml, build.gradle, Gemfile, composer.json, mix.exs, Package.swift, pubspec.yaml, .csproj, \_\_init\_\_.py
+
+## Auto-Ingestion
+
+`kodex run` automatically extracts knowledge from:
+- **Git commits**: classified into bug_pattern, decision, architecture, lesson, convention, performance
+- **README.md**: project overview as architecture knowledge
+- **Claude agent**: auto-learns patterns/bugs/decisions during work (via CLAUDE.md directive)
+
+```bash
+kodex ingest <path> --max-commits 100    # manual ingestion
+kodex run .                               # auto-ingests after merge
+```
+
+## Performance
+
+| Operation | Optimization |
+|-----------|-------------|
+| `learn` / `forget` / `update` | Incremental save (knowledge only, no graph rebuild) |
+| `learn` / `forget` / `update` | load_knowledge_only (skips nodes/edges) |
+| Repeated operations | Path-keyed in-memory cache (write-through, max 2 entries / 64MB) |
+| `query_knowledge` | Keyword index (title/tag/type → UUID reverse lookup) |
+| `query_graph` | Fuzzy matching: exact → token → source_file → edit distance ≤ 2 |
+| `recall_for_task` | Project affinity: +15pt boost for same-project knowledge |
+| Zstd compression | 12MB → 3.3MB (72% reduction) |
 
 ## Supported Languages
 
