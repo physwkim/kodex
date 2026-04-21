@@ -62,6 +62,18 @@ pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Resul
     Ok(())
 }
 
+/// Load only knowledge/links/review_queue — skips nodes/edges for memory efficiency.
+pub fn load_knowledge_only(path: &Path) -> crate::error::Result<KodexData> {
+    let file = H5File::open(path)
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
+    Ok(KodexData {
+        extraction: ExtractionResult::default(),
+        knowledge: read_knowledge(&file)?,
+        links: read_links(&file)?,
+        review_queue: read_review_queue(&file)?,
+    })
+}
+
 /// Current storage format version.
 const CURRENT_VERSION: &str = "0.5.0";
 
@@ -238,12 +250,16 @@ pub fn append_knowledge_with_uuid(
     related_nodes: Option<&[String]>,
     tags: &[String],
 ) -> crate::error::Result<String> {
-    let mut data = if h5_path.exists() {
-        load(h5_path)?
-    } else {
+    let mut data = if !h5_path.exists() {
         return Err(crate::error::KodexError::Other(
             "HDF5 file does not exist. Run `kodex run` first.".to_string(),
         ));
+    } else if related_nodes.is_some() || knowledge_uuid.is_some() {
+        // Explicit links or update — no auto-link, skip loading nodes/edges
+        load_knowledge_only(h5_path)?
+    } else {
+        // New entry without explicit links — need nodes for auto-link
+        load(h5_path)?
     };
     // UUID is the only lookup key. No title fallback.
     // If a UUID is provided but doesn't exist, return an error (don't silently create).
@@ -352,7 +368,7 @@ pub fn append_knowledge_with_uuid(
 pub fn load_knowledge_entries(
     h5_path: &Path,
 ) -> crate::error::Result<Vec<(String, String, String, f64, u32, String, String)>> {
-    let data = load(h5_path)?;
+    let data = load_knowledge_only(h5_path)?;
     Ok(data
         .knowledge
         .iter()
@@ -386,7 +402,7 @@ pub fn forget_knowledge(
     if !h5_path.exists() {
         return Ok(0);
     }
-    let mut data = load(h5_path)?;
+    let mut data = load_knowledge_only(h5_path)?;
     let before = data.knowledge.len();
     // AND logic: entry must match ALL provided criteria
     let remove_uuids: Vec<String> = data

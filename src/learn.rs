@@ -180,7 +180,7 @@ fn build_knowledge_index(
 
 /// Query knowledge by keyword, type, or tag. Uses index for fast lookup.
 pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -1091,7 +1091,7 @@ pub fn update_knowledge(
     knowledge_uuid: &str,
     updates: &KnowledgeUpdates,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(h5_path)?;
 
     let entry = data
         .knowledge
@@ -1151,7 +1151,7 @@ pub fn validate_knowledge(
     knowledge_uuid: &str,
     note: Option<&str>,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(h5_path)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1213,7 +1213,7 @@ pub fn mark_obsolete(
     )?;
     // Append reason to evidence
     if !reason.is_empty() {
-        let mut data = crate::storage::load(h5_path)?;
+        let mut data = crate::storage::load_knowledge_only(h5_path)?;
         if let Some(entry) = data.knowledge.iter_mut().find(|k| k.uuid == knowledge_uuid) {
             entry.evidence = format!("{}\n[obsolete] {reason}", entry.evidence);
             entry.updated_at = std::time::SystemTime::now()
@@ -1233,7 +1233,7 @@ pub fn link_knowledge_to_nodes(
     node_uuids: &[String],
     relation: &str,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(h5_path)?;
 
     // Verify knowledge exists
     if !data.knowledge.iter().any(|k| k.uuid == knowledge_uuid) {
@@ -1305,7 +1305,7 @@ pub struct DuplicateCandidate {
 /// Find knowledge entries that are likely duplicates.
 /// Uses title similarity + description overlap + same type.
 pub fn find_duplicates(h5_path: &Path, threshold: f64) -> Vec<DuplicateCandidate> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -1435,7 +1435,7 @@ pub fn merge_knowledge(
     uuid_keep: &str,
     uuid_absorb: &str,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(h5_path)?;
 
     let keep_idx = data
         .knowledge
@@ -1565,7 +1565,7 @@ pub fn remove_link(
     target_uuid: &str,
     relation: Option<&str>,
 ) -> crate::error::Result<bool> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(h5_path)?;
     let before = data.links.len();
     data.links.retain(|l| {
         !(l.knowledge_uuid == knowledge_uuid
@@ -1587,7 +1587,7 @@ pub fn link_knowledge_to_knowledge(
     relation: &str,
     bidirectional: bool,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(h5_path)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1662,7 +1662,7 @@ pub fn link_knowledge_to_knowledge(
 
 /// Get all knowledge entries connected to a given knowledge UUID.
 pub fn knowledge_neighbors(h5_path: &Path, knowledge_uuid: &str) -> Vec<(String, String, String)> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -1708,7 +1708,7 @@ pub struct ThoughtStep {
 /// Follows `leads_to` links forward (and `because`/`resolved_by`/etc. as alternatives).
 /// Also walks backward to find the chain root.
 pub fn thought_chain(h5_path: &Path, knowledge_uuid: &str) -> Vec<ThoughtStep> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -2021,7 +2021,7 @@ pub struct KnowledgeConflict {
 /// - Superseded but not marked obsolete
 /// - High-confidence entries with contradicts links
 pub fn detect_conflicts(h5_path: &Path) -> Vec<KnowledgeConflict> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -2273,7 +2273,7 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
 
 /// Get the pending review queue, sorted by priority descending.
 pub fn get_review_queue(h5_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
