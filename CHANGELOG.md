@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.7 (2026-04-21)
+
+- knowledge_context is now a compact summary (stats + high-confidence + recent + type counts), not a full dump
+- High-confidence (>80%) items always shown regardless of age
+- Use recall_for_task for detailed task-specific retrieval
+
 ## v0.2.6 (2026-04-21)
 
 - Session continuity: knowledge_context shows recent (7 days) items first, then grouped by type

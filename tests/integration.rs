@@ -580,7 +580,7 @@ fn test_knowledge_context_index() {
     .unwrap();
 
     let ctx = kodex::learn::knowledge_context(&h5, 10);
-    assert!(ctx.contains("Knowledge Index"));
+    assert!(ctx.contains("Knowledge:"));
     assert!(ctx.contains("Use HDF5"));
     assert!(ctx.contains("Error Handling"));
 }

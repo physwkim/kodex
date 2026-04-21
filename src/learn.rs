@@ -220,111 +220,78 @@ fn parse_knowledge_type(s: &str) -> KnowledgeType {
 }
 
 /// Get a knowledge context summary from HDF5 for Claude.
+/// Compact knowledge summary for session start.
+/// Shows stats + high-confidence + recent. NOT a full dump.
+/// Use `recall_for_task` for task-specific retrieval.
 pub fn knowledge_context(h5_path: &Path, max_items: usize) -> String {
     let data = match crate::storage::load(h5_path) {
         Ok(d) => d,
-        Err(_) => return "# Knowledge Index\n\nNo knowledge accumulated yet.\n".to_string(),
+        Err(_) => return "No knowledge base found. Run `kodex run` first.\n".to_string(),
     };
 
-    let links = &data.links;
-    let mut items: Vec<Knowledge> = data
+    let active: Vec<&crate::types::KnowledgeEntry> = data
         .knowledge
         .iter()
         .filter(|k| k.status != "obsolete")
-        .map(|k| {
-            let related: Vec<String> = links
-                .iter()
-                .filter(|l| l.knowledge_uuid == k.uuid && !l.is_knowledge_link())
-                .map(|l| l.node_uuid.clone())
-                .collect();
-            Knowledge {
-                uuid: k.uuid.clone(),
-                knowledge_type: parse_knowledge_type(&k.knowledge_type),
-                title: k.title.clone(),
-                description: k.description.clone(),
-                confidence: k.confidence,
-                observations: k.observations,
-                related_nodes: related,
-                tags: k.tags.clone(),
-                created_at: k.created_at,
-                updated_at: k.updated_at,
-            }
-        })
         .collect();
 
-    // Sort: recently updated first, then by confidence
-    items.sort_by(|a, b| {
-        b.updated_at.cmp(&a.updated_at).then(
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal),
-        )
-    });
+    if active.is_empty() {
+        return "# Knowledge: 0 items\n\nNo knowledge yet. Use `learn` to save patterns.\n"
+            .to_string();
+    }
 
-    // Split into recent (last 7 days) and rest
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
     let week_ago = now.saturating_sub(7 * 86400);
+    let needs_review = active.iter().filter(|k| k.status == "needs_review").count();
 
-    let recent: Vec<&Knowledge> = items.iter().filter(|k| k.updated_at > week_ago).collect();
-    let rest: Vec<&Knowledge> = items.iter().filter(|k| k.updated_at <= week_ago).collect();
+    let mut ctx = format!(
+        "# Knowledge: {} items ({} needs_review)\n\nUse `recall_for_task` for task-specific knowledge.\n\n",
+        active.len(), needs_review,
+    );
 
-    let mut ctx = format!("# Knowledge Index ({} items)\n\n", items.len());
-
-    if !recent.is_empty() {
-        ctx.push_str(&format!(
-            "## Recent ({} items, last 7 days)\n\n",
-            recent.len()
-        ));
-        for k in recent.iter().take(max_items / 2) {
-            let conf = (k.confidence * 100.0) as u32;
-            let summary = k.description.lines().next().unwrap_or("");
-            ctx.push_str(&format!("- **{}** ({conf}%) — {summary}\n", k.title));
+    // High confidence (>0.8) — always show
+    let high_conf: Vec<&&crate::types::KnowledgeEntry> =
+        active.iter().filter(|k| k.confidence > 0.8).collect();
+    if !high_conf.is_empty() {
+        ctx.push_str(&format!("## Established ({}, >80%)\n\n", high_conf.len()));
+        for k in high_conf.iter().take(max_items / 3) {
+            ctx.push_str(&format!("- **{}** ({}x)\n", k.title, k.observations));
         }
         ctx.push('\n');
     }
 
-    // Rest grouped by type
-    if !rest.is_empty() {
-        let remaining = max_items.saturating_sub(recent.len().min(max_items / 2));
-        ctx.push_str(&build_by_type(&rest, remaining));
-    }
-
-    ctx
-}
-
-fn build_by_type(items: &[&Knowledge], max_items: usize) -> String {
-    let mut by_type: HashMap<String, Vec<&&Knowledge>> = HashMap::new();
-    for k in items.iter().take(max_items) {
-        by_type
-            .entry(k.knowledge_type.to_string())
-            .or_default()
-            .push(k);
-    }
-    let mut types: Vec<_> = by_type.into_iter().collect();
-    types.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-
-    let mut ctx = String::new();
-    for (type_name, items) in types {
-        ctx.push_str(&format!("## {type_name}\n\n"));
-        for k in items {
+    // Recent (last 7 days)
+    let mut recent: Vec<&&crate::types::KnowledgeEntry> =
+        active.iter().filter(|k| k.updated_at > week_ago).collect();
+    recent.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    if !recent.is_empty() {
+        ctx.push_str(&format!("## Recent ({}, last 7 days)\n\n", recent.len()));
+        for k in recent.iter().take(max_items / 3) {
             let conf = (k.confidence * 100.0) as u32;
-            let summary = k.description.lines().next().unwrap_or("");
-            let summary = if summary.len() > 80 {
-                let end = floor_char_boundary(summary, 80);
-                format!("{}...", &summary[..end])
-            } else {
-                summary.to_string()
-            };
             ctx.push_str(&format!(
-                "- **{}** ({conf}%, {}x) — {summary}\n",
-                k.title, k.observations
+                "- **{}** ({conf}%, {})\n",
+                k.title, k.knowledge_type
             ));
         }
         ctx.push('\n');
     }
+
+    // Type counts only
+    let mut by_type: HashMap<&str, usize> = HashMap::new();
+    for k in &active {
+        *by_type.entry(k.knowledge_type.as_str()).or_insert(0) += 1;
+    }
+    let mut types: Vec<_> = by_type.into_iter().collect();
+    types.sort_by(|a, b| b.1.cmp(&a.1));
+    ctx.push_str("## By type\n\n");
+    for (t, count) in &types {
+        ctx.push_str(&format!("- {t}: {count}\n"));
+    }
+    ctx.push('\n');
+
     ctx
 }
 
@@ -2530,7 +2497,7 @@ mod tests {
         let ctx = knowledge_context(&h5, 10);
         assert!(ctx.contains("Observer"));
         assert!(ctx.contains("Functional Style"));
-        assert!(ctx.contains("Knowledge Index"));
+        assert!(ctx.contains("Knowledge:"));
     }
 
     #[test]
