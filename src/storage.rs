@@ -41,6 +41,15 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// Save only knowledge/links/review_queue — skips node/edge rewrite.
+/// Uses open_rw to modify existing h5 without full graph rebuild.
+/// Falls back to full save if file doesn't exist.
+/// Save only knowledge/links/review_queue.
+/// Currently does full save — incremental pending rust-hdf5 open_rw group support.
+pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Result<()> {
+    save(path, data)
+}
+
 /// Current storage format version.
 const CURRENT_VERSION: &str = "0.5.0";
 
@@ -323,7 +332,7 @@ pub fn append_knowledge_with_uuid(
             });
         }
     }
-    save(h5_path, &data)?;
+    save_knowledge_only(h5_path, &data)?;
     Ok(k_uuid)
 }
 
@@ -398,7 +407,7 @@ pub fn forget_knowledge(
         let target_removed = l.is_knowledge_link() && remove_uuids.contains(&l.node_uuid);
         !source_removed && !target_removed
     });
-    save(h5_path, &data)?;
+    save_knowledge_only(h5_path, &data)?;
     Ok(before - data.knowledge.len())
 }
 

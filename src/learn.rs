@@ -521,7 +521,7 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
         // Clean fully dead node links (keep partial + knowledge links)
         data.links
             .retain(|l| l.is_knowledge_link() || valid_node_uuids.contains(l.node_uuid.as_str()));
-        crate::storage::save(h5_path, &data)?;
+        crate::storage::save_knowledge_only(h5_path, &data)?;
     }
 
     Ok(stale_entries)
@@ -1132,7 +1132,7 @@ pub fn update_knowledge(
         entry.updated_at = now;
     }
 
-    crate::storage::save(h5_path, &data)
+    crate::storage::save_knowledge_only(h5_path, &data)
 }
 
 /// Partial update fields for update_knowledge.
@@ -1194,7 +1194,7 @@ pub fn validate_knowledge(
         }
     }
 
-    crate::storage::save(h5_path, &data)
+    crate::storage::save_knowledge_only(h5_path, &data)
 }
 
 /// Mark knowledge as obsolete with a reason.
@@ -1221,7 +1221,7 @@ pub fn mark_obsolete(
                 .unwrap_or_default()
                 .as_secs();
         }
-        crate::storage::save(h5_path, &data)?;
+        crate::storage::save_knowledge_only(h5_path, &data)?;
     }
     Ok(())
 }
@@ -1272,7 +1272,7 @@ pub fn link_knowledge_to_nodes(
         }
     }
 
-    crate::storage::save(h5_path, &data)
+    crate::storage::save_knowledge_only(h5_path, &data)
 }
 
 /// Clear all links for a given knowledge entry.
@@ -1282,7 +1282,7 @@ pub fn clear_knowledge_links(h5_path: &Path, knowledge_uuid: &str) -> crate::err
     data.links.retain(|l| l.knowledge_uuid != knowledge_uuid);
     let removed = before - data.links.len();
     if removed > 0 {
-        crate::storage::save(h5_path, &data)?;
+        crate::storage::save_knowledge_only(h5_path, &data)?;
     }
     Ok(removed)
 }
@@ -1555,7 +1555,7 @@ pub fn merge_knowledge(
         });
     }
 
-    crate::storage::save(h5_path, &data)
+    crate::storage::save_knowledge_only(h5_path, &data)
 }
 
 /// Remove a specific link by knowledge_uuid + target_uuid + relation.
@@ -1574,7 +1574,7 @@ pub fn remove_link(
     });
     let removed = before != data.links.len();
     if removed {
-        crate::storage::save(h5_path, &data)?;
+        crate::storage::save_knowledge_only(h5_path, &data)?;
     }
     Ok(removed)
 }
@@ -1657,7 +1657,7 @@ pub fn link_knowledge_to_knowledge(
         }
     }
 
-    crate::storage::save(h5_path, &data)
+    crate::storage::save_knowledge_only(h5_path, &data)
 }
 
 /// Get all knowledge entries connected to a given knowledge UUID.
@@ -2318,7 +2318,7 @@ pub fn enqueue_review(
         priority,
         completed: false,
     });
-    crate::storage::save(h5_path, &data)?;
+    crate::storage::save_knowledge_only(h5_path, &data)?;
     Ok(true)
 }
 
@@ -2330,7 +2330,7 @@ pub fn complete_review(h5_path: &Path, knowledge_uuid: &str) -> crate::error::Re
             item.completed = true;
         }
     }
-    crate::storage::save(h5_path, &data)
+    crate::storage::save_knowledge_only(h5_path, &data)
 }
 
 /// Auto-enqueue stale/conflict/duplicate items for review.
