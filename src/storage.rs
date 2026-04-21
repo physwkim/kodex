@@ -91,15 +91,44 @@ const CURRENT_VERSION: &str = "0.5.0";
 
 use std::sync::Mutex;
 
+/// Max cache entries. Oldest evicted when exceeded.
+const MAX_CACHE_ENTRIES: usize = 2;
+/// Max estimated cache size in bytes. Evict all if exceeded.
+const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+
 static CACHE: Mutex<Option<HashMap<std::path::PathBuf, KodexData>>> = Mutex::new(None);
 
 fn cache_get(path: &Path) -> Option<KodexData> {
     CACHE.lock().ok()?.as_ref()?.get(path).cloned()
 }
 
+/// Rough size estimate for a KodexData (avoids pulling in a size_of crate).
+fn estimate_size(data: &KodexData) -> usize {
+    let nodes = data.extraction.nodes.len() * 256; // ~256 bytes per node
+    let edges = data.extraction.edges.len() * 128;
+    let knowledge = data.knowledge.len() * 512;
+    let links = data.links.len() * 128;
+    nodes + edges + knowledge + links
+}
+
 fn cache_put(path: &Path, data: &KodexData) {
     if let Ok(mut guard) = CACHE.lock() {
         let map = guard.get_or_insert_with(HashMap::new);
+
+        // Evict if over entry limit
+        if map.len() >= MAX_CACHE_ENTRIES && !map.contains_key(path) {
+            if let Some(oldest) = map.keys().next().cloned() {
+                map.remove(&oldest);
+            }
+        }
+
+        // Check size limit
+        let new_size = estimate_size(data);
+        let total: usize = map.values().map(estimate_size).sum();
+        if total + new_size > MAX_CACHE_BYTES {
+            map.clear(); // over budget, flush all
+        }
+
         map.insert(path.to_path_buf(), data.clone());
     }
 }
