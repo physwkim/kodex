@@ -145,20 +145,55 @@ fn make_contains_edge(source: &str, target: &str, source_file: &str) -> Edge {
     }
 }
 
-/// Find directories containing Cargo.toml (crate roots).
+/// Package marker files — any of these indicates a package/crate/module root.
+const PACKAGE_MARKERS: &[&str] = &[
+    // Rust
+    "Cargo.toml",
+    // Python
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    // JavaScript / TypeScript
+    "package.json",
+    // Go
+    "go.mod",
+    // Java
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    // C#
+    // .csproj handled separately (glob)
+    // Ruby
+    "Gemfile",
+    // PHP
+    "composer.json",
+    // Elixir
+    "mix.exs",
+    // Swift
+    "Package.swift",
+    // Dart
+    "pubspec.yaml",
+];
+
+/// Find directories containing package markers (crate/module/package roots).
 fn detect_crate_dirs(project_root: &Path) -> HashSet<String> {
-    let mut crates = HashSet::new();
+    let mut packages = HashSet::new();
     let project_name = project_root
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
 
-    walk_for_cargo(project_root, project_root, project_name, &mut crates);
-    crates
+    walk_for_packages(project_root, project_root, project_name, &mut packages);
+    packages
 }
 
-fn walk_for_cargo(dir: &Path, root: &Path, project_name: &str, crates: &mut HashSet<String>) {
-    if dir.join("Cargo.toml").exists() {
+fn walk_for_packages(dir: &Path, root: &Path, project_name: &str, packages: &mut HashSet<String>) {
+    // Check for any package marker file
+    let has_marker = PACKAGE_MARKERS.iter().any(|m| dir.join(m).exists())
+        || has_csproj(dir)
+        || dir.join("__init__.py").exists();
+
+    if has_marker {
         let rel = dir
             .strip_prefix(root)
             .unwrap_or(dir)
@@ -169,7 +204,7 @@ fn walk_for_cargo(dir: &Path, root: &Path, project_name: &str, crates: &mut Hash
         } else {
             format!("{project_name}/{rel}")
         };
-        crates.insert(path);
+        packages.insert(path);
     }
 
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -177,11 +212,34 @@ fn walk_for_cargo(dir: &Path, root: &Path, project_name: &str, crates: &mut Hash
             let p = entry.path();
             if p.is_dir() {
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                // Skip hidden dirs, target, node_modules
-                if !name.starts_with('.') && name != "target" && name != "node_modules" {
-                    walk_for_cargo(&p, root, project_name, crates);
+                // Skip hidden dirs, build outputs, dependency dirs
+                if !name.starts_with('.')
+                    && name != "target"
+                    && name != "node_modules"
+                    && name != "__pycache__"
+                    && name != "vendor"
+                    && name != "build"
+                    && name != "dist"
+                    && name != "bin"
+                    && name != "obj"
+                {
+                    walk_for_packages(&p, root, project_name, packages);
                 }
             }
         }
     }
+}
+
+/// Check if directory contains a .csproj file (C# project).
+fn has_csproj(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "csproj")
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }

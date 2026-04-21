@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.4 (2026-04-21)
+
+- Multi-language package detection: Cargo.toml, pyproject.toml, package.json, go.mod, pom.xml, build.gradle, Gemfile, composer.json, mix.exs, Package.swift, pubspec.yaml, .csproj, __init__.py
+- Skip build output dirs: __pycache__, vendor, build, dist, bin, obj
+
 ## v0.2.3 (2026-04-21)
 
 - Hierarchy nodes: project → crate → module → file → function structure
