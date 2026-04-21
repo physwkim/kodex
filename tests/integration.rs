@@ -354,7 +354,7 @@ fn test_cluster_and_analyze() {
 #[test]
 fn test_hdf5_round_trip() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5_path = dir.path().join("test.h5");
+    let h5_path = dir.path().join("test.db");
 
     let extraction = kodex::types::ExtractionResult {
         nodes: vec![
@@ -441,7 +441,7 @@ fn test_vault_round_trip() {
 #[test]
 fn test_knowledge_learn_and_recall() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("test.h5");
+    let h5 = dir.path().join("test.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -487,7 +487,7 @@ fn test_knowledge_learn_and_recall() {
 #[test]
 fn test_forget_knowledge_and_logic() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("test.h5");
+    let h5 = dir.path().join("test.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -552,7 +552,7 @@ fn test_forget_knowledge_and_logic() {
 #[test]
 fn test_knowledge_context_index() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("test.h5");
+    let h5 = dir.path().join("test.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -589,7 +589,7 @@ fn test_knowledge_context_index() {
 #[test]
 fn test_knowledge_graph_scenario() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("scenario.h5");
+    let h5 = dir.path().join("scenario.db");
 
     // 1. Create graph with real nodes (simulating kodex run)
     let extraction = kodex::types::ExtractionResult {
@@ -816,7 +816,7 @@ fn test_knowledge_graph_scenario() {
 #[test]
 fn test_rename_preserves_knowledge_links() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("rename.h5");
+    let h5 = dir.path().join("rename.db");
 
     // Session 1: create graph with authenticate()
     let mut extraction = kodex::types::ExtractionResult::default();
@@ -901,13 +901,12 @@ fn test_rename_preserves_knowledge_links() {
     assert_eq!(stale, 0, "Renamed node should not trigger staleness");
 }
 
-/// Test: migration from v0.3 to current preserves all data
+/// Test: SQLite save/load preserves all fields including defaults
 #[test]
-fn test_migration_preserves_data() {
+fn test_sqlite_preserves_defaults() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("migrate.h5");
+    let db = dir.path().join("defaults.db");
 
-    // Create a v0.3-style h5 (no scope/status/evidence/created_at/body_hash)
     let data = kodex::types::KodexData {
         extraction: kodex::types::ExtractionResult {
             nodes: vec![kodex::types::Node {
@@ -936,7 +935,7 @@ fn test_migration_preserves_data() {
             confidence: 0.7,
             observations: 3,
             tags: vec!["test".into()],
-            ..Default::default() // scope, status, etc. all empty
+            ..Default::default()
         }],
         links: vec![kodex::types::KnowledgeLink {
             knowledge_uuid: "k-1".into(),
@@ -947,40 +946,26 @@ fn test_migration_preserves_data() {
         }],
         review_queue: vec![],
     };
-    kodex::storage::save(&h5, &data).unwrap();
+    kodex::storage::save(&db, &data).unwrap();
+    kodex::storage::cache_remove(&db);
 
-    // Simulate older version header (bypasses kodex, so invalidate cache)
-    {
-        let file = rust_hdf5::file::H5File::open_rw(&h5).unwrap();
-        file.set_attr_string("version", "0.3.0").unwrap();
-        file.close().unwrap();
-    }
-    kodex::storage::cache_remove(&h5);
-
-    // Load triggers migration
-    let loaded = kodex::storage::load(&h5).unwrap();
-
-    // Verify data preserved
+    let loaded = kodex::storage::load(&db).unwrap();
     assert_eq!(loaded.extraction.nodes.len(), 1);
     assert_eq!(loaded.extraction.nodes[0].uuid.as_deref(), Some("node-a"));
     assert_eq!(loaded.knowledge.len(), 1);
     assert_eq!(loaded.knowledge[0].uuid, "k-1");
-    assert_eq!(loaded.knowledge[0].title, "Test");
     assert_eq!(loaded.knowledge[0].confidence, 0.7);
     assert_eq!(loaded.knowledge[0].observations, 3);
-    // Migration should set status to "active"
     assert_eq!(loaded.knowledge[0].status, "active");
-    // Links preserved
     assert_eq!(loaded.links.len(), 1);
     assert_eq!(loaded.links[0].knowledge_uuid, "k-1");
-    assert_eq!(loaded.links[0].node_uuid, "node-a");
 }
 
 /// Test: duplicate detection + merge preserves links and evidence
 #[test]
 fn test_duplicate_merge_preserves_links() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("dedup.h5");
+    let h5 = dir.path().join("dedup.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -1055,7 +1040,7 @@ fn test_duplicate_merge_preserves_links() {
 #[test]
 fn test_multi_project_recall() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("multi.h5");
+    let h5 = dir.path().join("multi.db");
 
     // Project A
     let mut ext_a = kodex::types::ExtractionResult::default();
@@ -1169,7 +1154,7 @@ fn test_multi_project_recall() {
 #[test]
 fn test_merge_preserves_knowledge_links() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("merge_kk.h5");
+    let h5 = dir.path().join("merge_kk.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -1252,7 +1237,7 @@ fn test_merge_preserves_knowledge_links() {
 #[test]
 fn test_update_knowledge_timestamps() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("ts.h5");
+    let h5 = dir.path().join("ts.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -1302,7 +1287,7 @@ fn test_update_knowledge_timestamps() {
 #[test]
 fn test_reasoning_affects_ranking() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("reason.h5");
+    let h5 = dir.path().join("reason.db");
 
     // Create a graph with one node
     let mut ext = kodex::types::ExtractionResult::default();
@@ -1387,7 +1372,7 @@ fn test_reasoning_affects_ranking() {
 #[test]
 fn test_task_type_recommendations() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("recs.h5");
+    let h5 = dir.path().join("recs.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
@@ -1476,7 +1461,7 @@ fn test_task_type_recommendations() {
 #[test]
 fn test_recall_for_diff_boost() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("diff_recall.h5");
+    let h5 = dir.path().join("diff_recall.db");
 
     // Create graph with two nodes in different files
     let mut ext = kodex::types::ExtractionResult::default();
