@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.0 (2026-04-21)
+
+**Breaking: storage backend changed from HDF5 to SQLite.**
+
+Existing `~/.kodex/kodex.h5` files are not auto-migrated. Run `kodex run .` to rebuild.
+
+- SQLite backend via rusqlite (bundled, no system dependency)
+- WAL journal mode for concurrent read/write
+- True incremental save: knowledge-only operations skip graph tables entirely
+- Built-in SQL indexes on UUID, title, knowledge_uuid, node_uuid
+- Tests 24x faster (5.05s → 0.16s)
+- File size reduced: 3.3MB (HDF5+zstd) → 393KB (SQLite)
+- File extension: `.db` (was `.h5`)
+- Same public API — all 95 tests pass unchanged
+
 ## v0.3.1 (2026-04-21)
 
 - `kodex install claude` now auto-adds kodex directives to `~/.claude/CLAUDE.md` (session start, auto-learn, query guidance)
