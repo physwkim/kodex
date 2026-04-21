@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.1 (2026-04-21)
+
+- `kodex install claude` now auto-adds kodex directives to `~/.claude/CLAUDE.md` (session start, auto-learn, query guidance)
+- Duplicate-safe: skips if "kodex" already present in CLAUDE.md
+
 ## v0.3.0 (2026-04-21)
 
 - rust-hdf5 0.2.7 from crates.io (no local path dependency)
