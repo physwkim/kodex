@@ -11,6 +11,12 @@ const PLATFORMS: &[(&str, &str)] = &[
     ("kiro", ".kiro/steering/kodex.md"),
 ];
 
+const CLAUDE_DIRECTIVE: &str = r#"# kodex
+At session start, call the kodex `knowledge_context` MCP tool to load knowledge from previous sessions. Use `recall_for_task` when working on specific tasks.
+When querying kodex, use specific code identifiers (function/class/module names) not natural language descriptions. Translate user questions into concrete keywords before calling query_graph or recall.
+When you discover a pattern, fix a bug, or make a design decision, automatically call `learn` without asking. Use appropriate types: bug_pattern, convention, decision, architecture, coupling, lesson, tech_debt.
+"#;
+
 const SKILL_CONTENT: &str = r#"# kodex
 
 AI knowledge graph with persistent memory.
@@ -101,7 +107,28 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
         }
     }
 
-    // 2. Register MCP server (platform-specific)
+    // 2. Add kodex directives to global CLAUDE.md
+    if platform == "claude" {
+        let claude_md = target_dir.join(".claude/CLAUDE.md");
+        if let Some(parent) = claude_md.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let existing = std::fs::read_to_string(&claude_md).unwrap_or_default();
+        if existing.contains("kodex") {
+            results.push("CLAUDE.md: kodex directives already present".to_string());
+        } else {
+            let directive = format!("{CLAUDE_DIRECTIVE}\n{existing}");
+            match std::fs::write(&claude_md, directive) {
+                Ok(()) => results.push(format!(
+                    "CLAUDE.md: added kodex directives to {}",
+                    claude_md.display()
+                )),
+                Err(e) => results.push(format!("CLAUDE.md: failed: {e}")),
+            }
+        }
+    }
+
+    // 3. Register MCP server (platform-specific)
     let mcp_result = match platform {
         "claude" => install_mcp_claude(target_dir),
         "cursor" => install_mcp_cursor(target_dir),
