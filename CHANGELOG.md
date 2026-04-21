@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.9 (2026-04-21)
+
+- **Incremental save**: learn/forget/update now use open_rw + delete_group + recreate for knowledge/links only. Nodes/edges untouched. No graph rebuild on knowledge operations.
+
 ## v0.2.8 (2026-04-21)
 
 - Knowledge index: keyword → UUID reverse index for fast query_knowledge lookup

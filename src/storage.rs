@@ -44,10 +44,22 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
 /// Save only knowledge/links/review_queue — skips node/edge rewrite.
 /// Uses open_rw to modify existing h5 without full graph rebuild.
 /// Falls back to full save if file doesn't exist.
-/// Save only knowledge/links/review_queue.
-/// Currently does full save — incremental pending rust-hdf5 open_rw group support.
+/// Save only knowledge/links/review_queue — incremental, skips graph rebuild.
 pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Result<()> {
-    save(path, data)
+    if !path.exists() {
+        return save(path, data);
+    }
+    let file = H5File::open_rw(path)
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open_rw: {e}")))?;
+    let _ = file.delete_group("knowledge");
+    let _ = file.delete_group("links");
+    let _ = file.delete_group("review_queue");
+    write_knowledge(&file, &data.knowledge)?;
+    write_links(&file, &data.links)?;
+    write_review_queue(&file, &data.review_queue)?;
+    file.close()
+        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
+    Ok(())
 }
 
 /// Current storage format version.
