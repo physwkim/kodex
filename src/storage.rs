@@ -1,11 +1,11 @@
-//! HDF5 storage — single file for code graph + knowledge.
+//! SQLite storage — single file for code graph + knowledge.
 //!
 //! All read/write goes through KodexData.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use rust_hdf5::file::H5File;
+use rusqlite::{params, Connection};
 
 use crate::graph::KodexGraph;
 use crate::types::{
@@ -18,49 +18,47 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let file = H5File::create(path)
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 create: {e}")))?;
-    // Build graph only for community detection, write extraction data directly
+    let conn = open_db(path)?;
+    conn.execute_batch("BEGIN")?;
+    // Clear and rewrite everything
+    conn.execute_batch(
+        "DELETE FROM nodes; DELETE FROM edges; DELETE FROM hyperedges;
+         DELETE FROM knowledge; DELETE FROM links; DELETE FROM review_queue;",
+    )?;
+    // Community detection
     let communities = {
         let graph = crate::graph::build_from_extraction(&data.extraction);
         crate::cluster::cluster(&graph)
     };
-    file.set_attr_string("version", CURRENT_VERSION).ok();
-    file.set_attr_numeric("node_count", &(data.extraction.nodes.len() as u64))
-        .ok();
-    file.set_attr_numeric("edge_count", &(data.extraction.edges.len() as u64))
-        .ok();
-    write_nodes_direct(&file, &data.extraction.nodes, &communities)?;
-    write_edges_direct(&file, &data.extraction.edges)?;
-    write_hyperedges(&file, &data.extraction.hyperedges)?;
-    write_knowledge(&file, &data.knowledge)?;
-    write_links(&file, &data.links)?;
-    write_review_queue(&file, &data.review_queue)?;
-    file.close()
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
+    let comm_map = crate::export::node_community_map(&communities);
+    write_nodes(&conn, &data.extraction.nodes, &comm_map)?;
+    write_edges(&conn, &data.extraction.edges)?;
+    write_hyperedges(&conn, &data.extraction.hyperedges)?;
+    write_knowledge(&conn, &data.knowledge)?;
+    write_links(&conn, &data.links)?;
+    write_review_queue(&conn, &data.review_queue)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key,value) VALUES('version',?1)",
+        params![CURRENT_VERSION],
+    )?;
+    conn.execute_batch("COMMIT")?;
     cache_put(path, data);
     Ok(())
 }
 
-/// Save only knowledge/links/review_queue — skips node/edge rewrite.
-/// Uses open_rw to modify existing h5 without full graph rebuild.
-/// Falls back to full save if file doesn't exist.
-/// Save only knowledge/links/review_queue — incremental, skips graph rebuild.
+/// Save only knowledge/links/review_queue — true incremental, no graph rebuild.
 pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     if !path.exists() {
         return save(path, data);
     }
-    let file = H5File::open_rw(path)
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open_rw: {e}")))?;
-    let _ = file.delete_group("knowledge");
-    let _ = file.delete_group("links");
-    let _ = file.delete_group("review_queue");
-    write_knowledge(&file, &data.knowledge)?;
-    write_links(&file, &data.links)?;
-    write_review_queue(&file, &data.review_queue)?;
-    file.close()
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
-    // Update cache — merge knowledge changes into cached full data if present
+    let conn = open_db(path)?;
+    conn.execute_batch("BEGIN")?;
+    conn.execute_batch("DELETE FROM knowledge; DELETE FROM links; DELETE FROM review_queue;")?;
+    write_knowledge(&conn, &data.knowledge)?;
+    write_links(&conn, &data.links)?;
+    write_review_queue(&conn, &data.review_queue)?;
+    conn.execute_batch("COMMIT")?;
+    // Update cache
     if let Some(mut cached) = cache_get(path) {
         cached.knowledge = data.knowledge.clone();
         cached.links = data.links.clone();
@@ -72,13 +70,12 @@ pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Resul
 
 /// Load only knowledge/links/review_queue — skips nodes/edges for memory efficiency.
 pub fn load_knowledge_only(path: &Path) -> crate::error::Result<KodexData> {
-    let file = H5File::open(path)
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
+    let conn = open_db(path)?;
     Ok(KodexData {
         extraction: ExtractionResult::default(),
-        knowledge: read_knowledge(&file)?,
-        links: read_links(&file)?,
-        review_queue: read_review_queue(&file)?,
+        knowledge: read_knowledge(&conn)?,
+        links: read_links(&conn)?,
+        review_queue: read_review_queue(&conn)?,
     })
 }
 
@@ -91,10 +88,10 @@ const CURRENT_VERSION: &str = "0.5.0";
 
 use std::sync::Mutex;
 
-/// Max cache entries. Oldest evicted when exceeded.
+/// Max cache entries.
 const MAX_CACHE_ENTRIES: usize = 2;
-/// Max estimated cache size in bytes. Evict all if exceeded.
-const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+/// Max estimated cache size in bytes.
+const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 static CACHE: Mutex<Option<HashMap<std::path::PathBuf, KodexData>>> = Mutex::new(None);
 
@@ -102,38 +99,31 @@ fn cache_get(path: &Path) -> Option<KodexData> {
     CACHE.lock().ok()?.as_ref()?.get(path).cloned()
 }
 
-/// Rough size estimate for a KodexData (avoids pulling in a size_of crate).
 fn estimate_size(data: &KodexData) -> usize {
-    let nodes = data.extraction.nodes.len() * 256; // ~256 bytes per node
-    let edges = data.extraction.edges.len() * 128;
-    let knowledge = data.knowledge.len() * 512;
-    let links = data.links.len() * 128;
-    nodes + edges + knowledge + links
+    data.extraction.nodes.len() * 256
+        + data.extraction.edges.len() * 128
+        + data.knowledge.len() * 512
+        + data.links.len() * 128
 }
 
 fn cache_put(path: &Path, data: &KodexData) {
     if let Ok(mut guard) = CACHE.lock() {
         let map = guard.get_or_insert_with(HashMap::new);
-
-        // Evict if over entry limit
         if map.len() >= MAX_CACHE_ENTRIES && !map.contains_key(path) {
             if let Some(oldest) = map.keys().next().cloned() {
                 map.remove(&oldest);
             }
         }
-
-        // Check size limit
         let new_size = estimate_size(data);
         let total: usize = map.values().map(estimate_size).sum();
         if total + new_size > MAX_CACHE_BYTES {
-            map.clear(); // over budget, flush all
+            map.clear();
         }
-
         map.insert(path.to_path_buf(), data.clone());
     }
 }
 
-/// Invalidate cache for a specific path (call after external h5 modification).
+/// Invalidate cache for a specific path (call after external modification).
 pub fn cache_remove(path: &Path) {
     if let Ok(mut guard) = CACHE.lock() {
         if let Some(map) = guard.as_mut() {
@@ -152,91 +142,14 @@ pub fn load(path: &Path) -> crate::error::Result<KodexData> {
 }
 
 fn load_from_disk(path: &Path) -> crate::error::Result<KodexData> {
-    let file = H5File::open(path)
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
-
-    let file_version = file
-        .attr_string("version")
-        .unwrap_or_else(|_| "0.1.0".to_string());
-
-    let mut data = KodexData {
-        extraction: read_extraction(&file)?,
-        knowledge: read_knowledge(&file)?,
-        links: read_links(&file)?,
-        review_queue: read_review_queue(&file)?,
+    let conn = open_db(path)?;
+    let data = KodexData {
+        extraction: read_extraction(&conn)?,
+        knowledge: read_knowledge(&conn)?,
+        links: read_links(&conn)?,
+        review_queue: read_review_queue(&conn)?,
     };
-
-    // Auto-migrate if needed
-    if file_version != CURRENT_VERSION {
-        migrate(&mut data, &file_version);
-        // Re-save with current version (upgrade in place)
-        drop(file);
-        let _ = save(path, &data);
-    }
-
     Ok(data)
-}
-
-/// Parse version string into (major, minor, patch) for safe comparison.
-fn parse_version(v: &str) -> (u32, u32, u32) {
-    let parts: Vec<u32> = v.split('.').filter_map(|p| p.parse().ok()).collect();
-    (
-        parts.first().copied().unwrap_or(0),
-        parts.get(1).copied().unwrap_or(0),
-        parts.get(2).copied().unwrap_or(0),
-    )
-}
-
-fn version_below(from: &str, target: &str) -> bool {
-    parse_version(from) < parse_version(target)
-}
-
-/// Migrate data from an older version to current.
-fn migrate(data: &mut KodexData, from_version: &str) {
-    // v0.1.0 → v0.2.0: no uuid/fingerprint/logical_key on nodes
-    if version_below(from_version, "0.2.0") {
-        for node in &mut data.extraction.nodes {
-            if node.uuid.is_none() {
-                node.uuid = Some(uuid::Uuid::new_v4().to_string());
-            }
-            if node.fingerprint.is_none() {
-                node.fingerprint = Some(crate::fingerprint::compute_fingerprint(
-                    &node.label,
-                    &node.file_type.to_string(),
-                    &node.source_file,
-                    node.source_location.as_deref(),
-                    None,
-                ));
-            }
-            if node.logical_key.is_none() {
-                node.logical_key = Some(crate::fingerprint::logical_key(
-                    &node.source_file,
-                    &node.label,
-                ));
-            }
-        }
-    }
-
-    // v0.1.0/v0.2.0 → v0.3.0: knowledge entries need uuid
-    if version_below(from_version, "0.3.0") {
-        for entry in &mut data.knowledge {
-            if entry.uuid.is_empty() {
-                entry.uuid = uuid::Uuid::new_v4().to_string();
-            }
-        }
-    }
-
-    // v0.3.0 → v0.4.0: knowledge entries get new metadata fields (defaulted)
-    if version_below(from_version, "0.4.0") {
-        for entry in &mut data.knowledge {
-            if entry.status.is_empty() {
-                entry.status = "active".to_string();
-            }
-        }
-    }
-
-    // v0.4.0 → v0.5.0: evidence + created_at + updated_at (defaulted to 0)
-    // No explicit migration needed — fields default to empty/0 via read_knowledge
 }
 
 pub fn load_graph(path: &Path) -> crate::error::Result<KodexGraph> {
@@ -305,14 +218,6 @@ pub fn append_knowledge(
 }
 
 /// Core knowledge upsert. UUID is the only lookup key.
-/// If uuid is provided, finds and updates existing entry.
-/// If uuid is None, creates new entry with fresh UUID.
-/// Returns the UUID of the created or updated entry.
-///
-/// `related_nodes`:
-/// - `None` → don't touch existing links
-/// - `Some(&[])` → clear all links for this knowledge
-/// - `Some(&[...])` → replace links with these nodes
 #[allow(clippy::too_many_arguments)]
 pub fn append_knowledge_with_uuid(
     h5_path: &Path,
@@ -326,17 +231,18 @@ pub fn append_knowledge_with_uuid(
 ) -> crate::error::Result<String> {
     let mut data = if !h5_path.exists() {
         return Err(crate::error::KodexError::Other(
-            "HDF5 file does not exist. Run `kodex run` first.".to_string(),
+            "Database does not exist. Run `kodex run` first.".to_string(),
         ));
     } else if related_nodes.is_some() || knowledge_uuid.is_some() {
-        // Explicit links or update — no auto-link, skip loading nodes/edges
         load_knowledge_only(h5_path)?
     } else {
-        // New entry without explicit links — need nodes for auto-link
         load(h5_path)?
     };
-    // UUID is the only lookup key. No title fallback.
-    // If a UUID is provided but doesn't exist, return an error (don't silently create).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     if let Some(uuid) = knowledge_uuid {
         if !data.knowledge.iter().any(|k| k.uuid == uuid) {
             return Err(crate::error::KodexError::Other(format!(
@@ -344,18 +250,12 @@ pub fn append_knowledge_with_uuid(
             )));
         }
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
     let existing =
         knowledge_uuid.and_then(|uuid| data.knowledge.iter_mut().find(|k| k.uuid == uuid));
     let k_uuid = if let Some(entry) = existing {
-        // Update existing entry (UUID stays the same)
         entry.observations += 1;
         entry.confidence = 1.0 - (1.0 - entry.confidence) * 0.8;
         entry.updated_at = now;
-        // Title can change — it's display-only, not a key
         if !title.is_empty() {
             entry.title = title.to_string();
         }
@@ -401,7 +301,8 @@ pub fn append_knowledge_with_uuid(
         });
         new_uuid
     };
-    // Auto-link: if no related_nodes provided for NEW entries, match by keyword
+
+    // Auto-link
     let auto_linked = if related_nodes.is_none() && knowledge_uuid.is_none() {
         auto_link_knowledge(&data, &k_uuid, title, description, now)
     } else {
@@ -411,13 +312,10 @@ pub fn append_knowledge_with_uuid(
         data.links.extend(auto_linked);
     }
 
-    // Handle node links: None = don't touch, Some([]) = clear, Some([...]) = replace
-    // Only affects node links — knowledge↔knowledge links are preserved
     if let Some(nodes) = related_nodes {
         data.links
             .retain(|l| l.knowledge_uuid != k_uuid || l.is_knowledge_link());
         for node_ref in nodes {
-            // Snapshot at link time for drift detection
             let linked_bh = data.node_body_hash(node_ref);
             let linked_lk = data.node_logical_key(node_ref);
             data.links.push(KnowledgeLink {
@@ -478,7 +376,6 @@ pub fn forget_knowledge(
     }
     let mut data = load_knowledge_only(h5_path)?;
     let before = data.knowledge.len();
-    // AND logic: entry must match ALL provided criteria
     let remove_uuids: Vec<String> = data
         .knowledge
         .iter()
@@ -490,7 +387,6 @@ pub fn forget_knowledge(
                     .unwrap_or(true)
                 && below_confidence.map(|c| k.confidence < c).unwrap_or(true)
         })
-        // At least one criterion must be provided (avoid deleting everything)
         .filter(|_| {
             title_match.is_some()
                 || type_match.is_some()
@@ -503,7 +399,6 @@ pub fn forget_knowledge(
         return Ok(0);
     }
     data.knowledge.retain(|k| !remove_uuids.contains(&k.uuid));
-    // Clean links in both directions: as source AND as target (knowledge↔knowledge)
     data.links.retain(|l| {
         let source_removed = remove_uuids.contains(&l.knowledge_uuid);
         let target_removed = l.is_knowledge_link() && remove_uuids.contains(&l.node_uuid);
@@ -520,12 +415,12 @@ pub fn merge_project(
     project_name: &str,
     new_extraction: &ExtractionResult,
 ) -> crate::error::Result<()> {
+    cache_remove(h5_path);
     let mut data = if h5_path.exists() {
         load(h5_path)?
     } else {
         KodexData::default()
     };
-    // Save existing project nodes for UUID matching BEFORE removing them
     let old_project_nodes: Vec<_> = data
         .extraction
         .nodes
@@ -533,22 +428,16 @@ pub fn merge_project(
         .filter(|n| n.source_file.starts_with(project_name))
         .cloned()
         .collect();
-
-    // Remove old project slice
     data.extraction
         .nodes
         .retain(|n| !n.source_file.starts_with(project_name));
     data.extraction
         .edges
         .retain(|e| !e.source_file.starts_with(project_name));
-
-    // Match new nodes against old project nodes to preserve UUIDs
     let mut new_nodes = new_extraction.nodes.clone();
     crate::fingerprint::assign_stable_ids(&old_project_nodes, &mut new_nodes);
     data.extraction.nodes.extend(new_nodes);
     data.extraction.edges.extend(new_extraction.edges.clone());
-
-    // Clean stale links — remove links to node UUIDs that no longer exist
     let valid_node_uuids: std::collections::HashSet<&str> = data
         .extraction
         .nodes
@@ -560,7 +449,6 @@ pub fn merge_project(
             || valid_node_uuids.contains(l.node_uuid.as_str())
             || l.node_uuid.is_empty()
     });
-
     save(h5_path, &data)
 }
 
@@ -576,8 +464,6 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
     data.extraction
         .edges
         .retain(|e| !e.source_file.starts_with(project_path));
-
-    // Clean stale links
     let valid_node_uuids: std::collections::HashSet<&str> = data
         .extraction
         .nodes
@@ -589,15 +475,454 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
             || valid_node_uuids.contains(l.node_uuid.as_str())
             || l.node_uuid.is_empty()
     });
-
     save(h5_path, &data)?;
     Ok(before - data.extraction.nodes.len())
 }
 
-// HDF5 internals
+// ---------------------------------------------------------------------------
+// SQLite internals
+// ---------------------------------------------------------------------------
 
-/// Auto-link new knowledge to code nodes by matching keywords in title/description
-/// against node labels. Returns links to add.
+fn open_db(path: &Path) -> crate::error::Result<Connection> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = Connection::open(path)
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite open: {e}")))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma: {e}")))?;
+    create_tables(&conn)?;
+    Ok(conn)
+}
+
+fn create_tables(conn: &Connection) -> crate::error::Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY, label TEXT, file_type TEXT, source_file TEXT,
+            source_location TEXT, confidence TEXT, uuid TEXT, fingerprint TEXT,
+            logical_key TEXT, body_hash TEXT, community INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS edges (
+            source TEXT, target TEXT, relation TEXT, confidence TEXT,
+            source_file TEXT, source_location TEXT, weight REAL DEFAULT 1.0
+        );
+        CREATE TABLE IF NOT EXISTS hyperedges (
+            id TEXT, label TEXT, nodes TEXT, confidence TEXT, source_file TEXT
+        );
+        CREATE TABLE IF NOT EXISTS knowledge (
+            uuid TEXT PRIMARY KEY, title TEXT, knowledge_type TEXT, description TEXT,
+            confidence REAL, observations INTEGER, tags TEXT,
+            scope TEXT DEFAULT '', status TEXT DEFAULT 'active', source TEXT DEFAULT '',
+            last_validated_at INTEGER DEFAULT 0, applies_when TEXT DEFAULT '',
+            supersedes TEXT DEFAULT '', superseded_by TEXT DEFAULT '',
+            evidence TEXT DEFAULT '', created_at INTEGER DEFAULT 0,
+            updated_at INTEGER DEFAULT 0, author TEXT DEFAULT '', trigger TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS links (
+            knowledge_uuid TEXT, node_uuid TEXT, relation TEXT, target_type TEXT DEFAULT '',
+            confidence REAL DEFAULT 1.0, created_at INTEGER DEFAULT 0,
+            linked_body_hash TEXT DEFAULT '', linked_logical_key TEXT DEFAULT '',
+            reason TEXT DEFAULT '', source TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS review_queue (
+            knowledge_uuid TEXT, reason TEXT, created_at INTEGER, priority INTEGER,
+            completed INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
+        CREATE INDEX IF NOT EXISTS idx_knowledge_title ON knowledge(title);
+        CREATE INDEX IF NOT EXISTS idx_links_kuuid ON links(knowledge_uuid);
+        CREATE INDEX IF NOT EXISTS idx_links_nuuid ON links(node_uuid);
+        ",
+    )
+    .map_err(|e| crate::error::KodexError::Other(format!("SQLite tables: {e}")))?;
+    Ok(())
+}
+
+fn write_nodes(
+    conn: &Connection,
+    nodes: &[crate::types::Node],
+    comm_map: &HashMap<String, usize>,
+) -> crate::error::Result<()> {
+    let mut stmt = conn
+        .prepare(
+            "INSERT OR REPLACE INTO nodes (id,label,file_type,source_file,source_location,confidence,uuid,fingerprint,logical_key,body_hash,community) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    for n in nodes {
+        stmt.execute(params![
+            n.id,
+            n.label,
+            n.file_type.to_string(),
+            n.source_file,
+            n.source_location.as_deref().unwrap_or(""),
+            n.confidence.map(|c| c.to_string()).unwrap_or_default(),
+            n.uuid.as_deref().unwrap_or(""),
+            n.fingerprint.as_deref().unwrap_or(""),
+            n.logical_key.as_deref().unwrap_or(""),
+            n.body_hash.as_deref().unwrap_or(""),
+            n.community
+                .or_else(|| comm_map.get(&n.id).copied())
+                .unwrap_or(0) as i64,
+        ])
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert node: {e}")))?;
+    }
+    Ok(())
+}
+
+fn write_edges(conn: &Connection, edges: &[crate::types::Edge]) -> crate::error::Result<()> {
+    let mut stmt = conn
+        .prepare("INSERT INTO edges (source,target,relation,confidence,source_file,source_location,weight) VALUES (?1,?2,?3,?4,?5,?6,?7)")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    for e in edges {
+        stmt.execute(params![
+            e.source,
+            e.target,
+            e.relation,
+            e.confidence.to_string(),
+            e.source_file,
+            e.source_location.as_deref().unwrap_or(""),
+            e.weight,
+        ])
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert edge: {e}")))?;
+    }
+    Ok(())
+}
+
+fn write_hyperedges(
+    conn: &Connection,
+    hyperedges: &[crate::types::Hyperedge],
+) -> crate::error::Result<()> {
+    if hyperedges.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare("INSERT INTO hyperedges (id,label,nodes,confidence,source_file) VALUES (?1,?2,?3,?4,?5)")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    for h in hyperedges {
+        stmt.execute(params![
+            h.id,
+            h.label,
+            h.nodes.join(","),
+            h.confidence.to_string(),
+            h.source_file.as_deref().unwrap_or(""),
+        ])
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert hyperedge: {e}")))?;
+    }
+    Ok(())
+}
+
+fn write_knowledge(conn: &Connection, knowledge: &[KnowledgeEntry]) -> crate::error::Result<()> {
+    if knowledge.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO knowledge (uuid,title,knowledge_type,description,confidence,observations,tags,scope,status,source,last_validated_at,applies_when,supersedes,superseded_by,evidence,created_at,updated_at,author,trigger) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    for k in knowledge {
+        stmt.execute(params![
+            k.uuid,
+            k.title,
+            k.knowledge_type,
+            k.description,
+            k.confidence,
+            k.observations,
+            k.tags.join(","),
+            k.scope,
+            k.status,
+            k.source,
+            k.last_validated_at as i64,
+            k.applies_when,
+            k.supersedes,
+            k.superseded_by,
+            k.evidence,
+            k.created_at as i64,
+            k.updated_at as i64,
+            k.author,
+            k.trigger,
+        ])
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert knowledge: {e}")))?;
+    }
+    Ok(())
+}
+
+fn write_links(conn: &Connection, links: &[KnowledgeLink]) -> crate::error::Result<()> {
+    if links.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO links (knowledge_uuid,node_uuid,relation,target_type,confidence,created_at,linked_body_hash,linked_logical_key,reason,source) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    for l in links {
+        stmt.execute(params![
+            l.knowledge_uuid,
+            l.node_uuid,
+            l.relation,
+            l.target_type,
+            l.confidence,
+            l.created_at as i64,
+            l.linked_body_hash,
+            l.linked_logical_key,
+            l.reason,
+            l.source,
+        ])
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert link: {e}")))?;
+    }
+    Ok(())
+}
+
+fn write_review_queue(
+    conn: &Connection,
+    queue: &[crate::types::ReviewQueueItem],
+) -> crate::error::Result<()> {
+    if queue.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn
+        .prepare("INSERT INTO review_queue (knowledge_uuid,reason,created_at,priority,completed) VALUES (?1,?2,?3,?4,?5)")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    for q in queue {
+        stmt.execute(params![
+            q.knowledge_uuid,
+            q.reason,
+            q.created_at as i64,
+            q.priority as i64,
+            if q.completed { 1 } else { 0 },
+        ])
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert queue: {e}")))?;
+    }
+    Ok(())
+}
+
+fn read_extraction(conn: &Connection) -> crate::error::Result<ExtractionResult> {
+    let opt = |s: String| -> Option<String> {
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    };
+    let mut ext = ExtractionResult::default();
+
+    // Nodes
+    let mut stmt = conn
+        .prepare("SELECT id,label,file_type,source_file,source_location,confidence,uuid,fingerprint,logical_key,body_hash,community FROM nodes")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(crate::types::Node {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                file_type: FileType::from_str_loose(row.get::<_, String>(2)?.as_str())
+                    .unwrap_or(FileType::Code),
+                source_file: row.get(3)?,
+                source_location: opt(row.get(4)?),
+                confidence: Confidence::from_str_loose(row.get::<_, String>(5)?.as_str()),
+                confidence_score: None,
+                community: Some(row.get::<_, i64>(10)? as usize),
+                norm_label: None,
+                degree: None,
+                uuid: opt(row.get(6)?),
+                fingerprint: opt(row.get(7)?),
+                logical_key: opt(row.get(8)?),
+                body_hash: opt(row.get(9)?),
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite read nodes: {e}")))?;
+    for row in rows {
+        ext.nodes
+            .push(row.map_err(|e| crate::error::KodexError::Other(format!("SQLite row: {e}")))?);
+    }
+
+    // Edges
+    let mut stmt = conn
+        .prepare("SELECT source,target,relation,confidence,source_file,source_location,weight FROM edges")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let c_str: String = row.get(3)?;
+            let c = Confidence::from_str_loose(&c_str).unwrap_or(Confidence::EXTRACTED);
+            Ok(crate::types::Edge {
+                source: row.get(0)?,
+                target: row.get(1)?,
+                relation: row.get(2)?,
+                confidence: c,
+                source_file: row.get(4)?,
+                source_location: {
+                    let s: String = row.get(5)?;
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                },
+                confidence_score: Some(c.default_score()),
+                weight: row.get(6)?,
+                original_src: None,
+                original_tgt: None,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite read edges: {e}")))?;
+    for row in rows {
+        ext.edges
+            .push(row.map_err(|e| crate::error::KodexError::Other(format!("SQLite row: {e}")))?);
+    }
+
+    // Hyperedges
+    let mut stmt = conn
+        .prepare("SELECT id,label,nodes,confidence,source_file FROM hyperedges")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let nodes_csv: String = row.get(2)?;
+            let c_str: String = row.get(3)?;
+            Ok(crate::types::Hyperedge {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                nodes: nodes_csv
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect(),
+                confidence: Confidence::from_str_loose(&c_str).unwrap_or(Confidence::EXTRACTED),
+                confidence_score: None,
+                source_file: {
+                    let s: String = row.get(4)?;
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                },
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite read hyperedges: {e}")))?;
+    for row in rows {
+        ext.hyperedges
+            .push(row.map_err(|e| crate::error::KodexError::Other(format!("SQLite row: {e}")))?);
+    }
+
+    Ok(ext)
+}
+
+fn read_knowledge(conn: &Connection) -> crate::error::Result<Vec<KnowledgeEntry>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT uuid,title,knowledge_type,description,confidence,observations,tags,scope,status,source,last_validated_at,applies_when,supersedes,superseded_by,evidence,created_at,updated_at,author,trigger FROM knowledge",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let tags_csv: String = row.get(6)?;
+            let status: String = row.get(8)?;
+            Ok(KnowledgeEntry {
+                uuid: row.get(0)?,
+                title: row.get(1)?,
+                knowledge_type: row.get(2)?,
+                description: row.get(3)?,
+                confidence: row.get(4)?,
+                observations: row.get::<_, i64>(5)? as u32,
+                tags: tags_csv
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect(),
+                scope: row.get(7)?,
+                status: if status.is_empty() {
+                    "active".to_string()
+                } else {
+                    status
+                },
+                source: row.get(9)?,
+                last_validated_at: row.get::<_, i64>(10)? as u64,
+                applies_when: row.get(11)?,
+                supersedes: row.get(12)?,
+                superseded_by: row.get(13)?,
+                evidence: row.get(14)?,
+                created_at: row.get::<_, i64>(15)? as u64,
+                updated_at: row.get::<_, i64>(16)? as u64,
+                author: row.get(17)?,
+                trigger: row.get(18)?,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite read knowledge: {e}")))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| crate::error::KodexError::Other(format!("SQLite row: {e}")))?);
+    }
+    Ok(result)
+}
+
+fn read_links(conn: &Connection) -> crate::error::Result<Vec<KnowledgeLink>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT knowledge_uuid,node_uuid,relation,target_type,confidence,created_at,linked_body_hash,linked_logical_key,reason,source FROM links",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(KnowledgeLink {
+                knowledge_uuid: row.get(0)?,
+                node_uuid: row.get(1)?,
+                relation: row.get(2)?,
+                target_type: row.get(3)?,
+                confidence: row.get(4)?,
+                created_at: row.get::<_, i64>(5)? as u64,
+                linked_body_hash: row.get(6)?,
+                linked_logical_key: row.get(7)?,
+                reason: row.get(8)?,
+                source: row.get(9)?,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite read links: {e}")))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| crate::error::KodexError::Other(format!("SQLite row: {e}")))?);
+    }
+    Ok(result)
+}
+
+fn read_review_queue(
+    conn: &Connection,
+) -> crate::error::Result<Vec<crate::types::ReviewQueueItem>> {
+    let mut stmt = conn
+        .prepare("SELECT knowledge_uuid,reason,created_at,priority,completed FROM review_queue")
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(crate::types::ReviewQueueItem {
+                knowledge_uuid: row.get(0)?,
+                reason: row.get(1)?,
+                created_at: row.get::<_, i64>(2)? as u64,
+                priority: row.get::<_, i64>(3)? as u8,
+                completed: row.get::<_, i64>(4)? != 0,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite read queue: {e}")))?;
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| crate::error::KodexError::Other(format!("SQLite row: {e}")))?);
+    }
+    Ok(result)
+}
+
+fn graph_to_extraction(graph: &KodexGraph) -> ExtractionResult {
+    ExtractionResult {
+        nodes: graph
+            .node_ids()
+            .filter_map(|id| graph.get_node(id).cloned())
+            .collect(),
+        edges: graph.edges().map(|(_, _, e)| e.clone()).collect(),
+        hyperedges: graph.hyperedges.clone(),
+        ..Default::default()
+    }
+}
+
 fn auto_link_knowledge(
     data: &KodexData,
     knowledge_uuid: &str,
@@ -607,8 +932,6 @@ fn auto_link_knowledge(
 ) -> Vec<KnowledgeLink> {
     let title_lower = title.to_lowercase();
     let desc_lower = description.to_lowercase();
-
-    // Extract meaningful tokens (>3 chars) from title and first line of description
     let desc_first = desc_lower.lines().next().unwrap_or("");
     let tokens: std::collections::HashSet<&str> = title_lower
         .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -629,11 +952,9 @@ fn auto_link_knowledge(
             break;
         }
         let label_lower = node.label.to_lowercase();
-        // Match if any token appears in node label
         let is_match = tokens.iter().any(|t| label_lower.contains(t));
         if is_match {
             if let Some(uuid) = &node.uuid {
-                // Don't duplicate existing links
                 let exists = data
                     .links
                     .iter()
@@ -644,7 +965,7 @@ fn auto_link_knowledge(
                         node_uuid: uuid.clone(),
                         relation: "related_to".to_string(),
                         target_type: String::new(),
-                        confidence: 0.7, // lower than explicit links
+                        confidence: 0.7,
                         created_at: now,
                         linked_body_hash: node.body_hash.clone().unwrap_or_default(),
                         linked_logical_key: node.logical_key.clone().unwrap_or_default(),
@@ -660,552 +981,10 @@ fn auto_link_knowledge(
     links
 }
 
-/// Write nodes directly from extraction data (bypasses graph to avoid node loss).
-fn write_nodes_direct(
-    file: &H5File,
-    nodes: &[crate::types::Node],
-    communities: &HashMap<usize, Vec<String>>,
-) -> crate::error::Result<()> {
-    let comm_map = crate::export::node_community_map(communities);
-    let grp = file
-        .create_group("nodes")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let mut ids = Vec::with_capacity(nodes.len());
-    let mut labels = Vec::with_capacity(nodes.len());
-    let mut ft = Vec::with_capacity(nodes.len());
-    let mut sf = Vec::with_capacity(nodes.len());
-    let mut conf = Vec::with_capacity(nodes.len());
-    let mut sl = Vec::with_capacity(nodes.len());
-    let mut uu = Vec::with_capacity(nodes.len());
-    let mut fp = Vec::with_capacity(nodes.len());
-    let mut lk = Vec::with_capacity(nodes.len());
-    let mut bh = Vec::with_capacity(nodes.len());
-    let mut cids: Vec<u32> = Vec::with_capacity(nodes.len());
-    for n in nodes {
-        ids.push(n.id.clone());
-        labels.push(n.label.clone());
-        ft.push(n.file_type.to_string());
-        sf.push(n.source_file.clone());
-        conf.push(
-            n.confidence
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "EXTRACTED".to_string()),
-        );
-        sl.push(n.source_location.clone().unwrap_or_default());
-        uu.push(n.uuid.clone().unwrap_or_default());
-        fp.push(n.fingerprint.clone().unwrap_or_default());
-        lk.push(n.logical_key.clone().unwrap_or_default());
-        bh.push(n.body_hash.clone().unwrap_or_default());
-        cids.push(
-            n.community
-                .map(|c| c as u32)
-                .or_else(|| comm_map.get(&n.id).copied().map(|c| c as u32))
-                .unwrap_or(0),
-        );
-    }
-    write_vlen(&grp, "id", &ids)?;
-    write_vlen(&grp, "label", &labels)?;
-    write_vlen(&grp, "file_type", &ft)?;
-    write_vlen(&grp, "source_file", &sf)?;
-    write_vlen(&grp, "confidence", &conf)?;
-    write_vlen(&grp, "source_location", &sl)?;
-    write_vlen(&grp, "uuid", &uu)?;
-    write_vlen(&grp, "fingerprint", &fp)?;
-    write_vlen(&grp, "logical_key", &lk)?;
-    write_vlen(&grp, "body_hash", &bh)?;
-    if !cids.is_empty() {
-        grp.new_dataset::<u32>()
-            .shape([cids.len()])
-            .create("community")
-            .and_then(|ds| ds.write_raw(&cids))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-    Ok(())
-}
-
-/// Write edges directly from extraction data.
-fn write_edges_direct(file: &H5File, edges: &[crate::types::Edge]) -> crate::error::Result<()> {
-    let grp = file
-        .create_group("edges")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let (mut s, mut t, mut r, mut c, mut sf, mut sl) =
-        (vec![], vec![], vec![], vec![], vec![], vec![]);
-    let mut w: Vec<f64> = vec![];
-    for edge in edges {
-        s.push(edge.source.clone());
-        t.push(edge.target.clone());
-        r.push(edge.relation.clone());
-        c.push(edge.confidence.to_string());
-        sf.push(edge.source_file.clone());
-        sl.push(edge.source_location.clone().unwrap_or_default());
-        w.push(edge.weight);
-    }
-    write_vlen(&grp, "source", &s)?;
-    write_vlen(&grp, "target", &t)?;
-    write_vlen(&grp, "relation", &r)?;
-    write_vlen(&grp, "confidence", &c)?;
-    write_vlen(&grp, "source_file", &sf)?;
-    write_vlen(&grp, "source_location", &sl)?;
-    if !w.is_empty() {
-        grp.new_dataset::<f64>()
-            .shape([w.len()])
-            .create("weight")
-            .and_then(|ds| ds.write_raw(&w))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-    Ok(())
-}
-
-fn write_knowledge(file: &H5File, knowledge: &[KnowledgeEntry]) -> crate::error::Result<()> {
-    if knowledge.is_empty() {
-        return Ok(());
-    }
-    let grp = file
-        .create_group("knowledge")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let uu: Vec<String> = knowledge.iter().map(|k| k.uuid.clone()).collect();
-    let ti: Vec<String> = knowledge.iter().map(|k| k.title.clone()).collect();
-    let ty: Vec<String> = knowledge.iter().map(|k| k.knowledge_type.clone()).collect();
-    let de: Vec<String> = knowledge.iter().map(|k| k.description.clone()).collect();
-    let tg: Vec<String> = knowledge.iter().map(|k| k.tags.join(",")).collect();
-    let sc: Vec<String> = knowledge.iter().map(|k| k.scope.clone()).collect();
-    let st: Vec<String> = knowledge.iter().map(|k| k.status.clone()).collect();
-    let sr: Vec<String> = knowledge.iter().map(|k| k.source.clone()).collect();
-    let aw: Vec<String> = knowledge.iter().map(|k| k.applies_when.clone()).collect();
-    let sp: Vec<String> = knowledge.iter().map(|k| k.supersedes.clone()).collect();
-    let sb: Vec<String> = knowledge.iter().map(|k| k.superseded_by.clone()).collect();
-    let ev: Vec<String> = knowledge.iter().map(|k| k.evidence.clone()).collect();
-    let au: Vec<String> = knowledge.iter().map(|k| k.author.clone()).collect();
-    let tr: Vec<String> = knowledge.iter().map(|k| k.trigger.clone()).collect();
-    let co: Vec<f64> = knowledge.iter().map(|k| k.confidence).collect();
-    let ob: Vec<u32> = knowledge.iter().map(|k| k.observations).collect();
-    let lv: Vec<u64> = knowledge.iter().map(|k| k.last_validated_at).collect();
-    let ca: Vec<u64> = knowledge.iter().map(|k| k.created_at).collect();
-    let ua: Vec<u64> = knowledge.iter().map(|k| k.updated_at).collect();
-    write_vlen(&grp, "uuid", &uu)?;
-    write_vlen(&grp, "titles", &ti)?;
-    write_vlen(&grp, "types", &ty)?;
-    write_vlen(&grp, "descriptions", &de)?;
-    write_vlen(&grp, "tags", &tg)?;
-    write_vlen(&grp, "scope", &sc)?;
-    write_vlen(&grp, "status", &st)?;
-    write_vlen(&grp, "source", &sr)?;
-    write_vlen(&grp, "applies_when", &aw)?;
-    write_vlen(&grp, "supersedes", &sp)?;
-    write_vlen(&grp, "superseded_by", &sb)?;
-    write_vlen(&grp, "evidence", &ev)?;
-    write_vlen(&grp, "author", &au)?;
-    write_vlen(&grp, "trigger", &tr)?;
-    grp.new_dataset::<f64>()
-        .shape([co.len()])
-        .create("confidence")
-        .and_then(|ds| ds.write_raw(&co))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    grp.new_dataset::<u32>()
-        .shape([ob.len()])
-        .create("observations")
-        .and_then(|ds| ds.write_raw(&ob))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    grp.new_dataset::<u64>()
-        .shape([lv.len()])
-        .create("last_validated_at")
-        .and_then(|ds| ds.write_raw(&lv))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    grp.new_dataset::<u64>()
-        .shape([ca.len()])
-        .create("created_at")
-        .and_then(|ds| ds.write_raw(&ca))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    grp.new_dataset::<u64>()
-        .shape([ua.len()])
-        .create("updated_at")
-        .and_then(|ds| ds.write_raw(&ua))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    Ok(())
-}
-
-fn write_hyperedges(
-    file: &H5File,
-    hyperedges: &[crate::types::Hyperedge],
-) -> crate::error::Result<()> {
-    if hyperedges.is_empty() {
-        return Ok(());
-    }
-    let grp = file
-        .create_group("hyperedges")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let ids: Vec<String> = hyperedges.iter().map(|h| h.id.clone()).collect();
-    let labels: Vec<String> = hyperedges.iter().map(|h| h.label.clone()).collect();
-    let nodes: Vec<String> = hyperedges.iter().map(|h| h.nodes.join(",")).collect();
-    let conf: Vec<String> = hyperedges
-        .iter()
-        .map(|h| h.confidence.to_string())
-        .collect();
-    let sf: Vec<String> = hyperedges
-        .iter()
-        .map(|h| h.source_file.clone().unwrap_or_default())
-        .collect();
-    write_vlen(&grp, "id", &ids)?;
-    write_vlen(&grp, "label", &labels)?;
-    write_vlen(&grp, "nodes", &nodes)?;
-    write_vlen(&grp, "confidence", &conf)?;
-    write_vlen(&grp, "source_file", &sf)?;
-    Ok(())
-}
-
-fn write_links(file: &H5File, links: &[KnowledgeLink]) -> crate::error::Result<()> {
-    if links.is_empty() {
-        return Ok(());
-    }
-    let grp = file
-        .create_group("links")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let ku: Vec<String> = links.iter().map(|l| l.knowledge_uuid.clone()).collect();
-    let nu: Vec<String> = links.iter().map(|l| l.node_uuid.clone()).collect();
-    let re: Vec<String> = links.iter().map(|l| l.relation.clone()).collect();
-    let tt: Vec<String> = links.iter().map(|l| l.target_type.clone()).collect();
-    let lbh: Vec<String> = links.iter().map(|l| l.linked_body_hash.clone()).collect();
-    let lco: Vec<f64> = links.iter().map(|l| l.confidence).collect();
-    let lca: Vec<u64> = links.iter().map(|l| l.created_at).collect();
-    write_vlen(&grp, "knowledge_uuid", &ku)?;
-    write_vlen(&grp, "node_uuid", &nu)?;
-    write_vlen(&grp, "relation", &re)?;
-    write_vlen(&grp, "target_type", &tt)?;
-    let lre: Vec<String> = links.iter().map(|l| l.reason.clone()).collect();
-    let lsr: Vec<String> = links.iter().map(|l| l.source.clone()).collect();
-    let llk: Vec<String> = links.iter().map(|l| l.linked_logical_key.clone()).collect();
-    write_vlen(&grp, "linked_body_hash", &lbh)?;
-    write_vlen(&grp, "link_reason", &lre)?;
-    write_vlen(&grp, "link_source", &lsr)?;
-    write_vlen(&grp, "linked_logical_key", &llk)?;
-    if !lco.is_empty() {
-        grp.new_dataset::<f64>()
-            .shape([lco.len()])
-            .create("confidence")
-            .and_then(|ds| ds.write_raw(&lco))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-    if !lca.is_empty() {
-        grp.new_dataset::<u64>()
-            .shape([lca.len()])
-            .create("created_at")
-            .and_then(|ds| ds.write_raw(&lca))
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    }
-    Ok(())
-}
-
-fn write_review_queue(
-    file: &H5File,
-    queue: &[crate::types::ReviewQueueItem],
-) -> crate::error::Result<()> {
-    if queue.is_empty() {
-        return Ok(());
-    }
-    let grp = file
-        .create_group("review_queue")
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    let ku: Vec<String> = queue.iter().map(|q| q.knowledge_uuid.clone()).collect();
-    let re: Vec<String> = queue.iter().map(|q| q.reason.clone()).collect();
-    let ca: Vec<u64> = queue.iter().map(|q| q.created_at).collect();
-    let pr: Vec<u32> = queue.iter().map(|q| q.priority as u32).collect();
-    let co: Vec<String> = queue
-        .iter()
-        .map(|q| if q.completed { "1" } else { "0" }.to_string())
-        .collect();
-    write_vlen(&grp, "knowledge_uuid", &ku)?;
-    write_vlen(&grp, "reason", &re)?;
-    write_vlen(&grp, "completed", &co)?;
-    grp.new_dataset::<u64>()
-        .shape([ca.len()])
-        .create("created_at")
-        .and_then(|ds| ds.write_raw(&ca))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    grp.new_dataset::<u32>()
-        .shape([pr.len()])
-        .create("priority")
-        .and_then(|ds| ds.write_raw(&pr))
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5: {e}")))?;
-    Ok(())
-}
-
-fn read_review_queue(file: &H5File) -> crate::error::Result<Vec<crate::types::ReviewQueueItem>> {
-    let ku = read_vlen(file, "review_queue/knowledge_uuid").unwrap_or_default();
-    let re = read_vlen(file, "review_queue/reason").unwrap_or_default();
-    let co = read_vlen(file, "review_queue/completed").unwrap_or_default();
-    let ca: Vec<u64> = file
-        .dataset("review_queue/created_at")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let pr: Vec<u32> = file
-        .dataset("review_queue/priority")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    Ok((0..ku.len())
-        .map(|i| crate::types::ReviewQueueItem {
-            knowledge_uuid: ku[i].clone(),
-            reason: re.get(i).cloned().unwrap_or_default(),
-            created_at: ca.get(i).copied().unwrap_or(0),
-            priority: pr.get(i).copied().unwrap_or(5) as u8,
-            completed: co.get(i).map(|s| s == "1").unwrap_or(false),
-        })
-        .collect())
-}
-
-fn read_extraction(file: &H5File) -> crate::error::Result<ExtractionResult> {
-    let ids = read_vlen(file, "nodes/id")?;
-    let labels = read_vlen(file, "nodes/label")?;
-    let ft = read_vlen(file, "nodes/file_type")?;
-    let sf = read_vlen(file, "nodes/source_file")?;
-    let conf = read_vlen(file, "nodes/confidence")?;
-    let sl = read_vlen(file, "nodes/source_location").unwrap_or_default();
-    let uu = read_vlen(file, "nodes/uuid").unwrap_or_default();
-    let fp = read_vlen(file, "nodes/fingerprint").unwrap_or_default();
-    let lk = read_vlen(file, "nodes/logical_key").unwrap_or_default();
-    let bh = read_vlen(file, "nodes/body_hash").unwrap_or_default();
-    let cids: Vec<u32> = file
-        .dataset("nodes/community")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let opt =
-        |v: &[String], i: usize| -> Option<String> { v.get(i).cloned().filter(|s| !s.is_empty()) };
-    let mut ext = ExtractionResult::default();
-    for (i, id) in ids.iter().enumerate() {
-        ext.nodes.push(crate::types::Node {
-            id: id.clone(),
-            label: labels.get(i).cloned().unwrap_or_default(),
-            file_type: FileType::from_str_loose(ft.get(i).map(|s| s.as_str()).unwrap_or("code"))
-                .unwrap_or(FileType::Code),
-            source_file: sf.get(i).cloned().unwrap_or_default(),
-            source_location: opt(&sl, i),
-            confidence: Confidence::from_str_loose(
-                conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"),
-            ),
-            confidence_score: None,
-            community: cids.get(i).map(|&c| c as usize),
-            norm_label: None,
-            degree: None,
-            uuid: opt(&uu, i),
-            fingerprint: opt(&fp, i),
-            logical_key: opt(&lk, i),
-            body_hash: opt(&bh, i),
-        });
-    }
-    let es = read_vlen(file, "edges/source")?;
-    let et = read_vlen(file, "edges/target")?;
-    let er = read_vlen(file, "edges/relation")?;
-    let ec = read_vlen(file, "edges/confidence")?;
-    let esf = read_vlen(file, "edges/source_file").unwrap_or_default();
-    let esl = read_vlen(file, "edges/source_location").unwrap_or_default();
-    let ew: Vec<f64> = file
-        .dataset("edges/weight")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let edge_count = es.len().min(et.len());
-    for i in 0..edge_count {
-        let c = Confidence::from_str_loose(ec.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"))
-            .unwrap_or(Confidence::EXTRACTED);
-        ext.edges.push(crate::types::Edge {
-            source: es[i].clone(),
-            target: et[i].clone(),
-            relation: er.get(i).cloned().unwrap_or_default(),
-            confidence: c,
-            source_file: esf.get(i).cloned().unwrap_or_default(),
-            source_location: opt(&esl, i),
-            confidence_score: Some(c.default_score()),
-            weight: ew.get(i).copied().unwrap_or(1.0),
-            original_src: None,
-            original_tgt: None,
-        });
-    }
-    ext.hyperedges = read_hyperedges(file)?;
-    Ok(ext)
-}
-
-fn read_hyperedges(file: &H5File) -> crate::error::Result<Vec<crate::types::Hyperedge>> {
-    let ids = read_vlen(file, "hyperedges/id").unwrap_or_default();
-    let labels = read_vlen(file, "hyperedges/label").unwrap_or_default();
-    let nodes_csv = read_vlen(file, "hyperedges/nodes").unwrap_or_default();
-    let conf = read_vlen(file, "hyperedges/confidence").unwrap_or_default();
-    let sf = read_vlen(file, "hyperedges/source_file").unwrap_or_default();
-    let opt =
-        |v: &[String], i: usize| -> Option<String> { v.get(i).cloned().filter(|s| !s.is_empty()) };
-    Ok((0..ids.len())
-        .map(|i| crate::types::Hyperedge {
-            id: ids[i].clone(),
-            label: labels.get(i).cloned().unwrap_or_default(),
-            nodes: nodes_csv
-                .get(i)
-                .map(|n| {
-                    n.split(',')
-                        .filter(|s| !s.is_empty())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            confidence: Confidence::from_str_loose(
-                conf.get(i).map(|s| s.as_str()).unwrap_or("EXTRACTED"),
-            )
-            .unwrap_or(Confidence::EXTRACTED),
-            confidence_score: None,
-            source_file: opt(&sf, i),
-        })
-        .collect())
-}
-
-fn read_knowledge(file: &H5File) -> crate::error::Result<Vec<KnowledgeEntry>> {
-    let uu = read_vlen(file, "knowledge/uuid").unwrap_or_default();
-    let ti = read_vlen(file, "knowledge/titles").unwrap_or_default();
-    let ty = read_vlen(file, "knowledge/types").unwrap_or_default();
-    let de = read_vlen(file, "knowledge/descriptions").unwrap_or_default();
-    let tg = read_vlen(file, "knowledge/tags").unwrap_or_default();
-    let sc = read_vlen(file, "knowledge/scope").unwrap_or_default();
-    let st = read_vlen(file, "knowledge/status").unwrap_or_default();
-    let sr = read_vlen(file, "knowledge/source").unwrap_or_default();
-    let aw = read_vlen(file, "knowledge/applies_when").unwrap_or_default();
-    let sp = read_vlen(file, "knowledge/supersedes").unwrap_or_default();
-    let sb = read_vlen(file, "knowledge/superseded_by").unwrap_or_default();
-    let ev = read_vlen(file, "knowledge/evidence").unwrap_or_default();
-    let au = read_vlen(file, "knowledge/author").unwrap_or_default();
-    let tr = read_vlen(file, "knowledge/trigger").unwrap_or_default();
-    let co: Vec<f64> = file
-        .dataset("knowledge/confidence")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let ob: Vec<u32> = file
-        .dataset("knowledge/observations")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let lv: Vec<u64> = file
-        .dataset("knowledge/last_validated_at")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let ca: Vec<u64> = file
-        .dataset("knowledge/created_at")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let ua: Vec<u64> = file
-        .dataset("knowledge/updated_at")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let s = |v: &[String], i: usize| -> String { v.get(i).cloned().unwrap_or_default() };
-    Ok((0..ti.len())
-        .map(|i| KnowledgeEntry {
-            uuid: uu
-                .get(i)
-                .cloned()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            title: ti[i].clone(),
-            knowledge_type: ty.get(i).cloned().unwrap_or_default(),
-            description: de.get(i).cloned().unwrap_or_default(),
-            confidence: co.get(i).copied().unwrap_or(0.5),
-            observations: ob.get(i).copied().unwrap_or(1),
-            tags: tg
-                .get(i)
-                .map(|t| {
-                    t.split(',')
-                        .filter(|s| !s.is_empty())
-                        .map(String::from)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            scope: s(&sc, i),
-            status: {
-                let val = s(&st, i);
-                if val.is_empty() {
-                    "active".to_string()
-                } else {
-                    val
-                }
-            },
-            source: s(&sr, i),
-            last_validated_at: lv.get(i).copied().unwrap_or(0),
-            applies_when: s(&aw, i),
-            supersedes: s(&sp, i),
-            superseded_by: s(&sb, i),
-            evidence: s(&ev, i),
-            created_at: ca.get(i).copied().unwrap_or(0),
-            updated_at: ua.get(i).copied().unwrap_or(0),
-            author: s(&au, i),
-            trigger: s(&tr, i),
-        })
-        .collect())
-}
-
-fn read_links(file: &H5File) -> crate::error::Result<Vec<KnowledgeLink>> {
-    let ku = read_vlen(file, "links/knowledge_uuid").unwrap_or_default();
-    let nu = read_vlen(file, "links/node_uuid").unwrap_or_default();
-    let re = read_vlen(file, "links/relation").unwrap_or_default();
-    let tt = read_vlen(file, "links/target_type").unwrap_or_default();
-    let lbh = read_vlen(file, "links/linked_body_hash").unwrap_or_default();
-    let lre = read_vlen(file, "links/link_reason").unwrap_or_default();
-    let lsr = read_vlen(file, "links/link_source").unwrap_or_default();
-    let llk = read_vlen(file, "links/linked_logical_key").unwrap_or_default();
-    let lco: Vec<f64> = file
-        .dataset("links/confidence")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    let lca: Vec<u64> = file
-        .dataset("links/created_at")
-        .and_then(|ds| ds.read_raw())
-        .unwrap_or_default();
-    Ok((0..ku.len())
-        .map(|i| KnowledgeLink {
-            knowledge_uuid: ku[i].clone(),
-            node_uuid: nu.get(i).cloned().unwrap_or_default(),
-            relation: re.get(i).cloned().unwrap_or_default(),
-            target_type: tt.get(i).cloned().unwrap_or_default(),
-            linked_body_hash: lbh.get(i).cloned().unwrap_or_default(),
-            reason: lre.get(i).cloned().unwrap_or_default(),
-            source: lsr.get(i).cloned().unwrap_or_default(),
-            linked_logical_key: llk.get(i).cloned().unwrap_or_default(),
-            confidence: lco.get(i).copied().unwrap_or(1.0),
-            created_at: lca.get(i).copied().unwrap_or(0),
-        })
-        .collect())
-}
-
-fn graph_to_extraction(graph: &KodexGraph) -> ExtractionResult {
-    ExtractionResult {
-        nodes: graph
-            .node_ids()
-            .filter_map(|id| graph.get_node(id).cloned())
-            .collect(),
-        edges: graph.edges().map(|(_, _, e)| e.clone()).collect(),
-        hyperedges: graph.hyperedges.clone(),
-        ..Default::default()
-    }
-}
-
-/// Default chunk size for compressed vlen string datasets.
-const VLEN_CHUNK_SIZE: usize = 512;
-
-fn write_vlen(
-    group: &rust_hdf5::group::H5Group,
-    name: &str,
-    strings: &[String],
-) -> crate::error::Result<()> {
-    if strings.is_empty() {
-        return Ok(());
-    }
-    let refs: Vec<&str> = strings.iter().map(|s| s.as_str()).collect();
-    group
-        .write_vlen_strings_compressed(
-            name,
-            &refs,
-            VLEN_CHUNK_SIZE,
-            rust_hdf5::FilterPipeline::zstd(3),
-        )
-        .map_err(|e| crate::error::KodexError::Other(format!("HDF5 write {name}: {e}")))
-}
-
-fn read_vlen(file: &H5File, path: &str) -> crate::error::Result<Vec<String>> {
-    match file.dataset(path) {
-        Ok(ds) => ds
-            .read_vlen_strings()
-            .map_err(|e| crate::error::KodexError::Other(format!("HDF5 read {path}: {e}"))),
-        Err(_) => Ok(Vec::new()),
+// Compat: convert rusqlite::Error to our error type
+impl From<rusqlite::Error> for crate::error::KodexError {
+    fn from(e: rusqlite::Error) -> Self {
+        crate::error::KodexError::Other(format!("SQLite: {e}"))
     }
 }
 
@@ -1213,10 +992,11 @@ fn read_vlen(file: &H5File, path: &str) -> crate::error::Result<Vec<String>> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
     #[test]
-    fn test_hdf5_round_trip() {
+    fn test_sqlite_round_trip() {
         let dir = TempDir::new().unwrap();
-        let h5 = dir.path().join("test.h5");
+        let db = dir.path().join("test.db");
         let data = KodexData {
             extraction: ExtractionResult {
                 nodes: vec![
@@ -1286,8 +1066,9 @@ mod tests {
             }],
             review_queue: vec![],
         };
-        save(&h5, &data).unwrap();
-        let loaded = load(&h5).unwrap();
+        save(&db, &data).unwrap();
+        cache_remove(&db);
+        let loaded = load(&db).unwrap();
         assert_eq!(loaded.extraction.nodes.len(), 2);
         assert_eq!(loaded.extraction.edges.len(), 1);
         assert_eq!(loaded.knowledge.len(), 1);
@@ -1307,8 +1088,7 @@ mod tests {
     #[test]
     fn test_links_clear_vs_noop() {
         let dir = TempDir::new().unwrap();
-        let h5 = dir.path().join("test_links.h5");
-        // Create initial data with one knowledge + one link
+        let db = dir.path().join("test_links.db");
         let data = KodexData {
             extraction: ExtractionResult::default(),
             knowledge: vec![KnowledgeEntry {
@@ -1330,11 +1110,10 @@ mod tests {
             }],
             review_queue: vec![],
         };
-        save(&h5, &data).unwrap();
+        save(&db, &data).unwrap();
 
-        // Update with None for related_nodes → links should be untouched
         append_knowledge_with_uuid(
-            &h5,
+            &db,
             Some("k-1"),
             "Pattern",
             "pattern",
@@ -1344,12 +1123,12 @@ mod tests {
             &[],
         )
         .unwrap();
-        let loaded = load(&h5).unwrap();
+        cache_remove(&db);
+        let loaded = load(&db).unwrap();
         assert_eq!(loaded.links.len(), 1, "None should not touch links");
 
-        // Update with Some(&[]) → links should be cleared
         append_knowledge_with_uuid(
-            &h5,
+            &db,
             Some("k-1"),
             "Pattern",
             "pattern",
@@ -1359,12 +1138,12 @@ mod tests {
             &[],
         )
         .unwrap();
-        let loaded = load(&h5).unwrap();
+        cache_remove(&db);
+        let loaded = load(&db).unwrap();
         assert_eq!(loaded.links.len(), 0, "Some(&[]) should clear links");
 
-        // Update with Some(&[new_node]) → should add link
         append_knowledge_with_uuid(
-            &h5,
+            &db,
             Some("k-1"),
             "Pattern",
             "pattern",
@@ -1374,7 +1153,8 @@ mod tests {
             &[],
         )
         .unwrap();
-        let loaded = load(&h5).unwrap();
+        cache_remove(&db);
+        let loaded = load(&db).unwrap();
         assert_eq!(loaded.links.len(), 1);
         assert_eq!(loaded.links[0].node_uuid, "n-2");
     }

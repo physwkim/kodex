@@ -1,7 +1,7 @@
 //! Global kodex home and project registry.
 //!
 //! ~/.kodex/
-//! ├── kodex.h5         ← single knowledge base (all projects + knowledge)
+//! ├── kodex.db         ← single knowledge base (all projects + knowledge)
 //! ├── kodex.sock       ← actor socket
 //! └── registry.json    ← tracked project paths
 
@@ -20,7 +20,7 @@ pub fn kodex_home() -> PathBuf {
 
 /// The single global knowledge base.
 pub fn global_h5() -> PathBuf {
-    kodex_home().join("kodex.h5")
+    kodex_home().join("kodex.db")
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

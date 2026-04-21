@@ -227,7 +227,7 @@ fn main() {
         Some(Commands::Import) => {
             let h5 = kodex::registry::global_h5();
             if !h5.exists() {
-                eprintln!("No kodex.h5 found. Run `kodex run` first.");
+                eprintln!("No kodex.db found. Run `kodex run` first.");
                 return;
             }
             match kodex::import::import_claude_memories(&h5) {
@@ -239,7 +239,7 @@ fn main() {
         Some(Commands::Export) => {
             let h5 = kodex::registry::global_h5();
             if !h5.exists() {
-                eprintln!("No kodex.h5 found. Run `kodex run` first.");
+                eprintln!("No kodex.db found. Run `kodex run` first.");
                 return;
             }
             match kodex::import::export_to_claude_memories(&h5) {
@@ -251,7 +251,7 @@ fn main() {
         Some(Commands::Ingest { path, max_commits }) => {
             let h5 = kodex::registry::global_h5();
             if !h5.exists() {
-                eprintln!("No kodex.h5 found. Run `kodex run` first.");
+                eprintln!("No kodex.db found. Run `kodex run` first.");
                 return;
             }
             match kodex::ingest_knowledge::ingest_project(&h5, &path, max_commits) {

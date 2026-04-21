@@ -18,15 +18,15 @@ pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
     // Explicit HDF5 file
     if path
         .extension()
-        .map(|e| e == "h5" || e == "hdf5")
+        .map(|e| e == "db" || e == "sqlite")
         .unwrap_or(false)
     {
         return crate::storage::load_hdf5(path);
     }
 
-    // Directory: look for kodex.h5 inside, then vault .md
+    // Directory: look for kodex.db inside, then vault .md
     if path.is_dir() {
-        let h5_in_dir = path.join("kodex.h5");
+        let h5_in_dir = path.join("kodex.db");
         if h5_in_dir.exists() {
             return crate::storage::load_hdf5(&h5_in_dir);
         }

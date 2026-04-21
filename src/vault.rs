@@ -15,7 +15,7 @@ static WIKILINK_RE: LazyLock<Regex> =
 ///
 /// Parses every `.md` file's YAML frontmatter for node metadata and
 /// `[[wikilinks]]` for edges. The vault is the source of truth;
-/// kodex.h5 is just a cache for performance.
+/// kodex.db is just a cache for performance.
 pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGraph> {
     let entries = collect_md_files(vault_dir)?;
 
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn test_cache_staleness() {
         let dir = TempDir::new().unwrap();
-        let cache = dir.path().join("kodex.h5");
+        let cache = dir.path().join("kodex.db");
 
         // No cache → stale
         assert!(is_cache_stale(dir.path(), &cache));
