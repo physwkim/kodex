@@ -949,12 +949,13 @@ fn test_migration_preserves_data() {
     };
     kodex::storage::save(&h5, &data).unwrap();
 
-    // Simulate older version header
+    // Simulate older version header (bypasses kodex, so invalidate cache)
     {
         let file = rust_hdf5::file::H5File::open_rw(&h5).unwrap();
         file.set_attr_string("version", "0.3.0").unwrap();
         file.close().unwrap();
     }
+    kodex::storage::cache_remove(&h5);
 
     // Load triggers migration
     let loaded = kodex::storage::load(&h5).unwrap();

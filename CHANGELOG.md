@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3.0 (2026-04-21)
+
+- **In-memory cache**: path-keyed cache avoids re-reading h5 on repeated operations. No test interference (each test uses unique temp path).
+- **Incremental save**: save_knowledge_only uses open_rw + delete_group + recreate (knowledge/links only, nodes untouched)
+- **load_knowledge_only**: 13 functions skip loading nodes/edges entirely
+- Cache auto-updated on save, auto-merged on incremental save
+
 ## v0.2.9 (2026-04-21)
 
 - **Incremental save**: learn/forget/update now use open_rw + delete_group + recreate for knowledge/links only. Nodes/edges untouched. No graph rebuild on knowledge operations.

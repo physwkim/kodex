@@ -38,6 +38,7 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     write_review_queue(&file, &data.review_queue)?;
     file.close()
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
+    cache_put(path, data);
     Ok(())
 }
 
@@ -59,6 +60,13 @@ pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Resul
     write_review_queue(&file, &data.review_queue)?;
     file.close()
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 close: {e}")))?;
+    // Update cache — merge knowledge changes into cached full data if present
+    if let Some(mut cached) = cache_get(path) {
+        cached.knowledge = data.knowledge.clone();
+        cached.links = data.links.clone();
+        cached.review_queue = data.review_queue.clone();
+        cache_put(path, &cached);
+    }
     Ok(())
 }
 
@@ -77,7 +85,44 @@ pub fn load_knowledge_only(path: &Path) -> crate::error::Result<KodexData> {
 /// Current storage format version.
 const CURRENT_VERSION: &str = "0.5.0";
 
+// ---------------------------------------------------------------------------
+// Path-keyed in-memory cache
+// ---------------------------------------------------------------------------
+
+use std::sync::Mutex;
+
+static CACHE: Mutex<Option<HashMap<std::path::PathBuf, KodexData>>> = Mutex::new(None);
+
+fn cache_get(path: &Path) -> Option<KodexData> {
+    CACHE.lock().ok()?.as_ref()?.get(path).cloned()
+}
+
+fn cache_put(path: &Path, data: &KodexData) {
+    if let Ok(mut guard) = CACHE.lock() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(path.to_path_buf(), data.clone());
+    }
+}
+
+/// Invalidate cache for a specific path (call after external h5 modification).
+pub fn cache_remove(path: &Path) {
+    if let Ok(mut guard) = CACHE.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.remove(path);
+        }
+    }
+}
+
 pub fn load(path: &Path) -> crate::error::Result<KodexData> {
+    if let Some(cached) = cache_get(path) {
+        return Ok(cached);
+    }
+    let data = load_from_disk(path)?;
+    cache_put(path, &data);
+    Ok(data)
+}
+
+fn load_from_disk(path: &Path) -> crate::error::Result<KodexData> {
     let file = H5File::open(path)
         .map_err(|e| crate::error::KodexError::Other(format!("HDF5 open: {e}")))?;
 
