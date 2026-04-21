@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.2.8 (2026-04-21)
+
+- Knowledge index: keyword → UUID reverse index for fast query_knowledge lookup
+- Avoids full scan when query terms match indexed tokens
+
 ## v0.2.7 (2026-04-21)
 
 - knowledge_context is now a compact summary (stats + high-confidence + recent + type counts), not a full dump

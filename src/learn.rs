@@ -150,7 +150,35 @@ pub fn learn_with_uuid(
     Ok(new_uuid)
 }
 
-/// Query knowledge by keyword, type, or tag. Reads from HDF5.
+/// Build a keyword → UUID index for fast knowledge lookup.
+fn build_knowledge_index(
+    knowledge: &[crate::types::KnowledgeEntry],
+) -> HashMap<String, Vec<usize>> {
+    let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, k) in knowledge.iter().enumerate() {
+        // Index by title tokens
+        for token in k
+            .title
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| s.len() > 2)
+        {
+            index.entry(token.to_string()).or_default().push(i);
+        }
+        // Index by tags
+        for tag in &k.tags {
+            index.entry(tag.to_lowercase()).or_default().push(i);
+        }
+        // Index by type
+        index
+            .entry(k.knowledge_type.to_lowercase())
+            .or_default()
+            .push(i);
+    }
+    index
+}
+
+/// Query knowledge by keyword, type, or tag. Uses index for fast lookup.
 pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
     let data = match crate::storage::load(h5_path) {
         Ok(d) => d,
@@ -158,9 +186,35 @@ pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -
     };
     let query_lower = query.to_lowercase();
 
+    // Use index for fast candidate selection
+    let candidates: std::collections::HashSet<usize> = if !query.is_empty() {
+        let index = build_knowledge_index(&data.knowledge);
+        let tokens: Vec<&str> = query_lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| s.len() > 2)
+            .collect();
+        let mut hits = std::collections::HashSet::new();
+        for token in &tokens {
+            if let Some(indices) = index.get(*token) {
+                hits.extend(indices);
+            }
+        }
+        // Also check substring for partial matches (fallback)
+        if hits.is_empty() {
+            (0..data.knowledge.len()).collect()
+        } else {
+            hits
+        }
+    } else {
+        (0..data.knowledge.len()).collect()
+    };
+
     let links = data.links;
     data.knowledge
         .into_iter()
+        .enumerate()
+        .filter(|(i, _)| candidates.contains(i))
+        .map(|(_, k)| k)
         .filter(|k| {
             if let Some(tf) = type_filter {
                 if k.knowledge_type != tf {
