@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "kodex"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1246,7 +1246,6 @@ dependencies = [
  "regex",
  "reqwest",
  "rusqlite",
- "rust-hdf5",
  "serde",
  "serde_json",
  "sha2",
@@ -1862,22 +1861,6 @@ dependencies = [
  "libsqlite3-sys",
  "smallvec",
 ]
-
-[[package]]
-name = "rust-hdf5"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16c1243a96ce346596e112107f7ec96af6a57d9f59d13ce0ea3888d44ccf5f17"
-dependencies = [
- "flate2",
- "rust-zstd",
-]
-
-[[package]]
-name = "rust-zstd"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d556913dfad2fe0a10328b1a99c3bb834acbe26fd267bd3b3b3f3032d7533804"
 
 [[package]]
 name = "rustc-hash"

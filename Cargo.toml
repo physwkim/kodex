@@ -1,6 +1,6 @@
 [package]
 name = "kodex"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
@@ -25,7 +25,6 @@ walkdir = "2"
 dirs = "6"
 globset = "0.4"
 uuid = { version = "1", features = ["v4"] }
-rust-hdf5 = { version = "0.2.7", features = ["zstd"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
 
 # Optional dependencies

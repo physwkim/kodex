@@ -2,7 +2,7 @@
 
 AI knowledge graph that learns across sessions. Accumulates patterns, decisions, conventions, and domain knowledge as you work — so the next session starts where the last one left off.
 
-Inspired by [graphify](https://github.com/safishamsi/graphify). Built from scratch in Rust with HDF5 as the core storage engine.
+Inspired by [graphify](https://github.com/safishamsi/graphify). Built from scratch in Rust with SQLite as the storage engine.
 
 ## Install
 
@@ -14,7 +14,7 @@ kodex install claude        # register MCP server in Claude Code
 ## Quick Start
 
 ```bash
-kodex run .                             # analyze codebase → ~/.kodex/kodex.h5
+kodex run .                             # analyze codebase → ~/.kodex/kodex.db
 kodex query "how does auth work"        # search
 kodex explain "AuthService"             # node details
 kodex list                              # registered projects
@@ -25,7 +25,7 @@ kodex forget --below 0.3                # clean low-confidence knowledge
 
 ```
 ~/.kodex/                              ← single source of truth
-├── kodex.h5                           ← all projects + all knowledge
+├── kodex.db                           ← all projects + all knowledge (SQLite)
 ├── kodex.sock                         ← actor Unix socket
 └── registry.json                      ← project paths
 
@@ -34,49 +34,42 @@ kodex forget --below 0.3                # clean low-confidence knowledge
 └── GRAPH_REPORT.md                    ← analysis report
 ```
 
-### HDF5 Structure
+### SQLite Schema
 
 ```
-kodex.h5 (version 0.5.0)
-├── /nodes/                  ← code entities
-│   ├── uuid                 ← stable identity (survives renames/moves)
-│   ├── id, label            ← current name
-│   ├── fingerprint          ← matching key (comment/whitespace normalized)
-│   ├── body_hash            ← SHA256 of normalized function/class body
-│   ├── logical_key          ← human-readable (project/file.py::Class.method)
-│   ├── file_type, source_file, source_location, confidence
-│   └── community (u32)
-├── /edges/                  ← code relationships
-│   ├── source, target, relation, confidence
-│   ├── source_file, source_location
-│   └── weight (f64)
-├── /hyperedges/             ← multi-node groups
-│   ├── id, label, nodes, confidence, source_file
-├── /knowledge/              ← AI-accumulated knowledge
-│   ├── uuid                 ← knowledge identity
-│   ├── titles, types, descriptions, tags
-│   ├── scope, status, source, applies_when
-│   ├── evidence             ← where this knowledge came from
-│   ├── supersedes / superseded_by
-│   ├── confidence (f64), observations (u32)
-│   └── created_at, updated_at, last_validated_at (u64)
-└── /links/                  ← knowledge ↔ node or knowledge ↔ knowledge
-    ├── knowledge_uuid, node_uuid, relation, target_type
-    ├── confidence (f64)     ← link confidence
-    ├── created_at (u64)     ← when link was created
-    ├── linked_body_hash     ← body snapshot for drift detection
-    ├── linked_logical_key   ← logical_key snapshot
-    ├── link_reason          ← why this link was created
-    └── link_source          ← human / agent / inferred
+kodex.db (version 0.5.0)
+
+nodes                        ← code entities
+  id, label, file_type, source_file, source_location, confidence,
+  uuid, fingerprint, logical_key, body_hash, community
+
+edges                        ← code relationships
+  source, target, relation, confidence,
+  source_file, source_location, weight
+
+hyperedges                   ← multi-node groups
+  id, label, nodes, confidence, source_file
+
+knowledge                    ← AI-accumulated knowledge
+  uuid, title, knowledge_type, description, confidence, observations,
+  tags, scope, status, source, applies_when, evidence,
+  supersedes, superseded_by, created_at, updated_at, last_validated_at
+
+links                        ← knowledge ↔ node or knowledge ↔ knowledge
+  knowledge_uuid, node_uuid, relation, target_type, confidence,
+  created_at, linked_body_hash, linked_logical_key, reason, source
+
+review_queue                 ← auto-triage queue
+  knowledge_uuid, reason, created_at, priority, completed
 ```
 
-All data in vlen strings (h5py compatible). Powered by [rust-hdf5](https://crates.io/crates/rust-hdf5) (pure Rust, no C dependency).
+Single-file SQLite database. Powered by [rusqlite](https://crates.io/crates/rusqlite) (bundled, no system dependency).
 
 ### Process Model
 
 ```
 kodex actor (single daemon, auto-managed)
-  ├─ owns kodex.h5 exclusively
+  ├─ owns kodex.db exclusively
   ├─ handles concurrent sessions via thread-per-client
   ├─ auto-started by first kodex serve
   └─ auto-exits after 5 min idle
@@ -88,7 +81,7 @@ kodex serve (per Claude session, MCP stdio proxy)
 
 ```
 Claude A → kodex serve → ┐
-Claude B → kodex serve → ├─ kodex.sock → kodex actor → kodex.h5
+Claude B → kodex serve → ├─ kodex.sock → kodex actor → kodex.db
 Claude C → kodex serve → ┘
 ```
 
@@ -98,7 +91,7 @@ Claude C → kodex serve → ┘
 kodex run ./my-project
   ├─ detect → extract (tree-sitter) → hierarchy → cluster → analyze
   ├─ hierarchy: project → crate/package → module → file → function
-  ├─ merge into ~/.kodex/kodex.h5 (preserves other projects)
+  ├─ merge into ~/.kodex/kodex.db (preserves other projects)
   ├─ assign stable UUIDs via fingerprint matching
   ├─ ingest git commits + README → auto-learn knowledge
   ├─ register in ~/.kodex/registry.json
@@ -148,25 +141,15 @@ Identity rules:
 
 ## Version Migration
 
-kodex.h5 auto-migrates when opened by a newer version:
+kodex.db auto-migrates when opened by a newer version. Schema version stored in `meta` table.
 
-```
-v0.1.0 (no uuid/fingerprint)   → auto-generates on load
-v0.2.0 (no knowledge uuid)     → auto-generates on load
-v0.3.0 (no knowledge metadata) → defaults added on load
-v0.4.0 (no evidence/timestamps)→ defaults added on load
-v0.5.0 (current)                → no migration needed
-```
-
-Semver-safe version comparison (handles 0.10.0, 1.0.0 correctly).
-
-Old h5 files just work. No manual steps.
+Old databases just work. No manual steps.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `kodex run <path>` | Analyze + merge into global h5 |
+| `kodex run <path>` | Analyze + merge into global db |
 | `kodex query "<question>"` | BFS/DFS search |
 | `kodex path "<src>" "<tgt>"` | Shortest path |
 | `kodex explain "<node>"` | Node details + neighbors |
@@ -187,7 +170,7 @@ Old h5 files just work. No manual steps.
 
 ```
 Session 1 (project-a):
-  Claude → learn("Repository Pattern", ...) → kodex.h5 (knowledge_uuid=K-1)
+  Claude → learn("Repository Pattern", ...) → kodex.db (knowledge_uuid=K-1)
 
 Session 2 (project-b):
   Claude → knowledge_context() → "Repository Pattern (60%)"
@@ -306,8 +289,8 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 Bidirectional sync between kodex knowledge and Claude Code's `~/.claude/memory/` system.
 
 ```bash
-kodex import          # ~/.claude/**/memory/*.md → kodex.h5
-kodex export          # kodex.h5 → ~/.claude/memory/kodex_*.md
+kodex import          # ~/.claude/**/memory/*.md → kodex.db
+kodex export          # kodex.db → ~/.claude/memory/kodex_*.md
 ```
 
 **Auto-sync** (installed by `kodex install claude`):
@@ -573,7 +556,7 @@ kodex run .                               # auto-ingests after merge
 | `query_knowledge` | Keyword index (title/tag/type → UUID reverse lookup) |
 | `query_graph` | Fuzzy matching: exact → token → source_file → edit distance ≤ 2 |
 | `recall_for_task` | Project affinity: +15pt boost for same-project knowledge |
-| Zstd compression | 12MB → 3.3MB (72% reduction) |
+| SQLite WAL mode | Fast concurrent reads |
 
 ## Supported Languages
 
@@ -592,7 +575,7 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Scala, PHP, Sw
 | `parallel` | Parallel extraction (rayon) |
 | `all` | Everything except `video` |
 
-HDF5 via [rust-hdf5](https://crates.io/crates/rust-hdf5) always included (pure Rust).
+SQLite via [rusqlite](https://crates.io/crates/rusqlite) always included (bundled).
 
 ## License
 
