@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.2 (2026-04-28)
+
+Fix `recall` keyword search for multi-word queries.
+
+- `query_knowledge`: multi-token queries now match if ANY token appears in title/description/tags (was: whole-query substring match — failed on phrases like `"pva wire format epics-pva-rs pvxs"`)
+- `build_knowledge_index`: also indexes description tokens (was: title/tags/type only)
+- Results ranked by token match count (title/tag weight 2, description weight 1)
+- MCP tool descriptions clarify when to prefer `recall` (exact identifiers) vs `recall_for_task` (natural-language)
+- Added `test_query_knowledge_multi_token` regression test
+
 ## v0.4.0 (2026-04-21)
 
 **Breaking: storage backend changed from HDF5 to SQLite.**

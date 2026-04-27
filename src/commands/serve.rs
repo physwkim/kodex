@@ -161,12 +161,12 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "recall",
-            "Search knowledge by keyword or type.",
+            "Keyword search on title/description/tags. Best for exact identifiers (function/module names). For task-context retrieval prefer recall_for_task.",
             &[("query", "string", true), ("type", "string", false)],
         ),
         tool_def(
             "recall_for_task",
-            "Ranked knowledge retrieval for current task.",
+            "Ranked knowledge retrieval for current task. Prefer this over recall for natural-language queries.",
             &[
                 ("question", "string", false),
                 ("touched_files", "array", false),

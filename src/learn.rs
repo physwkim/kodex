@@ -151,12 +151,12 @@ pub fn learn_with_uuid(
 }
 
 /// Build a keyword → UUID index for fast knowledge lookup.
+/// Indexes title, description, tags, and type tokens.
 fn build_knowledge_index(
     knowledge: &[crate::types::KnowledgeEntry],
 ) -> HashMap<String, Vec<usize>> {
     let mut index: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, k) in knowledge.iter().enumerate() {
-        // Index by title tokens
         for token in k
             .title
             .to_lowercase()
@@ -165,11 +165,17 @@ fn build_knowledge_index(
         {
             index.entry(token.to_string()).or_default().push(i);
         }
-        // Index by tags
+        for token in k
+            .description
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| s.len() > 2)
+        {
+            index.entry(token.to_string()).or_default().push(i);
+        }
         for tag in &k.tags {
             index.entry(tag.to_lowercase()).or_default().push(i);
         }
-        // Index by type
         index
             .entry(k.knowledge_type.to_lowercase())
             .or_default()
@@ -179,6 +185,10 @@ fn build_knowledge_index(
 }
 
 /// Query knowledge by keyword, type, or tag. Uses index for fast lookup.
+///
+/// Multi-token queries match if ANY token appears in title/description/tags
+/// (OR semantics). Results are scored and returned highest-relevance first:
+/// title and tag hits weight 2, description hits weight 1.
 pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
     let data = match crate::storage::load_knowledge_only(h5_path) {
         Ok(d) => d,
@@ -186,20 +196,23 @@ pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -
     };
     let query_lower = query.to_lowercase();
 
+    let tokens: Vec<String> = query_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .map(|s| s.to_string())
+        .collect();
+
     // Use index for fast candidate selection
     let candidates: std::collections::HashSet<usize> = if !query.is_empty() {
         let index = build_knowledge_index(&data.knowledge);
-        let tokens: Vec<&str> = query_lower
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|s| s.len() > 2)
-            .collect();
         let mut hits = std::collections::HashSet::new();
         for token in &tokens {
-            if let Some(indices) = index.get(*token) {
+            if let Some(indices) = index.get(token.as_str()) {
                 hits.extend(indices);
             }
         }
-        // Also check substring for partial matches (fallback)
+        // Substring fallback: handles short queries (≤2 chars filtered out
+        // of tokens) and substrings inside compound identifiers.
         if hits.is_empty() {
             (0..data.knowledge.len()).collect()
         } else {
@@ -210,7 +223,8 @@ pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -
     };
 
     let links = data.links;
-    data.knowledge
+    let mut filtered: Vec<crate::types::KnowledgeEntry> = data
+        .knowledge
         .into_iter()
         .enumerate()
         .filter(|(i, _)| candidates.contains(i))
@@ -224,12 +238,50 @@ pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -
             if query.is_empty() {
                 return true;
             }
-            k.title.to_lowercase().contains(&query_lower)
-                || k.description.to_lowercase().contains(&query_lower)
-                || k.tags
-                    .iter()
-                    .any(|t| t.to_lowercase().contains(&query_lower))
+            let title_l = k.title.to_lowercase();
+            let desc_l = k.description.to_lowercase();
+            if tokens.is_empty() {
+                // Short query (≤2 chars): substring match on whole query
+                title_l.contains(&query_lower)
+                    || desc_l.contains(&query_lower)
+                    || k.tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
+            } else {
+                // Multi-token: match if ANY token appears in title/desc/tags
+                tokens.iter().any(|tok| {
+                    title_l.contains(tok)
+                        || desc_l.contains(tok)
+                        || k.tags.iter().any(|t| t.to_lowercase().contains(tok))
+                })
+            }
         })
+        .collect();
+
+    // Rank by token match count (title/tag weight 2, description weight 1)
+    if !tokens.is_empty() {
+        filtered.sort_by_cached_key(|k| {
+            let title_l = k.title.to_lowercase();
+            let desc_l = k.description.to_lowercase();
+            let tags_l: Vec<String> = k.tags.iter().map(|t| t.to_lowercase()).collect();
+            let mut score: i32 = 0;
+            for tok in &tokens {
+                if title_l.contains(tok) {
+                    score += 2;
+                }
+                if desc_l.contains(tok) {
+                    score += 1;
+                }
+                if tags_l.iter().any(|t| t.contains(tok)) {
+                    score += 2;
+                }
+            }
+            -score // ascending sort = highest score first
+        });
+    }
+
+    filtered
+        .into_iter()
         .map(|k| {
             let related: Vec<String> = links
                 .iter()
@@ -2522,6 +2574,62 @@ mod tests {
 
         let auth = query_knowledge(&h5, "auth", None);
         assert_eq!(auth.len(), 1);
+    }
+
+    #[test]
+    fn test_query_knowledge_multi_token() {
+        let dir = TempDir::new().unwrap();
+        let h5 = make_test_h5(dir.path());
+
+        learn(
+            &h5,
+            KnowledgeType::Architecture,
+            "PVA wire format encoding",
+            "How epics-pva-rs encodes the protocol buffer for pvxs interop.",
+            &[],
+            &[],
+        )
+        .unwrap();
+        learn(
+            &h5,
+            KnowledgeType::Pattern,
+            "Connection retry logic",
+            "Exponential backoff for reconnect after socket close.",
+            &[],
+            &[],
+        )
+        .unwrap();
+        learn(
+            &h5,
+            KnowledgeType::Decision,
+            "Use SQLite over HDF5",
+            "Switched storage backend for portability.",
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        // Multi-word natural-language query — must find the PVA item via title tokens
+        let r = query_knowledge(&h5, "pva wire format epics-pva-rs pvxs", None);
+        assert!(
+            r.iter().any(|k| k.title.contains("PVA wire format")),
+            "multi-token query should find PVA item, got {:?}",
+            r.iter().map(|k| &k.title).collect::<Vec<_>>()
+        );
+
+        // Description-only token must hit (was missing from the index)
+        let r = query_knowledge(&h5, "backoff", None);
+        assert_eq!(r.len(), 1);
+        assert!(r[0].title.contains("Connection retry"));
+
+        // Ranking: title hit should outrank description hit when both present
+        let r = query_knowledge(&h5, "pva backoff", None);
+        assert!(r.len() >= 2);
+        assert!(
+            r[0].title.contains("PVA"),
+            "title-token hit should rank first, got {:?}",
+            r.iter().map(|k| &k.title).collect::<Vec<_>>()
+        );
     }
 
     #[test]
