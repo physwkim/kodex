@@ -19,7 +19,7 @@ pub fn kodex_home() -> PathBuf {
 }
 
 /// The single global knowledge base.
-pub fn global_h5() -> PathBuf {
+pub fn global_db() -> PathBuf {
     kodex_home().join("kodex.db")
 }
 

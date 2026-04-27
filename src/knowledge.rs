@@ -3,7 +3,7 @@ use std::path::Path;
 /// Save an AI-discovered insight as a vault note.
 ///
 /// An insight connects multiple nodes with a named pattern or concept.
-/// Vault .md files are optional Obsidian views. HDF5 is the source of truth.
+/// Vault .md files are optional Obsidian views. SQLite is the source of truth.
 pub fn save_insight(
     _graph_path: &Path,
     vault_path: Option<&Path>,

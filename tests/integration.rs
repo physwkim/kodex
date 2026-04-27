@@ -354,7 +354,7 @@ fn test_cluster_and_analyze() {
 #[test]
 fn test_hdf5_round_trip() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5_path = dir.path().join("test.db");
+    let db_path = dir.path().join("test.db");
 
     let extraction = kodex::types::ExtractionResult {
         nodes: vec![
@@ -408,10 +408,10 @@ fn test_hdf5_round_trip() {
 
     let graph = kodex::graph::build_from_extraction(&extraction);
     let communities = kodex::cluster::cluster(&graph);
-    kodex::storage::save_hdf5(&graph, &communities, &h5_path).unwrap();
-    assert!(h5_path.exists());
+    kodex::storage::save_db(&graph, &communities, &db_path).unwrap();
+    assert!(db_path.exists());
 
-    let loaded = kodex::storage::load_hdf5(&h5_path).unwrap();
+    let loaded = kodex::storage::load_db(&db_path).unwrap();
     assert_eq!(loaded.node_count(), 2);
     assert_eq!(loaded.edge_count(), 1);
     assert_eq!(loaded.get_node("x").unwrap().label, "X");
@@ -441,16 +441,16 @@ fn test_vault_round_trip() {
 #[test]
 fn test_knowledge_learn_and_recall() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("test.db");
+    let db = dir.path().join("test.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Pattern,
         "Test Pattern",
         "A test pattern description",
@@ -459,16 +459,16 @@ fn test_knowledge_learn_and_recall() {
     )
     .unwrap();
 
-    let results = kodex::learn::query_knowledge(&h5, "test", None);
+    let results = kodex::learn::query_knowledge(&db, "test", None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].title, "Test Pattern");
 
-    let results = kodex::learn::query_knowledge(&h5, "test", None);
+    let results = kodex::learn::query_knowledge(&db, "test", None);
     let uuid = results[0].uuid.clone();
 
     // Reinforce using UUID
     kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         Some(&uuid),
         kodex::learn::KnowledgeType::Pattern,
         "Test Pattern",
@@ -479,7 +479,7 @@ fn test_knowledge_learn_and_recall() {
     )
     .unwrap();
 
-    let results = kodex::learn::query_knowledge(&h5, "test", None);
+    let results = kodex::learn::query_knowledge(&db, "test", None);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].observations, 2);
 }
@@ -487,16 +487,16 @@ fn test_knowledge_learn_and_recall() {
 #[test]
 fn test_forget_knowledge_and_logic() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("test.db");
+    let db = dir.path().join("test.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Pattern,
         "Foo Pattern",
         "desc",
@@ -505,7 +505,7 @@ fn test_forget_knowledge_and_logic() {
     )
     .unwrap();
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Decision,
         "Bar Decision",
         "desc",
@@ -514,7 +514,7 @@ fn test_forget_knowledge_and_logic() {
     )
     .unwrap();
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Pattern,
         "Baz Pattern",
         "desc",
@@ -525,52 +525,52 @@ fn test_forget_knowledge_and_logic() {
 
     // forget with title + type should AND: only "Foo Pattern" matches both
     let removed =
-        kodex::storage::forget_knowledge(&h5, Some("Foo"), Some("pattern"), None, None).unwrap();
+        kodex::storage::forget_knowledge(&db, Some("Foo"), Some("pattern"), None, None).unwrap();
     assert_eq!(
         removed, 1,
         "AND logic: only Foo Pattern matches title=Foo AND type=pattern"
     );
 
-    let remaining = kodex::learn::query_knowledge(&h5, "", None);
+    let remaining = kodex::learn::query_knowledge(&db, "", None);
     assert_eq!(remaining.len(), 2);
     assert!(remaining.iter().any(|k| k.title == "Bar Decision"));
     assert!(remaining.iter().any(|k| k.title == "Baz Pattern"));
 
     // forget with type only should match all remaining patterns
-    let removed = kodex::storage::forget_knowledge(&h5, None, Some("pattern"), None, None).unwrap();
+    let removed = kodex::storage::forget_knowledge(&db, None, Some("pattern"), None, None).unwrap();
     assert_eq!(removed, 1, "Baz Pattern should be removed");
 
-    let remaining = kodex::learn::query_knowledge(&h5, "", None);
+    let remaining = kodex::learn::query_knowledge(&db, "", None);
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].title, "Bar Decision");
 
     // forget with no criteria should remove nothing
-    let removed = kodex::storage::forget_knowledge(&h5, None, None, None, None).unwrap();
+    let removed = kodex::storage::forget_knowledge(&db, None, None, None, None).unwrap();
     assert_eq!(removed, 0, "No criteria = no deletion");
 }
 
 #[test]
 fn test_knowledge_context_index() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("test.db");
+    let db = dir.path().join("test.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Decision,
-        "Use HDF5",
+        "Use SQLite",
         "Fast storage",
         &[],
         &[],
     )
     .unwrap();
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Convention,
         "Error Handling",
         "Use Result",
@@ -579,9 +579,9 @@ fn test_knowledge_context_index() {
     )
     .unwrap();
 
-    let ctx = kodex::learn::knowledge_context(&h5, 10);
+    let ctx = kodex::learn::knowledge_context(&db, 10);
     assert!(ctx.contains("Knowledge:"));
-    assert!(ctx.contains("Use HDF5"));
+    assert!(ctx.contains("Use SQLite"));
     assert!(ctx.contains("Error Handling"));
 }
 
@@ -589,7 +589,7 @@ fn test_knowledge_context_index() {
 #[test]
 fn test_knowledge_graph_scenario() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("scenario.db");
+    let db = dir.path().join("scenario.db");
 
     // 1. Create graph with real nodes (simulating kodex run)
     let extraction = kodex::types::ExtractionResult {
@@ -647,11 +647,11 @@ fn test_knowledge_graph_scenario() {
         links: vec![],
         review_queue: vec![],
     };
-    kodex::storage::save(&h5, &data).unwrap();
+    kodex::storage::save(&db, &data).unwrap();
 
     // 2. Agent learns knowledge and links to code nodes
     let k1 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "Repository Pattern",
@@ -663,7 +663,7 @@ fn test_knowledge_graph_scenario() {
     .unwrap();
 
     let k2 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Decision,
         "JWT Auth",
@@ -675,7 +675,7 @@ fn test_knowledge_graph_scenario() {
     .unwrap();
 
     let k3 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Convention,
         "Always validate tokens",
@@ -687,16 +687,16 @@ fn test_knowledge_graph_scenario() {
     .unwrap();
 
     // 3. Link knowledge ↔ knowledge (beyond chain)
-    kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", true).unwrap();
+    kodex::learn::link_knowledge_to_knowledge(&db, &k1, &k2, "supports", true).unwrap();
 
     // 4. Verify thought chain
-    let chain = kodex::learn::thought_chain(&h5, &k2);
+    let chain = kodex::learn::thought_chain(&db, &k2);
     assert_eq!(chain.len(), 3, "Chain should have 3 steps");
     assert_eq!(chain[0].title, "Repository Pattern");
     assert_eq!(chain[2].title, "Always validate tokens");
 
     // 5. Verify related_nodes are node-only (not knowledge UUIDs)
-    let all = kodex::learn::query_knowledge(&h5, "", None);
+    let all = kodex::learn::query_knowledge(&db, "", None);
     for item in &all {
         for r in &item.related_nodes {
             assert!(
@@ -707,7 +707,7 @@ fn test_knowledge_graph_scenario() {
     }
 
     // 6. Task context — auth.py is being edited
-    let ctx = kodex::learn::get_task_context(&h5, "auth token", &["project/auth.py".into()], 10);
+    let ctx = kodex::learn::get_task_context(&db, "auth token", &["project/auth.py".into()], 10);
     assert!(
         ctx.contains("JWT Auth"),
         "Should surface JWT knowledge for auth file"
@@ -719,7 +719,7 @@ fn test_knowledge_graph_scenario() {
 
     // 7. recall_for_task — repo.py is being edited
     let results = kodex::learn::recall_for_task(
-        &h5,
+        &db,
         "data access",
         &["project/repo.py".into()],
         &["node-repo".into()],
@@ -732,7 +732,7 @@ fn test_knowledge_graph_scenario() {
     );
 
     // 8. Knowledge graph traversal
-    let graph_nodes = kodex::learn::traverse_knowledge_graph(&h5, Some(&k1), 2);
+    let graph_nodes = kodex::learn::traverse_knowledge_graph(&db, Some(&k1), 2);
     assert!(
         graph_nodes.len() >= 2,
         "Should reach k2 from k1 within 2 hops"
@@ -746,32 +746,32 @@ fn test_knowledge_graph_scenario() {
     assert_eq!(k1_node.node_links[0].target_title, "UserRepo");
 
     // 9. Staleness detection — all nodes exist, nothing stale
-    let stale = kodex::learn::detect_stale_knowledge(&h5).unwrap();
+    let stale = kodex::learn::detect_stale_knowledge(&db).unwrap();
     assert_eq!(stale, 0, "No stale knowledge when all nodes exist");
 
     // 10. Simulate node deletion (re-save without auth node)
-    let mut data2 = kodex::storage::load(&h5).unwrap();
+    let mut data2 = kodex::storage::load(&db).unwrap();
     data2
         .extraction
         .nodes
         .retain(|n| n.uuid.as_deref() != Some("node-auth"));
-    kodex::storage::save(&h5, &data2).unwrap();
+    kodex::storage::save(&db, &data2).unwrap();
 
     // k2 and k3 linked to node-auth should now be stale
-    let stale = kodex::learn::detect_stale_knowledge(&h5).unwrap();
+    let stale = kodex::learn::detect_stale_knowledge(&db).unwrap();
     assert!(
         stale >= 1,
         "Should detect stale knowledge after node deletion"
     );
 
     // k1 linked to node-repo should NOT be stale
-    let k1_entry = kodex::learn::query_knowledge(&h5, "Repository Pattern", None);
+    let k1_entry = kodex::learn::query_knowledge(&db, "Repository Pattern", None);
     assert!(!k1_entry.is_empty());
     // k1 should still be queryable and active (not needs_review)
 
     // 11. update_knowledge — mark k3 as validated
     kodex::learn::update_knowledge(
-        &h5,
+        &db,
         &k3,
         &kodex::learn::KnowledgeUpdates {
             status: Some("active".into()),
@@ -782,22 +782,22 @@ fn test_knowledge_graph_scenario() {
     )
     .unwrap();
 
-    let data3 = kodex::storage::load(&h5).unwrap();
+    let data3 = kodex::storage::load(&db).unwrap();
     let k3_entry = data3.knowledge.iter().find(|k| k.uuid == k3).unwrap();
     assert_eq!(k3_entry.status, "active");
     assert_eq!(k3_entry.applies_when, "any endpoint modification");
     assert!(k3_entry.last_validated_at > 0);
 
     // 12. Selective link removal
-    kodex::learn::remove_link(&h5, &k1, &k2, Some("supports")).unwrap();
-    let neighbors = kodex::learn::knowledge_neighbors(&h5, &k1);
+    kodex::learn::remove_link(&db, &k1, &k2, Some("supports")).unwrap();
+    let neighbors = kodex::learn::knowledge_neighbors(&db, &k1);
     let support_links: Vec<_> = neighbors
         .iter()
         .filter(|(_, r, _)| r == "supports")
         .collect();
     assert!(support_links.is_empty(), "supports link should be removed");
     // leads_to chain should still exist
-    let chain_after = kodex::learn::thought_chain(&h5, &k1);
+    let chain_after = kodex::learn::thought_chain(&db, &k1);
     assert!(
         chain_after.len() >= 2,
         "Chain should survive supports link removal"
@@ -816,7 +816,7 @@ fn test_knowledge_graph_scenario() {
 #[test]
 fn test_rename_preserves_knowledge_links() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("rename.db");
+    let db = dir.path().join("rename.db");
 
     // Session 1: create graph with authenticate()
     let mut extraction = kodex::types::ExtractionResult::default();
@@ -836,15 +836,15 @@ fn test_rename_preserves_knowledge_links() {
         logical_key: None,
         body_hash: Some("abcd1234abcd1234".into()),
     });
-    kodex::storage::merge_project(&h5, "project", &extraction).unwrap();
+    kodex::storage::merge_project(&db, "project", &extraction).unwrap();
 
     // Get the assigned UUID
-    let data1 = kodex::storage::load(&h5).unwrap();
+    let data1 = kodex::storage::load(&db).unwrap();
     let node_uuid = data1.extraction.nodes[0].uuid.clone().unwrap();
 
     // Learn knowledge linked to this node
     kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "JWT Auth Pattern",
@@ -873,10 +873,10 @@ fn test_rename_preserves_knowledge_links() {
         logical_key: None,
         body_hash: Some("abcd1234abcd1234".into()), // same body
     });
-    kodex::storage::merge_project(&h5, "project", &extraction2).unwrap();
+    kodex::storage::merge_project(&db, "project", &extraction2).unwrap();
 
     // Verify UUID was preserved through rename
-    let data2 = kodex::storage::load(&h5).unwrap();
+    let data2 = kodex::storage::load(&db).unwrap();
     let new_node_uuid = data2
         .extraction
         .nodes
@@ -889,7 +889,7 @@ fn test_rename_preserves_knowledge_links() {
     assert_eq!(new_node_uuid, node_uuid, "Rename should preserve UUID");
 
     // Knowledge link should still work
-    let knowledge = kodex::learn::query_knowledge(&h5, "JWT", None);
+    let knowledge = kodex::learn::query_knowledge(&db, "JWT", None);
     assert_eq!(knowledge.len(), 1);
     assert!(
         knowledge[0].related_nodes.contains(&node_uuid),
@@ -897,7 +897,7 @@ fn test_rename_preserves_knowledge_links() {
     );
 
     // No staleness — node exists with same UUID
-    let stale = kodex::learn::detect_stale_knowledge(&h5).unwrap();
+    let stale = kodex::learn::detect_stale_knowledge(&db).unwrap();
     assert_eq!(stale, 0, "Renamed node should not trigger staleness");
 }
 
@@ -965,17 +965,17 @@ fn test_sqlite_preserves_defaults() {
 #[test]
 fn test_duplicate_merge_preserves_links() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("dedup.db");
+    let db = dir.path().join("dedup.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     // Create two similar knowledge entries
     let k1 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "Repository Pattern",
@@ -986,7 +986,7 @@ fn test_duplicate_merge_preserves_links() {
     )
     .unwrap();
     let k2 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "Repository Pattern Design",
@@ -998,14 +998,14 @@ fn test_duplicate_merge_preserves_links() {
     .unwrap();
 
     // Should detect as duplicate
-    let dupes = kodex::learn::find_duplicates(&h5, 0.4);
+    let dupes = kodex::learn::find_duplicates(&db, 0.4);
     assert!(!dupes.is_empty(), "Should detect similar entries");
 
     // Merge k2 into k1
-    kodex::learn::merge_knowledge(&h5, &k1, &k2).unwrap();
+    kodex::learn::merge_knowledge(&db, &k1, &k2).unwrap();
 
     // Verify k1 absorbed k2's data
-    let data = kodex::storage::load(&h5).unwrap();
+    let data = kodex::storage::load(&db).unwrap();
     let kept = data.knowledge.iter().find(|k| k.uuid == k1).unwrap();
     assert!(kept.observations >= 2, "Should absorb observations");
     assert!(
@@ -1040,7 +1040,7 @@ fn test_duplicate_merge_preserves_links() {
 #[test]
 fn test_multi_project_recall() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("multi.db");
+    let db = dir.path().join("multi.db");
 
     // Project A
     let mut ext_a = kodex::types::ExtractionResult::default();
@@ -1060,14 +1060,14 @@ fn test_multi_project_recall() {
         logical_key: None,
         body_hash: Some("aaaa".into()),
     });
-    kodex::storage::merge_project(&h5, "project-a", &ext_a).unwrap();
+    kodex::storage::merge_project(&db, "project-a", &ext_a).unwrap();
 
-    let data_a = kodex::storage::load(&h5).unwrap();
+    let data_a = kodex::storage::load(&db).unwrap();
     let uuid_a = data_a.extraction.nodes[0].uuid.clone().unwrap();
 
     // Learn knowledge for project A
     kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "Auth Pattern A",
@@ -1096,9 +1096,9 @@ fn test_multi_project_recall() {
         logical_key: None,
         body_hash: Some("bbbb".into()),
     });
-    kodex::storage::merge_project(&h5, "project-b", &ext_b).unwrap();
+    kodex::storage::merge_project(&db, "project-b", &ext_b).unwrap();
 
-    let data_b = kodex::storage::load(&h5).unwrap();
+    let data_b = kodex::storage::load(&db).unwrap();
     let uuid_b = data_b
         .extraction
         .nodes
@@ -1110,7 +1110,7 @@ fn test_multi_project_recall() {
         .unwrap();
 
     kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Convention,
         "Payment Validation",
@@ -1122,13 +1122,13 @@ fn test_multi_project_recall() {
     .unwrap();
 
     // Both projects coexist
-    let data = kodex::storage::load(&h5).unwrap();
+    let data = kodex::storage::load(&db).unwrap();
     assert_eq!(data.extraction.nodes.len(), 2);
     assert_eq!(data.knowledge.len(), 2);
 
     // Recall for auth.py should prioritize Auth Pattern
     let results =
-        kodex::learn::recall_for_task(&h5, "auth", &["project-a/auth.py".into()], &[uuid_a], 5);
+        kodex::learn::recall_for_task(&db, "auth", &["project-a/auth.py".into()], &[uuid_a], 5);
     assert!(!results.is_empty());
     assert_eq!(
         results[0].title, "Auth Pattern A",
@@ -1137,7 +1137,7 @@ fn test_multi_project_recall() {
 
     // Recall for payment.py should prioritize Payment Validation
     let results = kodex::learn::recall_for_task(
-        &h5,
+        &db,
         "payment",
         &["project-b/payment.py".into()],
         &[uuid_b],
@@ -1154,17 +1154,17 @@ fn test_multi_project_recall() {
 #[test]
 fn test_merge_preserves_knowledge_links() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("merge_kk.db");
+    let db = dir.path().join("merge_kk.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     // K1 depends_on K2. K3 supports K2. Then merge K2 into K1.
     let k1 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "Auth Pattern",
@@ -1175,7 +1175,7 @@ fn test_merge_preserves_knowledge_links() {
     )
     .unwrap();
     let k2 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Decision,
         "JWT Decision",
@@ -1186,7 +1186,7 @@ fn test_merge_preserves_knowledge_links() {
     )
     .unwrap();
     let k3 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Convention,
         "Token Convention",
@@ -1198,14 +1198,14 @@ fn test_merge_preserves_knowledge_links() {
     .unwrap();
 
     // K1 depends_on K2
-    kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "depends_on", false).unwrap();
+    kodex::learn::link_knowledge_to_knowledge(&db, &k1, &k2, "depends_on", false).unwrap();
     // K3 supports K2 (incoming link to K2)
-    kodex::learn::link_knowledge_to_knowledge(&h5, &k3, &k2, "supports", false).unwrap();
+    kodex::learn::link_knowledge_to_knowledge(&db, &k3, &k2, "supports", false).unwrap();
 
     // Merge K2 into K1
-    kodex::learn::merge_knowledge(&h5, &k1, &k2).unwrap();
+    kodex::learn::merge_knowledge(&db, &k1, &k2).unwrap();
 
-    let data = kodex::storage::load(&h5).unwrap();
+    let data = kodex::storage::load(&db).unwrap();
 
     // K3's "supports" link should now point to K1 (not K2)
     let k3_supports: Vec<_> = data
@@ -1237,16 +1237,16 @@ fn test_merge_preserves_knowledge_links() {
 #[test]
 fn test_update_knowledge_timestamps() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("ts.db");
+    let db = dir.path().join("ts.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     let k = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "Test",
@@ -1257,14 +1257,14 @@ fn test_update_knowledge_timestamps() {
     )
     .unwrap();
 
-    let data1 = kodex::storage::load(&h5).unwrap();
+    let data1 = kodex::storage::load(&db).unwrap();
     let entry1 = data1.knowledge.iter().find(|e| e.uuid == k).unwrap();
     assert!(entry1.created_at > 0, "created_at should be set");
     let created = entry1.created_at;
 
     // Update
     kodex::learn::update_knowledge(
-        &h5,
+        &db,
         &k,
         &kodex::learn::KnowledgeUpdates {
             scope: Some("module".into()),
@@ -1273,7 +1273,7 @@ fn test_update_knowledge_timestamps() {
     )
     .unwrap();
 
-    let data2 = kodex::storage::load(&h5).unwrap();
+    let data2 = kodex::storage::load(&db).unwrap();
     let entry2 = data2.knowledge.iter().find(|e| e.uuid == k).unwrap();
     assert_eq!(entry2.created_at, created, "created_at should not change");
     assert!(
@@ -1287,7 +1287,7 @@ fn test_update_knowledge_timestamps() {
 #[test]
 fn test_reasoning_affects_ranking() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("reason.db");
+    let db = dir.path().join("reason.db");
 
     // Create a graph with one node
     let mut ext = kodex::types::ExtractionResult::default();
@@ -1313,11 +1313,11 @@ fn test_reasoning_affects_ranking() {
         links: vec![],
         review_queue: vec![],
     };
-    kodex::storage::save(&h5, &data).unwrap();
+    kodex::storage::save(&db, &data).unwrap();
 
     // K1: directly linked to node-auth (high base relevance)
     let k1 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "JWT Auth",
@@ -1330,7 +1330,7 @@ fn test_reasoning_affects_ranking() {
 
     // K2: NOT linked to any node (low base relevance)
     let k2 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Decision,
         "Session Config",
@@ -1342,11 +1342,11 @@ fn test_reasoning_affects_ranking() {
     .unwrap();
 
     // K1 supports K2 — reasoning should boost K2
-    kodex::learn::link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", false).unwrap();
+    kodex::learn::link_knowledge_to_knowledge(&db, &k1, &k2, "supports", false).unwrap();
 
     // Recall with node-auth context — K1 scores high, K2 gets reasoning boost
     let results = kodex::learn::recall_for_task_structured(
-        &h5,
+        &db,
         "",
         &["project/auth.py".into()],
         &["node-auth".into()],
@@ -1372,17 +1372,17 @@ fn test_reasoning_affects_ranking() {
 #[test]
 fn test_task_type_recommendations() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("recs.db");
+    let db = dir.path().join("recs.db");
     {
         let e = kodex::types::ExtractionResult::default();
         let g = kodex::graph::build_from_extraction(&e);
         let c = kodex::cluster::cluster(&g);
-        kodex::storage::save_hdf5(&g, &c, &h5).unwrap();
+        kodex::storage::save_db(&g, &c, &db).unwrap();
     }
 
     // Create a bug_pattern knowledge
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::BugPattern,
         "Off-by-one in pagination",
         "Page count wrong by 1",
@@ -1393,7 +1393,7 @@ fn test_task_type_recommendations() {
 
     // Create a convention knowledge
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::Convention,
         "Always validate input",
         "All endpoints must validate",
@@ -1404,7 +1404,7 @@ fn test_task_type_recommendations() {
 
     // Create a tech_debt knowledge
     kodex::learn::learn(
-        &h5,
+        &db,
         kodex::learn::KnowledgeType::TechDebt,
         "Legacy auth module",
         "Needs rewrite",
@@ -1414,7 +1414,7 @@ fn test_task_type_recommendations() {
     .unwrap();
 
     // bugfix context: should recommend test for bug_pattern
-    let bugfix_ctx = kodex::learn::get_task_context_json(&h5, "pagination", &[], 10, "bugfix");
+    let bugfix_ctx = kodex::learn::get_task_context_json(&db, "pagination", &[], 10, "bugfix");
     let has_test_rec = bugfix_ctx
         .recommendations
         .iter()
@@ -1430,7 +1430,7 @@ fn test_task_type_recommendations() {
     );
 
     // refactor context: should recommend opportunity for tech_debt
-    let refactor_ctx = kodex::learn::get_task_context_json(&h5, "auth", &[], 10, "refactor");
+    let refactor_ctx = kodex::learn::get_task_context_json(&db, "auth", &[], 10, "refactor");
     let has_opportunity = refactor_ctx
         .recommendations
         .iter()
@@ -1446,7 +1446,7 @@ fn test_task_type_recommendations() {
     );
 
     // coding context: should NOT produce test or opportunity recs for these types
-    let coding_ctx = kodex::learn::get_task_context_json(&h5, "pagination", &[], 10, "coding");
+    let coding_ctx = kodex::learn::get_task_context_json(&db, "pagination", &[], 10, "coding");
     let has_test_in_coding = coding_ctx
         .recommendations
         .iter()
@@ -1461,7 +1461,7 @@ fn test_task_type_recommendations() {
 #[test]
 fn test_recall_for_diff_boost() {
     let dir = tempfile::TempDir::new().unwrap();
-    let h5 = dir.path().join("diff_recall.db");
+    let db = dir.path().join("diff_recall.db");
 
     // Create graph with two nodes in different files
     let mut ext = kodex::types::ExtractionResult::default();
@@ -1503,11 +1503,11 @@ fn test_recall_for_diff_boost() {
         links: vec![],
         review_queue: vec![],
     };
-    kodex::storage::save(&h5, &data).unwrap();
+    kodex::storage::save(&db, &data).unwrap();
 
     // K1: linked to auth node
     let k1 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Pattern,
         "JWT Auth Pattern",
@@ -1520,7 +1520,7 @@ fn test_recall_for_diff_boost() {
 
     // K2: linked to payment node
     let _k2 = kodex::learn::learn_with_uuid(
-        &h5,
+        &db,
         None,
         kodex::learn::KnowledgeType::Convention,
         "Payment Validation",
@@ -1540,7 +1540,7 @@ fn test_recall_for_diff_boost() {
 +    check_expiry()
 "#;
 
-    let (analysis, results) = kodex::learn::recall_for_diff(&h5, diff, 10);
+    let (analysis, results) = kodex::learn::recall_for_diff(&db, diff, 10);
 
     // Analysis should find auth.py changed
     assert!(

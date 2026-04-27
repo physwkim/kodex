@@ -130,10 +130,15 @@ enum Commands {
     },
     /// Run actor daemon (internal, started by serve)
     Actor,
+    /// Print knowledge context summary (for SessionStart hooks)
+    Context {
+        #[arg(long, default_value_t = 20)]
+        max_items: usize,
+    },
 }
 
-fn resolve_h5(graph: &Option<PathBuf>) -> PathBuf {
-    graph.clone().unwrap_or_else(kodex::registry::global_h5)
+fn resolve_db(graph: &Option<PathBuf>) -> PathBuf {
+    graph.clone().unwrap_or_else(kodex::registry::global_db)
 }
 
 fn main() {
@@ -147,14 +152,14 @@ fn main() {
             budget,
             graph,
         }) => {
-            commands::query::query(&question, dfs, budget, &resolve_h5(&graph));
+            commands::query::query(&question, dfs, budget, &resolve_db(&graph));
         }
         Some(Commands::Path {
             source,
             target,
             graph,
-        }) => commands::path(&source, &target, &resolve_h5(&graph)),
-        Some(Commands::Explain { node, graph }) => commands::explain(&node, &resolve_h5(&graph)),
+        }) => commands::path(&source, &target, &resolve_db(&graph)),
+        Some(Commands::Explain { node, graph }) => commands::explain(&node, &resolve_db(&graph)),
         Some(Commands::Watch {
             path,
             debounce,
@@ -164,7 +169,7 @@ fn main() {
                 eprintln!("Watch error: {e}");
             }
         }
-        Some(Commands::Benchmark { graph }) => commands::benchmark(&resolve_h5(&graph)),
+        Some(Commands::Benchmark { graph }) => commands::benchmark(&resolve_db(&graph)),
         Some(Commands::Hook { action }) => {
             let path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let result = match action.as_str() {
@@ -192,7 +197,7 @@ fn main() {
         Some(Commands::Workspace { action, vault }) => {
             commands::workspace::workspace(&action, vault.as_deref());
         }
-        Some(Commands::Serve { graph }) => commands::serve::serve(&resolve_h5(&graph)),
+        Some(Commands::Serve { graph }) => commands::serve::serve(&resolve_db(&graph)),
         Some(Commands::List) => {
             let entries = kodex::registry::list();
             if entries.is_empty() {
@@ -202,7 +207,7 @@ fn main() {
                 for (key, entry) in &entries {
                     println!("  {key}: {}", entry.path.display());
                 }
-                println!("\nKnowledge: {}", kodex::registry::global_h5().display());
+                println!("\nKnowledge: {}", kodex::registry::global_db().display());
             }
         }
         Some(Commands::Forget {
@@ -211,9 +216,9 @@ fn main() {
             project,
             below,
         }) => {
-            let h5 = kodex::registry::global_h5();
+            let db = kodex::registry::global_db();
             match kodex::storage::forget_knowledge(
-                &h5,
+                &db,
                 title.as_deref(),
                 ktype.as_deref(),
                 project.as_deref(),
@@ -225,42 +230,46 @@ fn main() {
             }
         }
         Some(Commands::Import) => {
-            let h5 = kodex::registry::global_h5();
-            if !h5.exists() {
+            let db = kodex::registry::global_db();
+            if !db.exists() {
                 eprintln!("No kodex.db found. Run `kodex run` first.");
                 return;
             }
-            match kodex::import::import_claude_memories(&h5) {
+            match kodex::import::import_claude_memories(&db) {
                 Ok(0) => println!("No memories found to import."),
                 Ok(n) => println!("Imported {n} memories from ~/.claude/"),
                 Err(e) => eprintln!("Import error: {e}"),
             }
         }
         Some(Commands::Export) => {
-            let h5 = kodex::registry::global_h5();
-            if !h5.exists() {
+            let db = kodex::registry::global_db();
+            if !db.exists() {
                 eprintln!("No kodex.db found. Run `kodex run` first.");
                 return;
             }
-            match kodex::import::export_to_claude_memories(&h5) {
+            match kodex::import::export_to_claude_memories(&db) {
                 Ok(0) => println!("No new knowledge to export."),
                 Ok(n) => println!("Exported {n} entries to ~/.claude/memory/"),
                 Err(e) => eprintln!("Export error: {e}"),
             }
         }
         Some(Commands::Ingest { path, max_commits }) => {
-            let h5 = kodex::registry::global_h5();
-            if !h5.exists() {
+            let db = kodex::registry::global_db();
+            if !db.exists() {
                 eprintln!("No kodex.db found. Run `kodex run` first.");
                 return;
             }
-            match kodex::ingest_knowledge::ingest_project(&h5, &path, max_commits) {
+            match kodex::ingest_knowledge::ingest_project(&db, &path, max_commits) {
                 Ok(0) => println!("No new knowledge to ingest."),
                 Ok(n) => println!("Ingested {n} knowledge entries from git/README"),
                 Err(e) => eprintln!("Ingest error: {e}"),
             }
         }
         Some(Commands::Actor) => kodex::actor::run_actor(),
+        Some(Commands::Context { max_items }) => {
+            let db = kodex::registry::global_db();
+            print!("{}", kodex::learn::knowledge_context(&db, max_items));
+        }
         None => {
             if let Some(path) = cli.path {
                 commands::run::run_pipeline(&path);

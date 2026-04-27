@@ -158,8 +158,8 @@ pub fn update(path: &Path) {
             }
         }
 
-        let h5 = kodex::registry::global_h5();
-        match kodex::storage::merge_project(&h5, project_name, &extraction) {
+        let db = kodex::registry::global_db();
+        match kodex::storage::merge_project(&db, project_name, &extraction) {
             Ok(()) => println!(
                 "  merged: {} nodes, {} edges",
                 extraction.nodes.len(),
@@ -174,8 +174,8 @@ pub fn update(path: &Path) {
 }
 
 pub fn cluster_only(_path: &Path) {
-    let h5 = kodex::registry::global_h5();
-    let graph = match load_graph(&h5) {
+    let db = kodex::registry::global_db();
+    let graph = match load_graph(&db) {
         Some(g) => g,
         None => return,
     };
@@ -192,11 +192,11 @@ pub fn cluster_only(_path: &Path) {
     }
 
     // Load full data to preserve knowledge + links, only re-cluster
-    match kodex::storage::load(&h5) {
+    match kodex::storage::load(&db) {
         Ok(data) => {
             // Re-cluster only changes community assignments, not knowledge/links
-            match kodex::storage::save(&h5, &data) {
-                Ok(()) => println!("  saved to {}", h5.display()),
+            match kodex::storage::save(&db, &data) {
+                Ok(()) => println!("  saved to {}", db.display()),
                 Err(e) => eprintln!("  save error: {e}"),
             }
         }

@@ -77,12 +77,12 @@ pub struct Knowledge {
 // Knowledge store — reads/writes vault .md files
 // ---------------------------------------------------------------------------
 
-/// Store or reinforce a piece of knowledge directly in HDF5.
+/// Store or reinforce a piece of knowledge directly in SQLite.
 ///
-/// HDF5 is the source of truth. If knowledge with the same title exists,
+/// SQLite is the source of truth. If knowledge with the same title exists,
 /// increments observations and raises confidence.
 pub fn learn(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_type: KnowledgeType,
     title: &str,
     description: &str,
@@ -95,7 +95,7 @@ pub fn learn(
         Some(related_nodes)
     };
     learn_with_uuid(
-        h5_path,
+        db_path,
         None,
         knowledge_type,
         title,
@@ -120,7 +120,7 @@ pub fn learn(
 /// from the context knowledge to this one (chain of thought).
 #[allow(clippy::too_many_arguments)]
 pub fn learn_with_uuid(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: Option<&str>,
     knowledge_type: KnowledgeType,
     title: &str,
@@ -130,7 +130,7 @@ pub fn learn_with_uuid(
     context_uuid: Option<&str>,
 ) -> crate::error::Result<String> {
     let new_uuid = crate::storage::append_knowledge_with_uuid(
-        h5_path,
+        db_path,
         knowledge_uuid,
         title,
         &knowledge_type.to_string(),
@@ -143,7 +143,7 @@ pub fn learn_with_uuid(
     // Auto-link chain of thought: context → this
     if let Some(ctx) = context_uuid {
         if ctx != new_uuid {
-            let _ = link_knowledge_to_knowledge(h5_path, ctx, &new_uuid, "leads_to", false);
+            let _ = link_knowledge_to_knowledge(db_path, ctx, &new_uuid, "leads_to", false);
         }
     }
 
@@ -189,8 +189,8 @@ fn build_knowledge_index(
 /// Multi-token queries match if ANY token appears in title/description/tags
 /// (OR semantics). Results are scored and returned highest-relevance first:
 /// title and tag hits weight 2, description hits weight 1.
-pub fn query_knowledge(h5_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
-    let data = match crate::storage::load_knowledge_only(h5_path) {
+pub fn query_knowledge(db_path: &Path, query: &str, type_filter: Option<&str>) -> Vec<Knowledge> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -325,12 +325,12 @@ fn parse_knowledge_type(s: &str) -> KnowledgeType {
     }
 }
 
-/// Get a knowledge context summary from HDF5 for Claude.
+/// Get a knowledge context summary from SQLite for Claude.
 /// Compact knowledge summary for session start.
 /// Shows stats + high-confidence + recent. NOT a full dump.
 /// Use `recall_for_task` for task-specific retrieval.
-pub fn knowledge_context(h5_path: &Path, max_items: usize) -> String {
-    let data = match crate::storage::load(h5_path) {
+pub fn knowledge_context(db_path: &Path, max_items: usize) -> String {
+    let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => return "No knowledge base found. Run `kodex run` first.\n".to_string(),
     };
@@ -434,14 +434,14 @@ pub struct StaleInfo {
 /// - No validation for a long time → age decay
 ///
 /// Returns list of stale entries with details.
-pub fn detect_stale_knowledge(h5_path: &Path) -> crate::error::Result<usize> {
-    let results = detect_stale_detailed(h5_path)?;
+pub fn detect_stale_knowledge(db_path: &Path) -> crate::error::Result<usize> {
+    let results = detect_stale_detailed(db_path)?;
     Ok(results.len())
 }
 
 /// Detailed staleness detection with graduated scoring.
-pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleInfo>> {
-    let mut data = crate::storage::load(h5_path)?;
+pub fn detect_stale_detailed(db_path: &Path) -> crate::error::Result<Vec<StaleInfo>> {
+    let mut data = crate::storage::load(db_path)?;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -573,7 +573,7 @@ pub fn detect_stale_detailed(h5_path: &Path) -> crate::error::Result<Vec<StaleIn
         // Clean fully dead node links (keep partial + knowledge links)
         data.links
             .retain(|l| l.is_knowledge_link() || valid_node_uuids.contains(l.node_uuid.as_str()));
-        crate::storage::save_knowledge_only(h5_path, &data)?;
+        crate::storage::save_knowledge_only(db_path, &data)?;
     }
 
     Ok(stale_entries)
@@ -809,13 +809,13 @@ pub struct RecallResult {
 
 /// Recall knowledge ranked by relevance, with score breakdown and diversity.
 pub fn recall_for_task_structured(
-    h5_path: &Path,
+    db_path: &Path,
     question: &str,
     touched_files: &[String],
     node_uuids: &[String],
     max_items: usize,
 ) -> Vec<RecallResult> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -919,13 +919,13 @@ pub fn recall_for_task_structured(
 
 /// Recall knowledge ranked by relevance (simple Knowledge vec).
 pub fn recall_for_task(
-    h5_path: &Path,
+    db_path: &Path,
     question: &str,
     touched_files: &[String],
     node_uuids: &[String],
     max_items: usize,
 ) -> Vec<Knowledge> {
-    recall_for_task_structured(h5_path, question, touched_files, node_uuids, max_items)
+    recall_for_task_structured(db_path, question, touched_files, node_uuids, max_items)
         .into_iter()
         .map(|r| r.knowledge)
         .collect()
@@ -951,13 +951,13 @@ pub struct TaskWarning {
 
 /// Get structured task context (JSON-friendly).
 pub fn get_task_context_json(
-    h5_path: &Path,
+    db_path: &Path,
     question: &str,
     touched_files: &[String],
     max_items: usize,
     task_type: &str,
 ) -> TaskContext {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => {
             return TaskContext {
@@ -983,7 +983,7 @@ pub fn get_task_context_json(
         .collect();
 
     let relevant = recall_for_task_structured(
-        h5_path,
+        db_path,
         question,
         touched_files,
         &file_node_uuids,
@@ -1018,7 +1018,7 @@ pub fn get_task_context_json(
         .collect();
 
     // Conflicts
-    let all_conflicts = detect_conflicts(h5_path);
+    let all_conflicts = detect_conflicts(db_path);
     let conflicts: Vec<KnowledgeConflict> = all_conflicts
         .into_iter()
         .filter(|c| {
@@ -1046,23 +1046,23 @@ pub fn get_task_context_json(
 /// Build a task-specific briefing for the agent (markdown string).
 /// Delegates to get_task_context_json and renders to markdown.
 pub fn get_task_context(
-    h5_path: &Path,
+    db_path: &Path,
     question: &str,
     touched_files: &[String],
     max_items: usize,
 ) -> String {
-    get_task_context_md(h5_path, question, touched_files, max_items, "coding")
+    get_task_context_md(db_path, question, touched_files, max_items, "coding")
 }
 
 /// Markdown briefing with task_type support.
 pub fn get_task_context_md(
-    h5_path: &Path,
+    db_path: &Path,
     question: &str,
     touched_files: &[String],
     max_items: usize,
     task_type: &str,
 ) -> String {
-    let tc = get_task_context_json(h5_path, question, touched_files, max_items, task_type);
+    let tc = get_task_context_json(db_path, question, touched_files, max_items, task_type);
 
     if tc.relevant.is_empty() {
         return "No relevant knowledge found for this task.".to_string();
@@ -1139,11 +1139,11 @@ pub fn get_task_context_md(
 
 /// Update specific fields on an existing knowledge entry (by UUID).
 pub fn update_knowledge(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: &str,
     updates: &KnowledgeUpdates,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load_knowledge_only(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(db_path)?;
 
     let entry = data
         .knowledge
@@ -1184,7 +1184,7 @@ pub fn update_knowledge(
         entry.updated_at = now;
     }
 
-    crate::storage::save_knowledge_only(h5_path, &data)
+    crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Partial update fields for update_knowledge.
@@ -1199,11 +1199,11 @@ pub struct KnowledgeUpdates {
 
 /// Validate a knowledge entry — mark as still accurate.
 pub fn validate_knowledge(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: &str,
     note: Option<&str>,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load_knowledge_only(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(db_path)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1246,17 +1246,17 @@ pub fn validate_knowledge(
         }
     }
 
-    crate::storage::save_knowledge_only(h5_path, &data)
+    crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Mark knowledge as obsolete with a reason.
 pub fn mark_obsolete(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: &str,
     reason: &str,
 ) -> crate::error::Result<()> {
     update_knowledge(
-        h5_path,
+        db_path,
         knowledge_uuid,
         &KnowledgeUpdates {
             status: Some("obsolete".into()),
@@ -1265,7 +1265,7 @@ pub fn mark_obsolete(
     )?;
     // Append reason to evidence
     if !reason.is_empty() {
-        let mut data = crate::storage::load_knowledge_only(h5_path)?;
+        let mut data = crate::storage::load_knowledge_only(db_path)?;
         if let Some(entry) = data.knowledge.iter_mut().find(|k| k.uuid == knowledge_uuid) {
             entry.evidence = format!("{}\n[obsolete] {reason}", entry.evidence);
             entry.updated_at = std::time::SystemTime::now()
@@ -1273,19 +1273,19 @@ pub fn mark_obsolete(
                 .unwrap_or_default()
                 .as_secs();
         }
-        crate::storage::save_knowledge_only(h5_path, &data)?;
+        crate::storage::save_knowledge_only(db_path, &data)?;
     }
     Ok(())
 }
 
 /// Link knowledge to specific nodes (additive — doesn't remove existing links).
 pub fn link_knowledge_to_nodes(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: &str,
     node_uuids: &[String],
     relation: &str,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load_knowledge_only(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(db_path)?;
 
     // Verify knowledge exists
     if !data.knowledge.iter().any(|k| k.uuid == knowledge_uuid) {
@@ -1324,17 +1324,17 @@ pub fn link_knowledge_to_nodes(
         }
     }
 
-    crate::storage::save_knowledge_only(h5_path, &data)
+    crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Clear all links for a given knowledge entry.
-pub fn clear_knowledge_links(h5_path: &Path, knowledge_uuid: &str) -> crate::error::Result<usize> {
-    let mut data = crate::storage::load(h5_path)?;
+pub fn clear_knowledge_links(db_path: &Path, knowledge_uuid: &str) -> crate::error::Result<usize> {
+    let mut data = crate::storage::load(db_path)?;
     let before = data.links.len();
     data.links.retain(|l| l.knowledge_uuid != knowledge_uuid);
     let removed = before - data.links.len();
     if removed > 0 {
-        crate::storage::save_knowledge_only(h5_path, &data)?;
+        crate::storage::save_knowledge_only(db_path, &data)?;
     }
     Ok(removed)
 }
@@ -1356,8 +1356,8 @@ pub struct DuplicateCandidate {
 
 /// Find knowledge entries that are likely duplicates.
 /// Uses title similarity + description overlap + same type.
-pub fn find_duplicates(h5_path: &Path, threshold: f64) -> Vec<DuplicateCandidate> {
-    let data = match crate::storage::load_knowledge_only(h5_path) {
+pub fn find_duplicates(db_path: &Path, threshold: f64) -> Vec<DuplicateCandidate> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -1483,11 +1483,11 @@ fn knowledge_similarity(a: &crate::types::KnowledgeEntry, b: &crate::types::Know
 /// Merge two knowledge entries: keep the higher-confidence one, absorb the other.
 /// The absorbed entry is marked obsolete and superseded.
 pub fn merge_knowledge(
-    h5_path: &Path,
+    db_path: &Path,
     uuid_keep: &str,
     uuid_absorb: &str,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load_knowledge_only(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(db_path)?;
 
     let keep_idx = data
         .knowledge
@@ -1607,17 +1607,17 @@ pub fn merge_knowledge(
         });
     }
 
-    crate::storage::save_knowledge_only(h5_path, &data)
+    crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Remove a specific link by knowledge_uuid + target_uuid + relation.
 pub fn remove_link(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: &str,
     target_uuid: &str,
     relation: Option<&str>,
 ) -> crate::error::Result<bool> {
-    let mut data = crate::storage::load_knowledge_only(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(db_path)?;
     let before = data.links.len();
     data.links.retain(|l| {
         !(l.knowledge_uuid == knowledge_uuid
@@ -1626,20 +1626,20 @@ pub fn remove_link(
     });
     let removed = before != data.links.len();
     if removed {
-        crate::storage::save_knowledge_only(h5_path, &data)?;
+        crate::storage::save_knowledge_only(db_path, &data)?;
     }
     Ok(removed)
 }
 
 /// Link two knowledge entries together (knowledge ↔ knowledge).
 pub fn link_knowledge_to_knowledge(
-    h5_path: &Path,
+    db_path: &Path,
     source_uuid: &str,
     target_uuid: &str,
     relation: &str,
     bidirectional: bool,
 ) -> crate::error::Result<()> {
-    let mut data = crate::storage::load_knowledge_only(h5_path)?;
+    let mut data = crate::storage::load_knowledge_only(db_path)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1709,12 +1709,12 @@ pub fn link_knowledge_to_knowledge(
         }
     }
 
-    crate::storage::save_knowledge_only(h5_path, &data)
+    crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Get all knowledge entries connected to a given knowledge UUID.
-pub fn knowledge_neighbors(h5_path: &Path, knowledge_uuid: &str) -> Vec<(String, String, String)> {
-    let data = match crate::storage::load_knowledge_only(h5_path) {
+pub fn knowledge_neighbors(db_path: &Path, knowledge_uuid: &str) -> Vec<(String, String, String)> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -1759,8 +1759,8 @@ pub struct ThoughtStep {
 /// Trace the chain of thought starting from a knowledge UUID.
 /// Follows `leads_to` links forward (and `because`/`resolved_by`/etc. as alternatives).
 /// Also walks backward to find the chain root.
-pub fn thought_chain(h5_path: &Path, knowledge_uuid: &str) -> Vec<ThoughtStep> {
-    let data = match crate::storage::load_knowledge_only(h5_path) {
+pub fn thought_chain(db_path: &Path, knowledge_uuid: &str) -> Vec<ThoughtStep> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -1879,11 +1879,11 @@ pub struct KnowledgeGraphEdge {
 /// Returns all reachable knowledge within `max_depth` hops.
 /// If `start_uuid` is None, returns the entire knowledge graph.
 pub fn traverse_knowledge_graph(
-    h5_path: &Path,
+    db_path: &Path,
     start_uuid: Option<&str>,
     max_depth: usize,
 ) -> Vec<KnowledgeGraphNode> {
-    let data = match crate::storage::load(h5_path) {
+    let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -2072,8 +2072,8 @@ pub struct KnowledgeConflict {
 /// - Same scope with opposing decisions
 /// - Superseded but not marked obsolete
 /// - High-confidence entries with contradicts links
-pub fn detect_conflicts(h5_path: &Path) -> Vec<KnowledgeConflict> {
-    let data = match crate::storage::load_knowledge_only(h5_path) {
+pub fn detect_conflicts(db_path: &Path) -> Vec<KnowledgeConflict> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -2195,8 +2195,8 @@ pub struct KnowledgeHealth {
 }
 
 /// Compute health metrics for the knowledge base.
-pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
-    let data = match crate::storage::load(h5_path) {
+pub fn knowledge_health(db_path: &Path) -> KnowledgeHealth {
+    let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => {
             return KnowledgeHealth {
@@ -2294,8 +2294,8 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
         })
         .count();
 
-    let duplicates = find_duplicates(h5_path, 0.6).len();
-    let conflicts_count = detect_conflicts(h5_path).len();
+    let duplicates = find_duplicates(db_path, 0.6).len();
+    let conflicts_count = detect_conflicts(db_path).len();
 
     KnowledgeHealth {
         total_knowledge: data.knowledge.len(),
@@ -2324,8 +2324,8 @@ pub fn knowledge_health(h5_path: &Path) -> KnowledgeHealth {
 // ---------------------------------------------------------------------------
 
 /// Get the pending review queue, sorted by priority descending.
-pub fn get_review_queue(h5_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
-    let data = match crate::storage::load_knowledge_only(h5_path) {
+pub fn get_review_queue(db_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
@@ -2345,12 +2345,12 @@ pub fn get_review_queue(h5_path: &Path) -> Vec<crate::types::ReviewQueueItem> {
 /// Enqueue a knowledge entry for review.
 /// Enqueue a knowledge entry for review. Returns true if actually enqueued.
 pub fn enqueue_review(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: &str,
     reason: &str,
     priority: u8,
 ) -> crate::error::Result<bool> {
-    let mut data = crate::storage::load(h5_path)?;
+    let mut data = crate::storage::load(db_path)?;
     // Don't duplicate
     if data
         .review_queue
@@ -2370,36 +2370,36 @@ pub fn enqueue_review(
         priority,
         completed: false,
     });
-    crate::storage::save_knowledge_only(h5_path, &data)?;
+    crate::storage::save_knowledge_only(db_path, &data)?;
     Ok(true)
 }
 
 /// Complete a review queue item (mark as done).
-pub fn complete_review(h5_path: &Path, knowledge_uuid: &str) -> crate::error::Result<()> {
-    let mut data = crate::storage::load(h5_path)?;
+pub fn complete_review(db_path: &Path, knowledge_uuid: &str) -> crate::error::Result<()> {
+    let mut data = crate::storage::load(db_path)?;
     for item in &mut data.review_queue {
         if item.knowledge_uuid == knowledge_uuid && !item.completed {
             item.completed = true;
         }
     }
-    crate::storage::save_knowledge_only(h5_path, &data)
+    crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Auto-enqueue stale/conflict/duplicate items for review.
-pub fn refresh_review_queue(h5_path: &Path) -> crate::error::Result<usize> {
-    let stale = detect_stale_detailed(h5_path)?;
-    let conflicts = detect_conflicts(h5_path);
-    let duplicates = find_duplicates(h5_path, 0.6);
+pub fn refresh_review_queue(db_path: &Path) -> crate::error::Result<usize> {
+    let stale = detect_stale_detailed(db_path)?;
+    let conflicts = detect_conflicts(db_path);
+    let duplicates = find_duplicates(db_path, 0.6);
 
     let mut count = 0;
     for s in &stale {
-        if enqueue_review(h5_path, &s.uuid, &format!("stale: {}", s.reason), 7)? {
+        if enqueue_review(db_path, &s.uuid, &format!("stale: {}", s.reason), 7)? {
             count += 1;
         }
     }
     for c in &conflicts {
         if enqueue_review(
-            h5_path,
+            db_path,
             &c.uuid_a,
             &format!("conflict: {}", c.description),
             8,
@@ -2408,7 +2408,7 @@ pub fn refresh_review_queue(h5_path: &Path) -> crate::error::Result<usize> {
         }
     }
     for d in &duplicates {
-        if enqueue_review(h5_path, &d.uuid_a, &format!("duplicate: {}", d.reason), 5)? {
+        if enqueue_review(db_path, &d.uuid_a, &format!("duplicate: {}", d.reason), 5)? {
             count += 1;
         }
     }
@@ -2421,11 +2421,11 @@ pub fn refresh_review_queue(h5_path: &Path) -> crate::error::Result<usize> {
 
 /// Recall knowledge relevant to a git diff.
 pub fn recall_for_diff(
-    h5_path: &Path,
+    db_path: &Path,
     diff_text: &str,
     max_items: usize,
 ) -> (crate::diff::DiffAnalysis, Vec<RecallResult>) {
-    let analysis = match crate::diff::analyze_diff(diff_text, h5_path) {
+    let analysis = match crate::diff::analyze_diff(diff_text, db_path) {
         Ok(a) => a,
         Err(_) => {
             return (
@@ -2441,7 +2441,7 @@ pub fn recall_for_diff(
     };
 
     let mut results = recall_for_task_structured(
-        h5_path,
+        db_path,
         "",
         &analysis.changed_files,
         &analysis.changed_node_uuids,
@@ -2482,23 +2482,23 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn make_test_h5(dir: &std::path::Path) -> std::path::PathBuf {
-        let h5_path = dir.join("test.h5");
-        // Create a minimal HDF5 with empty graph
+    fn make_test_db(dir: &std::path::Path) -> std::path::PathBuf {
+        let db_path = dir.join("test.db");
+        // Create a minimal SQLite with empty graph
         let extraction = crate::types::ExtractionResult::default();
         let graph = crate::graph::build_from_extraction(&extraction);
         let communities = crate::cluster::cluster(&graph);
-        crate::storage::save_hdf5(&graph, &communities, &h5_path).unwrap();
-        h5_path
+        crate::storage::save_db(&graph, &communities, &db_path).unwrap();
+        db_path
     }
 
     #[test]
     fn test_learn_and_load() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         learn(
-            &h5,
+            &db,
             KnowledgeType::Pattern,
             "Repository Pattern",
             "All data access goes through Repository classes",
@@ -2507,7 +2507,7 @@ mod tests {
         )
         .unwrap();
 
-        let items = query_knowledge(&h5, "", None);
+        let items = query_knowledge(&db, "", None);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "Repository Pattern");
         assert_eq!(items[0].observations, 1);
@@ -2516,7 +2516,7 @@ mod tests {
 
         // Reinforce using UUID
         learn_with_uuid(
-            &h5,
+            &db,
             Some(&uuid),
             KnowledgeType::Pattern,
             "Repository Pattern",
@@ -2527,7 +2527,7 @@ mod tests {
         )
         .unwrap();
 
-        let items = query_knowledge(&h5, "", None);
+        let items = query_knowledge(&db, "", None);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].observations, 2);
         assert!(items[0].confidence > conf1, "Confidence should increase");
@@ -2536,10 +2536,10 @@ mod tests {
     #[test]
     fn test_query_knowledge() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         learn(
-            &h5,
+            &db,
             KnowledgeType::Pattern,
             "Singleton",
             "Global state",
@@ -2548,7 +2548,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            &h5,
+            &db,
             KnowledgeType::Convention,
             "Error Handling",
             "Use AppError",
@@ -2557,7 +2557,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            &h5,
+            &db,
             KnowledgeType::Decision,
             "JWT Auth",
             "Chose JWT",
@@ -2566,23 +2566,23 @@ mod tests {
         )
         .unwrap();
 
-        let all = query_knowledge(&h5, "", None);
+        let all = query_knowledge(&db, "", None);
         assert_eq!(all.len(), 3);
 
-        let patterns = query_knowledge(&h5, "", Some("pattern"));
+        let patterns = query_knowledge(&db, "", Some("pattern"));
         assert_eq!(patterns.len(), 1);
 
-        let auth = query_knowledge(&h5, "auth", None);
+        let auth = query_knowledge(&db, "auth", None);
         assert_eq!(auth.len(), 1);
     }
 
     #[test]
     fn test_query_knowledge_multi_token() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         learn(
-            &h5,
+            &db,
             KnowledgeType::Architecture,
             "PVA wire format encoding",
             "How epics-pva-rs encodes the protocol buffer for pvxs interop.",
@@ -2591,7 +2591,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            &h5,
+            &db,
             KnowledgeType::Pattern,
             "Connection retry logic",
             "Exponential backoff for reconnect after socket close.",
@@ -2600,7 +2600,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            &h5,
+            &db,
             KnowledgeType::Decision,
             "Use SQLite over HDF5",
             "Switched storage backend for portability.",
@@ -2610,7 +2610,7 @@ mod tests {
         .unwrap();
 
         // Multi-word natural-language query — must find the PVA item via title tokens
-        let r = query_knowledge(&h5, "pva wire format epics-pva-rs pvxs", None);
+        let r = query_knowledge(&db, "pva wire format epics-pva-rs pvxs", None);
         assert!(
             r.iter().any(|k| k.title.contains("PVA wire format")),
             "multi-token query should find PVA item, got {:?}",
@@ -2618,12 +2618,12 @@ mod tests {
         );
 
         // Description-only token must hit (was missing from the index)
-        let r = query_knowledge(&h5, "backoff", None);
+        let r = query_knowledge(&db, "backoff", None);
         assert_eq!(r.len(), 1);
         assert!(r[0].title.contains("Connection retry"));
 
         // Ranking: title hit should outrank description hit when both present
-        let r = query_knowledge(&h5, "pva backoff", None);
+        let r = query_knowledge(&db, "pva backoff", None);
         assert!(r.len() >= 2);
         assert!(
             r[0].title.contains("PVA"),
@@ -2635,10 +2635,10 @@ mod tests {
     #[test]
     fn test_knowledge_context() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         learn(
-            &h5,
+            &db,
             KnowledgeType::Pattern,
             "Observer",
             "Event-driven",
@@ -2647,7 +2647,7 @@ mod tests {
         )
         .unwrap();
         learn(
-            &h5,
+            &db,
             KnowledgeType::Preference,
             "Functional Style",
             "User prefers FP",
@@ -2656,7 +2656,7 @@ mod tests {
         )
         .unwrap();
 
-        let ctx = knowledge_context(&h5, 10);
+        let ctx = knowledge_context(&db, 10);
         assert!(ctx.contains("Observer"));
         assert!(ctx.contains("Functional Style"));
         assert!(ctx.contains("Knowledge:"));
@@ -2665,11 +2665,11 @@ mod tests {
     #[test]
     fn test_knowledge_links_exclude_knowledge_targets() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         // Create two knowledge entries
         let k1 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Pattern,
             "Pattern A",
@@ -2680,7 +2680,7 @@ mod tests {
         )
         .unwrap();
         let k2 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Pattern,
             "Pattern B",
@@ -2692,10 +2692,10 @@ mod tests {
         .unwrap();
 
         // Link knowledge ↔ knowledge
-        link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", true).unwrap();
+        link_knowledge_to_knowledge(&db, &k1, &k2, "supports", true).unwrap();
 
         // query_knowledge should only return node UUIDs in related_nodes
-        let items = query_knowledge(&h5, "", None);
+        let items = query_knowledge(&db, "", None);
         for item in &items {
             // related_nodes should never contain a knowledge UUID
             assert!(
@@ -2716,11 +2716,11 @@ mod tests {
     #[test]
     fn test_stale_detection_ignores_knowledge_links() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         // K1 has only knowledge↔knowledge links (no node links)
         let k1 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Pattern,
             "Pure Knowledge",
@@ -2731,7 +2731,7 @@ mod tests {
         )
         .unwrap();
         let k2 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Decision,
             "Another",
@@ -2741,16 +2741,16 @@ mod tests {
             None,
         )
         .unwrap();
-        link_knowledge_to_knowledge(&h5, &k1, &k2, "depends_on", false).unwrap();
+        link_knowledge_to_knowledge(&db, &k1, &k2, "depends_on", false).unwrap();
 
         // Stale detection should NOT mark these as needs_review
-        let stale = detect_stale_knowledge(&h5).unwrap();
+        let stale = detect_stale_knowledge(&db).unwrap();
         assert_eq!(
             stale, 0,
             "knowledge-only entries should not be marked stale"
         );
 
-        let items = query_knowledge(&h5, "Pure Knowledge", None);
+        let items = query_knowledge(&db, "Pure Knowledge", None);
         assert_eq!(items[0].uuid, k1);
         // status should still be active (not needs_review)
     }
@@ -2758,10 +2758,10 @@ mod tests {
     #[test]
     fn test_thought_chain_formation() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         let k1 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Pattern,
             "Step 1",
@@ -2772,7 +2772,7 @@ mod tests {
         )
         .unwrap();
         let k2 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Decision,
             "Step 2",
@@ -2783,7 +2783,7 @@ mod tests {
         )
         .unwrap();
         let k3 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Convention,
             "Step 3",
@@ -2795,7 +2795,7 @@ mod tests {
         .unwrap();
 
         // Chain from any node should give all 3 steps in order
-        let chain = thought_chain(&h5, &k2);
+        let chain = thought_chain(&db, &k2);
         assert_eq!(chain.len(), 3);
         assert_eq!(chain[0].uuid, k1);
         assert_eq!(chain[1].uuid, k2);
@@ -2808,10 +2808,10 @@ mod tests {
     #[test]
     fn test_load_knowledge_entries_node_only() {
         let dir = TempDir::new().unwrap();
-        let h5 = make_test_h5(dir.path());
+        let db = make_test_db(dir.path());
 
         let k1 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Pattern,
             "Mixed",
@@ -2822,7 +2822,7 @@ mod tests {
         )
         .unwrap();
         let k2 = learn_with_uuid(
-            &h5,
+            &db,
             None,
             KnowledgeType::Decision,
             "Other",
@@ -2832,9 +2832,9 @@ mod tests {
             None,
         )
         .unwrap();
-        link_knowledge_to_knowledge(&h5, &k1, &k2, "supports", false).unwrap();
+        link_knowledge_to_knowledge(&db, &k1, &k2, "supports", false).unwrap();
 
-        let entries = crate::storage::load_knowledge_entries(&h5).unwrap();
+        let entries = crate::storage::load_knowledge_entries(&db).unwrap();
         let mixed = entries.iter().find(|e| e.0 == "Mixed").unwrap();
         // related field (index 5) should only contain "node-x", not k2's UUID
         assert_eq!(mixed.5, "node-x");

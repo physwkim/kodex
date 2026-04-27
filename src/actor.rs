@@ -1,4 +1,4 @@
-//! kodex actor — single daemon process that owns all HDF5 files.
+//! kodex actor — single daemon process that owns all SQLite files.
 //!
 //! Listens on ~/.kodex/kodex.sock (Unix) or localhost:19850 (fallback).
 //! All kodex serve instances connect here as proxies.
@@ -161,7 +161,7 @@ fn handle_connection(stream: std::os::unix::net::UnixStream) {
     }
 }
 
-/// Process a JSON-RPC request — same logic as serve, but with h5 access.
+/// Process a JSON-RPC request — same logic as serve, but with db access.
 fn process_request(input: &str) -> String {
     let req: serde_json::Value = match serde_json::from_str(input) {
         Ok(v) => v,
@@ -176,17 +176,17 @@ fn process_request(input: &str) -> String {
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
 
-    // Resolve project h5 path from params or CWD
+    // Resolve project db path from params or CWD
     let _project_dir = params
         .get("project_dir")
         .and_then(|v| v.as_str())
         .unwrap_or(".");
-    let h5_path = crate::registry::global_h5();
-    // global h5 is the single source
+    let db_path = crate::registry::global_db();
+    // global db is the single source
 
     let result = match method {
         "query_graph" => {
-            let graph = match crate::serve::load_graph_smart(&h5_path) {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
                 Ok(g) => g,
                 Err(e) => return error_response(&id, &e.to_string()),
             };
@@ -212,7 +212,7 @@ fn process_request(input: &str) -> String {
             ))
         }
         "get_node" => {
-            let graph = match crate::serve::load_graph_smart(&h5_path) {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
                 Ok(g) => g,
                 Err(e) => return error_response(&id, &e.to_string()),
             };
@@ -226,7 +226,7 @@ fn process_request(input: &str) -> String {
             }
         }
         "god_nodes" => {
-            let graph = match crate::serve::load_graph_smart(&h5_path) {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
                 Ok(g) => g,
                 Err(e) => return error_response(&id, &e.to_string()),
             };
@@ -238,7 +238,7 @@ fn process_request(input: &str) -> String {
             serde_json::json!(list)
         }
         "graph_stats" => {
-            let graph = match crate::serve::load_graph_smart(&h5_path) {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
                 Ok(g) => g,
                 Err(e) => return error_response(&id, &e.to_string()),
             };
@@ -261,7 +261,7 @@ fn process_request(input: &str) -> String {
             let context_uuid = params.get("context_uuid").and_then(|v| v.as_str());
             let kt = parse_knowledge_type(kt_str);
             match crate::learn::learn_with_uuid(
-                &h5_path,
+                &db_path,
                 knowledge_uuid,
                 kt,
                 title,
@@ -279,7 +279,7 @@ fn process_request(input: &str) -> String {
         "recall" => {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
-            let results = crate::learn::query_knowledge(&h5_path, query, type_filter);
+            let results = crate::learn::query_knowledge(&db_path, query, type_filter);
             let items: Vec<serde_json::Value> = results
                 .iter()
                 .map(|k| {
@@ -298,14 +298,14 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(20) as usize;
-            serde_json::json!(crate::learn::knowledge_context(&h5_path, max))
+            serde_json::json!(crate::learn::knowledge_context(&db_path, max))
         }
         "forget" => {
             let title = params.get("title").and_then(|v| v.as_str());
             let ktype = params.get("type").and_then(|v| v.as_str());
             let project = params.get("project").and_then(|v| v.as_str());
             let below = params.get("below_confidence").and_then(|v| v.as_f64());
-            match crate::storage::forget_knowledge(&h5_path, title, ktype, project, below) {
+            match crate::storage::forget_knowledge(&db_path, title, ktype, project, below) {
                 Ok(n) => serde_json::json!({"status": "forgot", "removed": n}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -318,7 +318,7 @@ fn process_request(input: &str) -> String {
                 .unwrap_or("");
             let nodes = extract_string_array(&params, "nodes");
             let pattern = params.get("pattern").and_then(|v| v.as_str());
-            match crate::knowledge::save_insight(&h5_path, None, label, desc, &nodes, pattern) {
+            match crate::knowledge::save_insight(&db_path, None, label, desc, &nodes, pattern) {
                 Ok(()) => serde_json::json!({"status": "saved", "label": label}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -327,7 +327,7 @@ fn process_request(input: &str) -> String {
             let title = params.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
             let related = extract_string_array(&params, "related_nodes");
-            match crate::knowledge::save_note(&h5_path, None, title, content, &related) {
+            match crate::knowledge::save_note(&db_path, None, title, content, &related) {
                 Ok(()) => serde_json::json!({"status": "saved", "title": title}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -340,7 +340,7 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_str())
                 .unwrap_or("related_to");
             let desc = params.get("description").and_then(|v| v.as_str());
-            match crate::knowledge::add_edge(&h5_path, source, target, relation, desc) {
+            match crate::knowledge::add_edge(&db_path, source, target, relation, desc) {
                 Ok(()) => serde_json::json!({"status": "saved"}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -357,7 +357,7 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5) as usize;
             let results =
-                crate::learn::recall_for_task(&h5_path, question, &touched_files, &node_uuids, max);
+                crate::learn::recall_for_task(&db_path, question, &touched_files, &node_uuids, max);
             let items: Vec<serde_json::Value> = results
                 .iter()
                 .map(|k| {
@@ -393,7 +393,7 @@ fn process_request(input: &str) -> String {
                 .unwrap_or("coding");
             if format == "json" {
                 serde_json::json!(crate::learn::get_task_context_json(
-                    &h5_path,
+                    &db_path,
                     question,
                     &touched_files,
                     max,
@@ -401,7 +401,7 @@ fn process_request(input: &str) -> String {
                 ))
             } else {
                 serde_json::json!(crate::learn::get_task_context_md(
-                    &h5_path,
+                    &db_path,
                     question,
                     &touched_files,
                     max,
@@ -421,7 +421,7 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5) as usize;
             let results = crate::learn::recall_for_task_structured(
-                &h5_path,
+                &db_path,
                 question,
                 &touched_files,
                 &node_uuids,
@@ -435,7 +435,7 @@ fn process_request(input: &str) -> String {
                 None => return error_response(&id, "uuid required"),
             };
             let note = params.get("note").and_then(|v| v.as_str());
-            match crate::learn::validate_knowledge(&h5_path, uuid, note) {
+            match crate::learn::validate_knowledge(&db_path, uuid, note) {
                 Ok(()) => serde_json::json!({"status": "validated", "uuid": uuid}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -446,7 +446,7 @@ fn process_request(input: &str) -> String {
                 None => return error_response(&id, "uuid required"),
             };
             let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-            match crate::learn::mark_obsolete(&h5_path, uuid, reason) {
+            match crate::learn::mark_obsolete(&db_path, uuid, reason) {
                 Ok(()) => serde_json::json!({"status": "obsoleted", "uuid": uuid}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -478,7 +478,7 @@ fn process_request(input: &str) -> String {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
             };
-            match crate::learn::update_knowledge(&h5_path, uuid, &updates) {
+            match crate::learn::update_knowledge(&db_path, uuid, &updates) {
                 Ok(()) => serde_json::json!({"status": "updated", "uuid": uuid}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -493,7 +493,7 @@ fn process_request(input: &str) -> String {
                 .get("relation")
                 .and_then(|v| v.as_str())
                 .unwrap_or("related_to");
-            match crate::learn::link_knowledge_to_nodes(&h5_path, uuid, &node_uuids, relation) {
+            match crate::learn::link_knowledge_to_nodes(&db_path, uuid, &node_uuids, relation) {
                 Ok(()) => {
                     serde_json::json!({"status": "linked", "uuid": uuid, "nodes": node_uuids.len()})
                 }
@@ -505,7 +505,7 @@ fn process_request(input: &str) -> String {
                 Some(u) => u,
                 None => return error_response(&id, "uuid required"),
             };
-            match crate::learn::clear_knowledge_links(&h5_path, uuid) {
+            match crate::learn::clear_knowledge_links(&db_path, uuid) {
                 Ok(n) => serde_json::json!({"status": "cleared", "uuid": uuid, "removed": n}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -520,7 +520,7 @@ fn process_request(input: &str) -> String {
                 None => return error_response(&id, "target_uuid required"),
             };
             let relation = params.get("relation").and_then(|v| v.as_str());
-            match crate::learn::remove_link(&h5_path, k_uuid, target, relation) {
+            match crate::learn::remove_link(&db_path, k_uuid, target, relation) {
                 Ok(true) => serde_json::json!({"status": "removed"}),
                 Ok(false) => serde_json::json!({"status": "not_found"}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
@@ -544,7 +544,7 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
             match crate::learn::link_knowledge_to_knowledge(
-                &h5_path,
+                &db_path,
                 source,
                 target,
                 relation,
@@ -561,7 +561,7 @@ fn process_request(input: &str) -> String {
                 Some(u) => u,
                 None => return error_response(&id, "uuid required"),
             };
-            let neighbors = crate::learn::knowledge_neighbors(&h5_path, uuid);
+            let neighbors = crate::learn::knowledge_neighbors(&db_path, uuid);
             let items: Vec<serde_json::Value> = neighbors
                 .iter()
                 .map(|(other, rel, dir)| serde_json::json!({"uuid": other, "relation": rel, "direction": dir}))
@@ -577,7 +577,7 @@ fn process_request(input: &str) -> String {
                 .get("format")
                 .and_then(|v| v.as_str())
                 .unwrap_or("json");
-            let chain = crate::learn::thought_chain(&h5_path, uuid);
+            let chain = crate::learn::thought_chain(&db_path, uuid);
             if format == "markdown" {
                 serde_json::json!(crate::learn::render_thought_chain(&chain))
             } else {
@@ -591,7 +591,7 @@ fn process_request(input: &str) -> String {
                 .get("format")
                 .and_then(|v| v.as_str())
                 .unwrap_or("json");
-            let nodes = crate::learn::traverse_knowledge_graph(&h5_path, start, depth);
+            let nodes = crate::learn::traverse_knowledge_graph(&db_path, start, depth);
             if format == "markdown" {
                 serde_json::json!(crate::learn::render_knowledge_graph(&nodes))
             } else {
@@ -604,12 +604,12 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if detailed {
-                match crate::learn::detect_stale_detailed(&h5_path) {
+                match crate::learn::detect_stale_detailed(&db_path) {
                     Ok(entries) => serde_json::json!(entries),
                     Err(e) => serde_json::json!({"error": e.to_string()}),
                 }
             } else {
-                match crate::learn::detect_stale_knowledge(&h5_path) {
+                match crate::learn::detect_stale_knowledge(&db_path) {
                     Ok(n) => serde_json::json!({"status": "checked", "stale_count": n}),
                     Err(e) => serde_json::json!({"error": e.to_string()}),
                 }
@@ -620,7 +620,7 @@ fn process_request(input: &str) -> String {
                 .get("threshold")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.6);
-            let candidates = crate::learn::find_duplicates(&h5_path, threshold);
+            let candidates = crate::learn::find_duplicates(&db_path, threshold);
             serde_json::json!(candidates)
         }
         "merge_knowledge" => {
@@ -632,22 +632,22 @@ fn process_request(input: &str) -> String {
                 Some(u) => u,
                 None => return error_response(&id, "absorb_uuid required"),
             };
-            match crate::learn::merge_knowledge(&h5_path, keep, absorb) {
+            match crate::learn::merge_knowledge(&db_path, keep, absorb) {
                 Ok(()) => serde_json::json!({"status": "merged", "kept": keep, "absorbed": absorb}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
         "detect_conflicts" => {
-            let conflicts = crate::learn::detect_conflicts(&h5_path);
+            let conflicts = crate::learn::detect_conflicts(&db_path);
             serde_json::json!(conflicts)
         }
         "knowledge_health" => {
-            let health = crate::learn::knowledge_health(&h5_path);
+            let health = crate::learn::knowledge_health(&db_path);
             serde_json::json!(health)
         }
         // Gen3: review queue
         "get_review_queue" => {
-            let queue = crate::learn::get_review_queue(&h5_path);
+            let queue = crate::learn::get_review_queue(&db_path);
             serde_json::json!(queue)
         }
         "complete_review" => {
@@ -655,12 +655,12 @@ fn process_request(input: &str) -> String {
                 Some(u) => u,
                 None => return error_response(&id, "uuid required"),
             };
-            match crate::learn::complete_review(&h5_path, uuid) {
+            match crate::learn::complete_review(&db_path, uuid) {
                 Ok(()) => serde_json::json!({"status": "completed", "uuid": uuid}),
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
         }
-        "refresh_review_queue" => match crate::learn::refresh_review_queue(&h5_path) {
+        "refresh_review_queue" => match crate::learn::refresh_review_queue(&db_path) {
             Ok(n) => serde_json::json!({"status": "refreshed", "enqueued": n}),
             Err(e) => serde_json::json!({"error": e.to_string()}),
         },
@@ -671,7 +671,7 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10) as usize;
-            let (analysis, results) = crate::learn::recall_for_diff(&h5_path, diff_text, max);
+            let (analysis, results) = crate::learn::recall_for_diff(&db_path, diff_text, max);
             serde_json::json!({
                 "analysis": analysis,
                 "relevant_knowledge": results,
@@ -681,7 +681,7 @@ fn process_request(input: &str) -> String {
         "reason" => {
             let uuids = extract_string_array(&params, "uuids");
             let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
-            let data = match crate::storage::load(&h5_path) {
+            let data = match crate::storage::load(&db_path) {
                 Ok(d) => d,
                 Err(e) => return error_response(&id, &e.to_string()),
             };

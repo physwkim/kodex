@@ -329,7 +329,7 @@ impl KnowledgeLink {
 }
 
 // ---------------------------------------------------------------------------
-// KodexData — complete h5 contents as a struct
+// KodexData — complete db contents as a struct
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default)]

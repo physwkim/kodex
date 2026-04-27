@@ -183,15 +183,15 @@ pub fn load_graph_from_vault(vault_dir: &Path) -> crate::error::Result<KodexGrap
     Ok(crate::graph::build_from_extraction(&extraction))
 }
 
-/// Save the graph as a cached HDF5 file derived from vault.
+/// Save the graph as a cached SQLite file derived from vault.
 pub fn cache_graph_from_vault(vault_dir: &Path, cache_path: &Path) -> crate::error::Result<()> {
     let graph = load_graph_from_vault(vault_dir)?;
     let communities = crate::cluster::cluster(&graph);
-    crate::storage::save_hdf5(&graph, &communities, cache_path)?;
+    crate::storage::save_db(&graph, &communities, cache_path)?;
     Ok(())
 }
 
-/// Check if cached HDF5 is stale compared to vault files.
+/// Check if cached SQLite is stale compared to vault files.
 pub fn is_cache_stale(vault_dir: &Path, cache_path: &Path) -> bool {
     let cache_mtime = match std::fs::metadata(cache_path).and_then(|m| m.modified()) {
         Ok(t) => t,

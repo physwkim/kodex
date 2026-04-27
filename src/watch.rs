@@ -139,7 +139,7 @@ fn rebuild_code(watch_path: &Path, vault_path: Option<&Path>) {
         let _ = std::fs::create_dir_all(&out_dir);
         let _ = std::fs::create_dir_all(&vault_dir);
 
-        let _ = crate::storage::save_hdf5(&graph, &communities, &out_dir.join("kodex.db"));
+        let _ = crate::storage::save_db(&graph, &communities, &out_dir.join("kodex.db"));
         let _ = crate::export::to_html(
             &graph,
             &communities,
@@ -184,7 +184,7 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
     println!("Vault changed, syncing back to graph...");
 
     let graph_path = watch_path.join("kodex-out/kodex.db");
-    let graph = match crate::storage::load_hdf5(&graph_path) {
+    let graph = match crate::storage::load_db(&graph_path) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("  failed to load graph: {e}");
@@ -251,9 +251,9 @@ fn reverse_sync_vault(watch_path: &Path, vault_path: &Path) {
         return;
     }
 
-    // Rebuild HDF5 from vault (vault is source of truth for user edits)
+    // Rebuild SQLite from vault (vault is source of truth for user edits)
     println!(
-        "  synced {} new connection(s) from vault, rebuilding HDF5...",
+        "  synced {} new connection(s) from vault, rebuilding SQLite...",
         new_edges.len()
     );
     let _ = crate::vault::cache_graph_from_vault(vault_path, &graph_path);

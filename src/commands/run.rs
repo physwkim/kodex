@@ -88,24 +88,24 @@ pub fn run_pipeline(path: &Path) {
     let communities = kodex::cluster::cluster(&graph);
     println!("  detected {} communities", communities.len());
 
-    // Merge into global h5
-    let h5_path = kodex::registry::global_h5();
+    // Merge into global db
+    let db_path = kodex::registry::global_db();
     let _ = std::fs::create_dir_all(kodex::registry::kodex_home());
 
-    match kodex::storage::merge_project(&h5_path, project_name, &extraction) {
+    match kodex::storage::merge_project(&db_path, project_name, &extraction) {
         Ok(()) => {
-            println!("  merged into {}", h5_path.display());
+            println!("  merged into {}", db_path.display());
             // Post-merge: detect stale knowledge + refresh review queue
-            let stale = kodex::learn::detect_stale_knowledge(&h5_path).unwrap_or(0);
+            let stale = kodex::learn::detect_stale_knowledge(&db_path).unwrap_or(0);
             if stale > 0 {
                 println!("  {stale} knowledge entries marked for review (stale)");
             }
         }
-        Err(e) => eprintln!("  HDF5 error: {e}"),
+        Err(e) => eprintln!("  SQLite error: {e}"),
     }
 
     // Ingest external knowledge (git commits, README)
-    match kodex::ingest_knowledge::ingest_project(&h5_path, path, 50) {
+    match kodex::ingest_knowledge::ingest_project(&db_path, path, 50) {
         Ok(0) => {}
         Ok(n) => println!("  ingested {n} knowledge entries from git/README"),
         Err(e) => eprintln!("  ingest: {e}"),
@@ -156,7 +156,7 @@ pub fn run_pipeline(path: &Path) {
 
     println!(
         "  done! Knowledge: {} | View: {}",
-        h5_path.display(),
+        db_path.display(),
         out_dir.display()
     );
 }

@@ -421,7 +421,7 @@ fn wrap_actor_response(line: &str) -> String {
     line.to_string()
 }
 
-/// Inject project_dir into JSON-RPC params so actor knows which h5 to use.
+/// Inject project_dir into JSON-RPC params so actor knows which db to use.
 fn inject_project_dir(input: &str, cwd: &str) -> String {
     let mut req: serde_json::Value = match serde_json::from_str(input) {
         Ok(v) => v,

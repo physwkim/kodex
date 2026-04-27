@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 /// Import all Claude memory files into kodex knowledge base.
 /// Returns count of imported entries.
-pub fn import_claude_memories(h5_path: &Path) -> crate::error::Result<usize> {
+pub fn import_claude_memories(db_path: &Path) -> crate::error::Result<usize> {
     let claude_dir = dirs::home_dir().unwrap_or_default().join(".claude");
 
     if !claude_dir.is_dir() {
@@ -53,7 +53,7 @@ pub fn import_claude_memories(h5_path: &Path) -> crate::error::Result<usize> {
         }
 
         crate::storage::append_knowledge(
-            h5_path,
+            db_path,
             &title,
             knowledge_type,
             &body,
@@ -146,8 +146,8 @@ fn parse_frontmatter_and_body(
 
 /// Export kodex knowledge to Claude Code memory format (~/.claude/memory/).
 /// Returns count of exported entries.
-pub fn export_to_claude_memories(h5_path: &Path) -> crate::error::Result<usize> {
-    let data = crate::storage::load(h5_path)?;
+pub fn export_to_claude_memories(db_path: &Path) -> crate::error::Result<usize> {
+    let data = crate::storage::load(db_path)?;
 
     if data.knowledge.is_empty() {
         return Ok(0);

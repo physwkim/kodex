@@ -130,9 +130,9 @@ pub fn diff_to_node_uuids(hunks: &[DiffHunk], data: &crate::types::KodexData) ->
 
 /// Detect which existing knowledge may be affected by a diff.
 /// Returns node UUIDs that changed + files that changed.
-pub fn analyze_diff(diff_text: &str, h5_path: &Path) -> crate::error::Result<DiffAnalysis> {
+pub fn analyze_diff(diff_text: &str, db_path: &Path) -> crate::error::Result<DiffAnalysis> {
     let hunks = parse_diff(diff_text);
-    let data = crate::storage::load(h5_path)?;
+    let data = crate::storage::load(db_path)?;
 
     let changed_files: Vec<String> = hunks
         .iter()

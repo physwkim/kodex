@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.4.3 (2026-04-28)
+
+Cleanup of legacy HDF5 naming and new `kodex context` subcommand.
+
+- Rename `h5_path`/`global_h5`/`resolve_h5`/`h5_in_dir`/`make_test_h5`/`load_hdf5`/`save_hdf5` to `db_path`/`global_db`/etc — completes the SQLite migration started in v0.4.0
+- Update remaining `HDF5` doc comments and log strings to `SQLite`
+- New `kodex context [--max-items N]` CLI subcommand that prints the knowledge_context summary to stdout — designed for SessionStart hooks
+- Internal-only renames: no behavior change, all 96 tests pass
+
 ## v0.4.2 (2026-04-28)
 
 Fix `recall` keyword search for multi-word queries.

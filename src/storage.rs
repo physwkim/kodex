@@ -157,7 +157,7 @@ pub fn load_graph(path: &Path) -> crate::error::Result<KodexGraph> {
     Ok(crate::graph::build_from_extraction(&data.extraction))
 }
 
-pub fn save_hdf5(
+pub fn save_db(
     graph: &KodexGraph,
     _communities: &HashMap<usize, Vec<String>>,
     path: &Path,
@@ -182,7 +182,7 @@ pub fn save_hdf5(
     save(path, &data)
 }
 
-pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
+pub fn load_db(path: &Path) -> crate::error::Result<KodexGraph> {
     load_graph(path)
 }
 
@@ -190,7 +190,7 @@ pub fn load_hdf5(path: &Path) -> crate::error::Result<KodexGraph> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn append_knowledge(
-    h5_path: &Path,
+    db_path: &Path,
     title: &str,
     knowledge_type: &str,
     description: &str,
@@ -205,7 +205,7 @@ pub fn append_knowledge(
         Some(related_nodes)
     };
     append_knowledge_with_uuid(
-        h5_path,
+        db_path,
         None,
         title,
         knowledge_type,
@@ -220,7 +220,7 @@ pub fn append_knowledge(
 /// Core knowledge upsert. UUID is the only lookup key.
 #[allow(clippy::too_many_arguments)]
 pub fn append_knowledge_with_uuid(
-    h5_path: &Path,
+    db_path: &Path,
     knowledge_uuid: Option<&str>,
     title: &str,
     knowledge_type: &str,
@@ -229,14 +229,14 @@ pub fn append_knowledge_with_uuid(
     related_nodes: Option<&[String]>,
     tags: &[String],
 ) -> crate::error::Result<String> {
-    let mut data = if !h5_path.exists() {
+    let mut data = if !db_path.exists() {
         return Err(crate::error::KodexError::Other(
             "Database does not exist. Run `kodex run` first.".to_string(),
         ));
     } else if related_nodes.is_some() || knowledge_uuid.is_some() {
-        load_knowledge_only(h5_path)?
+        load_knowledge_only(db_path)?
     } else {
-        load(h5_path)?
+        load(db_path)?
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -332,15 +332,15 @@ pub fn append_knowledge_with_uuid(
             });
         }
     }
-    save_knowledge_only(h5_path, &data)?;
+    save_knowledge_only(db_path, &data)?;
     Ok(k_uuid)
 }
 
 #[allow(clippy::type_complexity)]
 pub fn load_knowledge_entries(
-    h5_path: &Path,
+    db_path: &Path,
 ) -> crate::error::Result<Vec<(String, String, String, f64, u32, String, String)>> {
-    let data = load_knowledge_only(h5_path)?;
+    let data = load_knowledge_only(db_path)?;
     Ok(data
         .knowledge
         .iter()
@@ -365,16 +365,16 @@ pub fn load_knowledge_entries(
 }
 
 pub fn forget_knowledge(
-    h5_path: &Path,
+    db_path: &Path,
     title_match: Option<&str>,
     type_match: Option<&str>,
     project_match: Option<&str>,
     below_confidence: Option<f64>,
 ) -> crate::error::Result<usize> {
-    if !h5_path.exists() {
+    if !db_path.exists() {
         return Ok(0);
     }
-    let mut data = load_knowledge_only(h5_path)?;
+    let mut data = load_knowledge_only(db_path)?;
     let before = data.knowledge.len();
     let remove_uuids: Vec<String> = data
         .knowledge
@@ -404,20 +404,20 @@ pub fn forget_knowledge(
         let target_removed = l.is_knowledge_link() && remove_uuids.contains(&l.node_uuid);
         !source_removed && !target_removed
     });
-    save_knowledge_only(h5_path, &data)?;
+    save_knowledge_only(db_path, &data)?;
     Ok(before - data.knowledge.len())
 }
 
 // Project operations
 
 pub fn merge_project(
-    h5_path: &Path,
+    db_path: &Path,
     project_name: &str,
     new_extraction: &ExtractionResult,
 ) -> crate::error::Result<()> {
-    cache_remove(h5_path);
-    let mut data = if h5_path.exists() {
-        load(h5_path)?
+    cache_remove(db_path);
+    let mut data = if db_path.exists() {
+        load(db_path)?
     } else {
         KodexData::default()
     };
@@ -449,14 +449,14 @@ pub fn merge_project(
             || valid_node_uuids.contains(l.node_uuid.as_str())
             || l.node_uuid.is_empty()
     });
-    save(h5_path, &data)
+    save(db_path, &data)
 }
 
-pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Result<usize> {
-    if !h5_path.exists() {
+pub fn forget_project(db_path: &Path, project_path: &str) -> crate::error::Result<usize> {
+    if !db_path.exists() {
         return Ok(0);
     }
-    let mut data = load(h5_path)?;
+    let mut data = load(db_path)?;
     let before = data.extraction.nodes.len();
     data.extraction
         .nodes
@@ -475,7 +475,7 @@ pub fn forget_project(h5_path: &Path, project_path: &str) -> crate::error::Resul
             || valid_node_uuids.contains(l.node_uuid.as_str())
             || l.node_uuid.is_empty()
     });
-    save(h5_path, &data)?;
+    save(db_path, &data)?;
     Ok(before - data.extraction.nodes.len())
 }
 

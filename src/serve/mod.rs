@@ -9,32 +9,32 @@ use crate::graph::build_from_extraction;
 use crate::graph::KodexGraph;
 use crate::types::ExtractionResult;
 
-/// Smart graph loading — HDF5 first, vault as fallback.
+/// Smart graph loading — SQLite first, vault as fallback.
 ///
 /// Priority:
-/// 1. HDF5 (.h5) — fast, source of truth for data
+/// 1. SQLite (.db) — fast, source of truth for data
 /// 2. Vault directory (.md files) — fallback, slower
 pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
-    // Explicit HDF5 file
+    // Explicit SQLite file
     if path
         .extension()
         .map(|e| e == "db" || e == "sqlite")
         .unwrap_or(false)
     {
-        return crate::storage::load_hdf5(path);
+        return crate::storage::load_db(path);
     }
 
     // Directory: look for kodex.db inside, then vault .md
     if path.is_dir() {
-        let h5_in_dir = path.join("kodex.db");
-        if h5_in_dir.exists() {
-            return crate::storage::load_hdf5(&h5_in_dir);
+        let db_in_dir = path.join("kodex.db");
+        if db_in_dir.exists() {
+            return crate::storage::load_db(&db_in_dir);
         }
         return crate::vault::load_graph_from_vault(path);
     }
 
-    // Try as HDF5 regardless of extension
-    crate::storage::load_hdf5(path)
+    // Try as SQLite regardless of extension
+    crate::storage::load_db(path)
 }
 
 /// Load a graph from a JSON file (networkx node-link format).

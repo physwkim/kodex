@@ -5,7 +5,7 @@ use std::path::Path;
 /// Ingest knowledge from git commit messages in the project directory.
 /// Extracts decisions, lessons, and bug fixes from recent commits.
 pub fn ingest_git_commits(
-    h5_path: &Path,
+    db_path: &Path,
     project_dir: &Path,
     max_commits: usize,
 ) -> crate::error::Result<usize> {
@@ -40,13 +40,13 @@ pub fn ingest_git_commits(
 
         // Check if already imported (by commit hash in tags)
         let tag = format!("commit:{hash}");
-        let existing = crate::learn::query_knowledge(h5_path, hash, None);
+        let existing = crate::learn::query_knowledge(db_path, hash, None);
         if existing.iter().any(|k| k.tags.iter().any(|t| t == &tag)) {
             continue;
         }
 
         crate::storage::append_knowledge(
-            h5_path,
+            db_path,
             msg,
             knowledge_type,
             &format!("From git commit {hash} in {project_name}"),
@@ -100,7 +100,7 @@ fn classify_commit(msg: &str) -> (&'static str, bool) {
 
 /// Ingest knowledge from README.md in the project directory.
 /// Extracts project description as architecture knowledge.
-pub fn ingest_readme(h5_path: &Path, project_dir: &Path) -> crate::error::Result<usize> {
+pub fn ingest_readme(db_path: &Path, project_dir: &Path) -> crate::error::Result<usize> {
     let readme_path = project_dir.join("README.md");
     if !readme_path.exists() {
         return Ok(0);
@@ -117,7 +117,7 @@ pub fn ingest_readme(h5_path: &Path, project_dir: &Path) -> crate::error::Result
         .unwrap_or("unknown");
 
     let tag = format!("readme:{project_name}");
-    let existing = crate::learn::query_knowledge(h5_path, &tag, None);
+    let existing = crate::learn::query_knowledge(db_path, &tag, None);
     if existing.iter().any(|k| k.tags.iter().any(|t| t == &tag)) {
         return Ok(0);
     }
@@ -142,7 +142,7 @@ pub fn ingest_readme(h5_path: &Path, project_dir: &Path) -> crate::error::Result
     };
 
     crate::storage::append_knowledge(
-        h5_path,
+        db_path,
         &title,
         "architecture",
         &desc,
@@ -157,12 +157,12 @@ pub fn ingest_readme(h5_path: &Path, project_dir: &Path) -> crate::error::Result
 
 /// Ingest all external sources for a project.
 pub fn ingest_project(
-    h5_path: &Path,
+    db_path: &Path,
     project_dir: &Path,
     max_commits: usize,
 ) -> crate::error::Result<usize> {
     let mut total = 0;
-    total += ingest_readme(h5_path, project_dir)?;
-    total += ingest_git_commits(h5_path, project_dir, max_commits)?;
+    total += ingest_readme(db_path, project_dir)?;
+    total += ingest_git_commits(db_path, project_dir, max_commits)?;
     Ok(total)
 }
