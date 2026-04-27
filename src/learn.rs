@@ -107,6 +107,35 @@ pub fn learn(
     .map(|_| ())
 }
 
+/// Save a new entry that supersedes an existing one. Marks the old entry obsolete
+/// and writes both supersedes/superseded_by back-references in one call.
+pub fn learn_supersedes(
+    db_path: &Path,
+    knowledge_type: KnowledgeType,
+    title: &str,
+    description: &str,
+    related_nodes: Option<&[String]>,
+    tags: &[String],
+    supersedes_uuid: &str,
+) -> crate::error::Result<String> {
+    let new_uuid = learn_with_uuid(
+        db_path,
+        None,
+        knowledge_type,
+        title,
+        description,
+        related_nodes,
+        tags,
+        None,
+    )?;
+    let updates = KnowledgeUpdates {
+        superseded_by: Some(new_uuid.clone()),
+        ..Default::default()
+    };
+    update_knowledge(db_path, supersedes_uuid, &updates)?;
+    Ok(new_uuid)
+}
+
 /// Learn with explicit UUID. Returns the UUID of the created/updated entry.
 /// - uuid=Some → update existing entry
 /// - uuid=None → create new entry with fresh UUID
@@ -148,6 +177,42 @@ pub fn learn_with_uuid(
     }
 
     Ok(new_uuid)
+}
+
+/// Capture lightweight provenance for an entry being saved from `cwd`.
+/// Returns a string like `commit:abc1234@<basename>` when cwd is inside a git repo,
+/// `cwd:<basename>` when not, or `None` if cwd is unusable.
+pub fn auto_provenance(cwd: &Path) -> Option<String> {
+    if !cwd.exists() {
+        return None;
+    }
+    let basename = cwd
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let git_head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            } else {
+                None
+            }
+        });
+    Some(match git_head {
+        Some(sha) => format!("commit:{sha}@{basename}"),
+        None => format!("cwd:{basename}"),
+    })
 }
 
 /// Build a keyword → UUID index for fast knowledge lookup.
@@ -329,7 +394,11 @@ fn parse_knowledge_type(s: &str) -> KnowledgeType {
 /// Compact knowledge summary for session start.
 /// Shows stats + high-confidence + recent. NOT a full dump.
 /// Use `recall_for_task` for task-specific retrieval.
-pub fn knowledge_context(db_path: &Path, max_items: usize) -> String {
+///
+/// `inline_top_k`: if > 0, append a "## Inline" section with the top-k highest-priority
+/// entries (high confidence first, then recent) including full descriptions. Helps avoid a
+/// follow-up `recall` round-trip on session bootstrap.
+pub fn knowledge_context(db_path: &Path, max_items: usize, inline_top_k: usize) -> String {
     let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => return "No knowledge base found. Run `kodex run` first.\n".to_string(),
@@ -397,6 +466,29 @@ pub fn knowledge_context(db_path: &Path, max_items: usize) -> String {
         ctx.push_str(&format!("- {t}: {count}\n"));
     }
     ctx.push('\n');
+
+    // Inline top-k: full descriptions for the most useful entries
+    if inline_top_k > 0 {
+        let mut ranked: Vec<&&crate::types::KnowledgeEntry> = active.iter().collect();
+        // Sort: high confidence first, then most recently updated
+        ranked.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.updated_at.cmp(&a.updated_at))
+        });
+        let take = ranked.len().min(inline_top_k);
+        if take > 0 {
+            ctx.push_str(&format!("## Inline (top {take})\n\n"));
+            for k in ranked.iter().take(take) {
+                let conf = (k.confidence * 100.0) as u32;
+                ctx.push_str(&format!(
+                    "### {} ({conf}%, {})\n\n{}\n\n",
+                    k.title, k.knowledge_type, k.description
+                ));
+            }
+        }
+    }
 
     ctx
 }
@@ -564,6 +656,34 @@ pub fn detect_stale_detailed(db_path: &Path) -> crate::error::Result<Vec<StaleIn
                         action: "validate: linked code has changed, knowledge may be outdated".into(),
                     });
                     // Don't change status — advisory until agent validates
+                }
+            }
+        }
+
+        // Retrieval staleness: 90+ days unfetched, status still active
+        if entry.status == "active" {
+            let last_seen = if entry.last_fetched > 0 {
+                entry.last_fetched
+            } else {
+                entry.created_at
+            };
+            if last_seen > 0 && now > last_seen {
+                let idle_days = (now - last_seen) / 86400;
+                if idle_days >= 90 {
+                    entry.status = "needs_review".to_string();
+                    let reason = if entry.fetch_count == 0 {
+                        format!("Never retrieved in {idle_days} days since creation")
+                    } else {
+                        format!("Not retrieved in {idle_days} days (last fetch_count={})", entry.fetch_count)
+                    };
+                    stale_entries.push(StaleInfo {
+                        uuid: entry.uuid.clone(),
+                        title: entry.title.clone(),
+                        reason,
+                        staleness: 0.4,
+                        action: "review: rarely surfaced — still relevant?".into(),
+                    });
+                    changed = true;
                 }
             }
         }
@@ -746,20 +866,36 @@ fn relevance_score_detailed(
         _ => 0.0,
     };
 
-    // 9. Recency (0-10)
-    if entry.last_validated_at > 0 && ctx.now > entry.last_validated_at {
-        let age_days = (ctx.now - entry.last_validated_at) / 86400;
+    // 9. Recency (-10..+10) — graduated decay from the most recent activity signal.
+    // Uses the freshest of: validation, retrieval, update, creation. Old knowledge
+    // gets a negative score so closed-out audit notes sink under live entries.
+    let last_active = [
+        entry.last_validated_at,
+        entry.last_fetched,
+        entry.updated_at,
+        entry.created_at,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0);
+    if last_active > 0 && ctx.now >= last_active {
+        let age_days = (ctx.now - last_active) / 86400;
         b.recency = if age_days < 7 {
             10.0
         } else if age_days < 30 {
             5.0
         } else if age_days < 90 {
-            2.0
-        } else {
             0.0
+        } else if age_days < 180 {
+            -5.0
+        } else {
+            -10.0
         };
         if b.recency > 0.0 {
-            b.reasons.push("recently validated".into());
+            b.reasons.push("recently active".into());
+        } else if b.recency < 0.0 {
+            b.reasons
+                .push(format!("stale ({age_days}d since activity)"));
         }
     }
 
@@ -814,11 +950,13 @@ pub fn recall_for_task_structured(
     touched_files: &[String],
     node_uuids: &[String],
     max_items: usize,
+    type_filter: Option<&str>,
 ) -> Vec<RecallResult> {
     let data = match crate::storage::load(db_path) {
         Ok(d) => d,
         Err(_) => return Vec::new(),
     };
+    let type_lower = type_filter.map(|s| s.to_lowercase());
 
     let query_tokens: Vec<String> = question
         .to_lowercase()
@@ -850,6 +988,10 @@ pub fn recall_for_task_structured(
         .knowledge
         .iter()
         .filter(|k| k.status != "obsolete")
+        .filter(|k| match &type_lower {
+            Some(t) => k.knowledge_type.to_lowercase() == *t,
+            None => true,
+        })
         .map(|k| {
             let related: Vec<String> = links
                 .iter()
@@ -924,8 +1066,16 @@ pub fn recall_for_task(
     touched_files: &[String],
     node_uuids: &[String],
     max_items: usize,
+    type_filter: Option<&str>,
 ) -> Vec<Knowledge> {
-    recall_for_task_structured(db_path, question, touched_files, node_uuids, max_items)
+    recall_for_task_structured(
+        db_path,
+        question,
+        touched_files,
+        node_uuids,
+        max_items,
+        type_filter,
+    )
         .into_iter()
         .map(|r| r.knowledge)
         .collect()
@@ -988,6 +1138,7 @@ pub fn get_task_context_json(
         touched_files,
         &file_node_uuids,
         max_items,
+        None,
     );
 
     // Warnings
@@ -1145,10 +1296,11 @@ pub fn update_knowledge(
 ) -> crate::error::Result<()> {
     let mut data = crate::storage::load_knowledge_only(db_path)?;
 
-    let entry = data
+    // Locate target index (release the borrow before we touch other entries).
+    let target_idx = data
         .knowledge
-        .iter_mut()
-        .find(|k| k.uuid == knowledge_uuid)
+        .iter()
+        .position(|k| k.uuid == knowledge_uuid)
         .ok_or_else(|| {
             crate::error::KodexError::Other(format!("Knowledge UUID not found: {knowledge_uuid}"))
         })?;
@@ -1157,38 +1309,68 @@ pub fn update_knowledge(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+
+    // First pass: validate the new pointer (if any) before mutating.
+    let mut superseded_by_new: Option<String> = None;
+    if let Some(sb) = &updates.superseded_by {
+        if !sb.is_empty() {
+            if !data.knowledge.iter().any(|k| k.uuid == *sb) {
+                return Err(crate::error::KodexError::Other(format!(
+                    "superseded_by target not found: {sb}"
+                )));
+            }
+            superseded_by_new = Some(sb.clone());
+        }
+    }
+
     let mut changed = false;
 
-    if let Some(status) = &updates.status {
-        entry.status = status.clone();
-        changed = true;
+    {
+        let entry = &mut data.knowledge[target_idx];
+        if let Some(status) = &updates.status {
+            entry.status = status.clone();
+            changed = true;
+        }
+        if let Some(scope) = &updates.scope {
+            entry.scope = scope.clone();
+            changed = true;
+        }
+        if let Some(applies_when) = &updates.applies_when {
+            entry.applies_when = applies_when.clone();
+            changed = true;
+        }
+        if let Some(sb) = &superseded_by_new {
+            entry.superseded_by = sb.clone();
+            entry.status = "obsolete".to_string();
+            // Confidence decay so the obsolete entry doesn't out-rank the new one.
+            entry.confidence *= 0.7;
+            changed = true;
+        }
+        if updates.validate {
+            entry.last_validated_at = now;
+            changed = true;
+        }
+        if changed {
+            entry.updated_at = now;
+        }
     }
-    if let Some(scope) = &updates.scope {
-        entry.scope = scope.clone();
-        changed = true;
-    }
-    if let Some(applies_when) = &updates.applies_when {
-        entry.applies_when = applies_when.clone();
-        changed = true;
-    }
-    if let Some(superseded_by) = &updates.superseded_by {
-        entry.superseded_by = superseded_by.clone();
-        entry.status = "obsolete".to_string();
-        changed = true;
-    }
-    if updates.validate {
-        entry.last_validated_at = now;
-        changed = true;
-    }
-    if changed {
-        entry.updated_at = now;
+
+    // Back-reference: write `supersedes = old_uuid` on the new entry.
+    if let Some(sb) = &superseded_by_new {
+        if let Some(new_entry) = data.knowledge.iter_mut().find(|k| k.uuid == *sb) {
+            // Don't clobber an existing back-reference (a chain of supersedes).
+            if new_entry.supersedes.is_empty() {
+                new_entry.supersedes = knowledge_uuid.to_string();
+                new_entry.updated_at = now;
+            }
+        }
     }
 
     crate::storage::save_knowledge_only(db_path, &data)
 }
 
 /// Partial update fields for update_knowledge.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct KnowledgeUpdates {
     pub status: Option<String>,
     pub scope: Option<String>,
@@ -1403,6 +1585,65 @@ pub fn find_duplicates(db_path: &Path, threshold: f64) -> Vec<DuplicateCandidate
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     candidates
+}
+
+/// Merge candidate from the perspective of one specific entry.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MergeCandidate {
+    pub uuid: String,
+    pub title: String,
+    pub similarity: f64,
+    pub reason: String,
+}
+
+/// Find entries similar to `target_uuid`. Used by `learn` to surface merge candidates.
+/// Skips obsolete entries and the target itself.
+pub fn find_similar_to_uuid(
+    db_path: &Path,
+    target_uuid: &str,
+    threshold: f64,
+) -> Vec<MergeCandidate> {
+    let data = match crate::storage::load_knowledge_only(db_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let threshold = if threshold <= 0.0 { 0.6 } else { threshold };
+
+    let target = match data.knowledge.iter().find(|k| k.uuid == target_uuid) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let mut out: Vec<MergeCandidate> = data
+        .knowledge
+        .iter()
+        .filter(|k| k.uuid != target_uuid && k.status != "obsolete")
+        .filter_map(|k| {
+            let sim = knowledge_similarity(target, k);
+            if sim < threshold {
+                return None;
+            }
+            let reason = if target.title.to_lowercase() == k.title.to_lowercase() {
+                "identical title".into()
+            } else if target.knowledge_type == k.knowledge_type {
+                format!("similar content ({:.0}%), same type", sim * 100.0)
+            } else {
+                format!("similar content ({:.0}%)", sim * 100.0)
+            };
+            Some(MergeCandidate {
+                uuid: k.uuid.clone(),
+                title: k.title.clone(),
+                similarity: sim,
+                reason,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.similarity
+            .partial_cmp(&a.similarity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
 }
 
 /// Compute similarity between two knowledge entries (0.0-1.0).
@@ -2446,6 +2687,7 @@ pub fn recall_for_diff(
         &analysis.changed_files,
         &analysis.changed_node_uuids,
         max_items * 2, // fetch extra for re-ranking
+        None,
     );
 
     // Boost knowledge directly affected by the diff
@@ -2534,6 +2776,59 @@ mod tests {
     }
 
     #[test]
+    fn test_find_similar_to_uuid() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        // Save two near-identical entries and one unrelated
+        let uuid_a = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::BugPattern,
+            "PVA BEACON header is 4 bytes after GUID, not 5",
+            "pvxs server emits beacon metadata as flags:u8 + seq:u8 + change:u16",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let uuid_b = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::BugPattern,
+            "PVA BEACON header layout — 4 bytes after GUID",
+            "pvxs server beacon metadata: flags+seq+change totals 4 bytes after GUID",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let _uuid_c = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::Convention,
+            "Error Handling",
+            "Use AppError",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let cands = find_similar_to_uuid(&db, &uuid_a, 0.6);
+        assert_eq!(cands.len(), 1, "should find exactly one near-duplicate");
+        assert_eq!(cands[0].uuid, uuid_b);
+        assert!(cands[0].similarity >= 0.6);
+
+        // Higher threshold suppresses
+        let cands = find_similar_to_uuid(&db, &uuid_a, 0.99);
+        assert!(cands.is_empty());
+
+        // Unknown uuid returns empty
+        assert!(find_similar_to_uuid(&db, "nonexistent", 0.6).is_empty());
+    }
+
+    #[test]
     fn test_query_knowledge() {
         let dir = TempDir::new().unwrap();
         let db = make_test_db(dir.path());
@@ -2574,6 +2869,336 @@ mod tests {
 
         let auth = query_knowledge(&db, "auth", None);
         assert_eq!(auth.len(), 1);
+    }
+
+    #[test]
+    fn test_recency_penalizes_old_entries() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        // Two entries with sufficiently distinct titles to survive diversity collapse.
+        let fresh_uuid = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::BugPattern,
+            "fresh recent bug regarding tokens",
+            "body",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let stale_uuid = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::BugPattern,
+            "ancient deprecated migration topic",
+            "body",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        // Backdate stale entry to 200 days ago via direct SQL.
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let old = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(200 * 86400) as i64;
+        conn.execute(
+            "UPDATE knowledge SET created_at = ?1, updated_at = ?1, last_validated_at = 0, last_fetched = 0 WHERE uuid = ?2",
+            rusqlite::params![old, stale_uuid],
+        )
+        .unwrap();
+        crate::storage::cache_remove(&db);
+
+        let results = recall_for_task_structured(&db, "", &[], &[], 10, None);
+        let fresh_score = results
+            .iter()
+            .find(|r| r.knowledge.uuid == fresh_uuid)
+            .unwrap()
+            .score
+            .total;
+        let stale_score = results
+            .iter()
+            .find(|r| r.knowledge.uuid == stale_uuid)
+            .unwrap()
+            .score
+            .total;
+        assert!(
+            fresh_score - stale_score >= 15.0,
+            "fresh entry should outrank 200-day-old entry by ≥15 points: fresh={fresh_score}, stale={stale_score}"
+        );
+    }
+
+    #[test]
+    fn test_learn_supersedes_propagates_back_reference() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        let old_uuid = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::Convention,
+            "Use HDF5 backend",
+            "All knowledge stored in HDF5 files",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        // Save a new entry that supersedes the old one
+        let new_uuid = learn_supersedes(
+            &db,
+            KnowledgeType::Convention,
+            "Use SQLite backend",
+            "All knowledge stored in SQLite (replaces HDF5)",
+            None,
+            &[],
+            &old_uuid,
+        )
+        .unwrap();
+
+        let data = crate::storage::load_knowledge_only(&db).unwrap();
+        let old = data.knowledge.iter().find(|k| k.uuid == old_uuid).unwrap();
+        let new = data.knowledge.iter().find(|k| k.uuid == new_uuid).unwrap();
+
+        assert_eq!(old.status, "obsolete");
+        assert_eq!(old.superseded_by, new_uuid);
+        assert!(
+            old.confidence < 0.6,
+            "obsolete entry confidence should decay: {}",
+            old.confidence
+        );
+        assert_eq!(new.supersedes, old_uuid);
+    }
+
+    #[test]
+    fn test_update_knowledge_rejects_unknown_superseded_by() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+        let uuid = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::Pattern,
+            "x",
+            "y",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+        let updates = KnowledgeUpdates {
+            superseded_by: Some("does-not-exist".to_string()),
+            ..Default::default()
+        };
+        let res = update_knowledge(&db, &uuid, &updates);
+        assert!(res.is_err(), "unknown target should error");
+    }
+
+    #[test]
+    fn test_auto_link_knowledge_cluster() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        // Save several entries on the same topic (epics-pva-rs cluster)
+        let a = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::BugPattern,
+            "epics-pva-rs handshake bug",
+            "client failed pvxs handshake when bitset decode misaligned",
+            None,
+            &["pva".to_string(), "epics".to_string()],
+            None,
+        )
+        .unwrap();
+        let b = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::BugPattern,
+            "epics-pva-rs bitset decode bug",
+            "bitset decode misaligned during pvxs handshake",
+            None,
+            &["pva".to_string(), "epics".to_string()],
+            None,
+        )
+        .unwrap();
+        // Unrelated entry should NOT auto-link
+        let _c = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::Convention,
+            "Use AppError",
+            "for error handling in rust modules",
+            None,
+            &["rust".to_string()],
+            None,
+        )
+        .unwrap();
+
+        let data = crate::storage::load_knowledge_only(&db).unwrap();
+        let kk_links: Vec<&crate::types::KnowledgeLink> = data
+            .links
+            .iter()
+            .filter(|l| l.is_knowledge_link())
+            .collect();
+        assert!(
+            !kk_links.is_empty(),
+            "expected at least one auto knowledge↔knowledge link"
+        );
+        // The auto-link is created when `b` is saved → b → a edge
+        assert!(
+            kk_links
+                .iter()
+                .any(|l| l.knowledge_uuid == b && l.node_uuid == a),
+            "expected b→a auto-link, got: {:?}",
+            kk_links
+                .iter()
+                .map(|l| (l.knowledge_uuid.clone(), l.node_uuid.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_auto_provenance_non_git() {
+        let dir = TempDir::new().unwrap();
+        let prov = auto_provenance(dir.path());
+        assert!(prov.is_some(), "should produce a provenance string");
+        let s = prov.unwrap();
+        // Outside a git repo → cwd:basename
+        assert!(s.starts_with("cwd:"), "expected cwd: prefix, got {s}");
+    }
+
+    #[test]
+    fn test_set_evidence_if_empty_only_fills_blank() {
+        use crate::storage::set_evidence_if_empty;
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        let uuid = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::Pattern,
+            "p1",
+            "body",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        // First call writes
+        set_evidence_if_empty(&db, &uuid, "commit:abc123@kodex").unwrap();
+        let data = crate::storage::load_knowledge_only(&db).unwrap();
+        let entry = data.knowledge.iter().find(|k| k.uuid == uuid).unwrap();
+        assert_eq!(entry.evidence, "commit:abc123@kodex");
+
+        // Second call must not overwrite
+        set_evidence_if_empty(&db, &uuid, "different").unwrap();
+        let data = crate::storage::load_knowledge_only(&db).unwrap();
+        let entry = data.knowledge.iter().find(|k| k.uuid == uuid).unwrap();
+        assert_eq!(entry.evidence, "commit:abc123@kodex");
+    }
+
+    #[test]
+    fn test_bump_fetch_counters() {
+        use crate::storage::bump_fetch_counters;
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        let uuid = learn_with_uuid(
+            &db,
+            None,
+            KnowledgeType::Pattern,
+            "fetched entry",
+            "body",
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
+
+        let before = query_knowledge(&db, "", None);
+        let entry = before.iter().find(|k| k.uuid == uuid).unwrap();
+        let conf_before = entry.confidence;
+
+        bump_fetch_counters(&db, std::slice::from_ref(&uuid)).unwrap();
+        bump_fetch_counters(&db, std::slice::from_ref(&uuid)).unwrap();
+
+        // Re-load via storage to see fetch_count + last_fetched
+        let data = crate::storage::load_knowledge_only(&db).unwrap();
+        let entry = data.knowledge.iter().find(|k| k.uuid == uuid).unwrap();
+        assert_eq!(entry.fetch_count, 2);
+        assert!(entry.last_fetched > 0);
+        assert!(
+            entry.confidence > conf_before,
+            "confidence should grow: {} > {}",
+            entry.confidence,
+            conf_before
+        );
+        // Cap at 0.95: bump 50 more times and confirm no overshoot
+        for _ in 0..50 {
+            bump_fetch_counters(&db, std::slice::from_ref(&uuid)).unwrap();
+        }
+        let data = crate::storage::load_knowledge_only(&db).unwrap();
+        let entry = data.knowledge.iter().find(|k| k.uuid == uuid).unwrap();
+        assert!(entry.confidence <= 0.95 + 1e-9);
+    }
+
+    #[test]
+    fn test_recall_for_task_type_filter() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        learn(
+            &db,
+            KnowledgeType::BugPattern,
+            "auth bug",
+            "session token issue",
+            &[],
+            &[],
+        )
+        .unwrap();
+        learn(
+            &db,
+            KnowledgeType::Convention,
+            "auth convention",
+            "use AppError for auth failures",
+            &[],
+            &[],
+        )
+        .unwrap();
+        learn(
+            &db,
+            KnowledgeType::Decision,
+            "auth decision",
+            "chose JWT",
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        // No filter → all three
+        let all = recall_for_task(&db, "auth", &[], &[], 10, None);
+        assert_eq!(all.len(), 3);
+
+        // Filter to bug_pattern only
+        let bugs = recall_for_task(&db, "auth", &[], &[], 10, Some("bug_pattern"));
+        assert_eq!(bugs.len(), 1);
+        assert_eq!(bugs[0].title, "auth bug");
+
+        // Filter case-insensitive
+        let convs = recall_for_task(&db, "auth", &[], &[], 10, Some("CONVENTION"));
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].title, "auth convention");
+
+        // Unknown type → empty
+        let none = recall_for_task(&db, "auth", &[], &[], 10, Some("nonexistent"));
+        assert!(none.is_empty());
     }
 
     #[test]
@@ -2656,10 +3281,43 @@ mod tests {
         )
         .unwrap();
 
-        let ctx = knowledge_context(&db, 10);
+        let ctx = knowledge_context(&db, 10, 0);
         assert!(ctx.contains("Observer"));
         assert!(ctx.contains("Functional Style"));
         assert!(ctx.contains("Knowledge:"));
+        // Without inline_top_k, no Inline section
+        assert!(!ctx.contains("## Inline"));
+    }
+
+    #[test]
+    fn test_knowledge_context_inline_top_k() {
+        let dir = TempDir::new().unwrap();
+        let db = make_test_db(dir.path());
+
+        learn(
+            &db,
+            KnowledgeType::Pattern,
+            "First Pattern",
+            "Detailed body of the first pattern. Multiple lines of context.",
+            &[],
+            &[],
+        )
+        .unwrap();
+        learn(
+            &db,
+            KnowledgeType::Convention,
+            "Second Convention",
+            "Body of the second entry.",
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        let ctx = knowledge_context(&db, 10, 2);
+        assert!(ctx.contains("## Inline"));
+        // First-line description must show in inline
+        assert!(ctx.contains("Detailed body of the first pattern"));
+        assert!(ctx.contains("Body of the second entry"));
     }
 
     #[test]

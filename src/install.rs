@@ -243,6 +243,8 @@ fn install_mcp_claude(target_dir: &Path) -> String {
 
     let kodex_bin_clone = kodex_bin.clone();
     let hooks = obj.entry("hooks").or_insert_with(|| serde_json::json!({}));
+    let mut wrote_post = false;
+    let mut wrote_start = false;
     if let Some(hooks_obj) = hooks.as_object_mut() {
         if !hooks_obj.contains_key("PostToolUse") {
             hooks_obj.insert(
@@ -258,18 +260,47 @@ fn install_mcp_claude(target_dir: &Path) -> String {
                     }]
                 }]),
             );
-            match serde_json::to_string_pretty(&settings) {
-                Ok(json) => match std::fs::write(&settings_path, &json) {
-                    Ok(()) => {
-                        results.push(format!("Hook: registered in {}", settings_path.display()))
-                    }
-                    Err(e) => results.push(format!("Hook: failed: {e}")),
-                },
-                Err(e) => results.push(format!("Hook: failed: {e}")),
-            }
-        } else {
-            results.push("Hook: already registered".to_string());
+            wrote_post = true;
         }
+        if !hooks_obj.contains_key("SessionStart") {
+            // Inject knowledge context as `additionalContext` on every session start.
+            // `inline_top_k=3` includes full bodies for the 3 highest-priority entries
+            // so Claude doesn't need a follow-up `recall` to actually use them.
+            hooks_obj.insert(
+                "SessionStart".to_string(),
+                serde_json::json!([{
+                    "hooks": [{
+                        "type": "command",
+                        "command": format!("{} context --inline-top-k 3 2>/dev/null", kodex_bin_clone)
+                    }]
+                }]),
+            );
+            wrote_start = true;
+        }
+    }
+    if wrote_post || wrote_start {
+        match serde_json::to_string_pretty(&settings) {
+            Ok(json) => match std::fs::write(&settings_path, &json) {
+                Ok(()) => {
+                    let mut parts = Vec::new();
+                    if wrote_post {
+                        parts.push("PostToolUse");
+                    }
+                    if wrote_start {
+                        parts.push("SessionStart");
+                    }
+                    results.push(format!(
+                        "Hook: registered {} in {}",
+                        parts.join(" + "),
+                        settings_path.display()
+                    ));
+                }
+                Err(e) => results.push(format!("Hook: failed: {e}")),
+            },
+            Err(e) => results.push(format!("Hook: failed: {e}")),
+        }
+    } else {
+        results.push("Hook: already registered".to_string());
     }
 
     // Always save settings.json (may have removed stale mcpServers)
@@ -419,4 +450,52 @@ fn find_kodex_binary() -> String {
     }
     // Fallback: assume it's in PATH
     "kodex".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_install_registers_session_start_hook() {
+        let dir = TempDir::new().unwrap();
+        let report = install_mcp_claude(dir.path());
+        let settings_path = dir.path().join(".claude/settings.json");
+        assert!(settings_path.exists(), "settings.json should be written");
+        let text = std::fs::read_to_string(&settings_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let session_start = json
+            .pointer("/hooks/SessionStart")
+            .expect("SessionStart hook should be registered");
+        assert!(session_start.is_array(), "SessionStart should be an array");
+        let cmd = json
+            .pointer("/hooks/SessionStart/0/hooks/0/command")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(
+            cmd.contains("context"),
+            "SessionStart command should call `context`: {cmd}"
+        );
+        assert!(
+            cmd.contains("inline-top-k"),
+            "SessionStart command should pass --inline-top-k: {cmd}"
+        );
+        // Sanity: report should mention SessionStart
+        assert!(
+            report.contains("SessionStart"),
+            "report should mention SessionStart: {report}"
+        );
+    }
+
+    #[test]
+    fn test_install_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let _first = install_mcp_claude(dir.path());
+        let second = install_mcp_claude(dir.path());
+        assert!(
+            second.contains("already registered"),
+            "second install should be a no-op for hooks: {second}"
+        );
+    }
 }

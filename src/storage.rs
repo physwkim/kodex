@@ -46,6 +46,52 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// Set `evidence` for a knowledge entry, but only if currently empty. Used by `learn`
+/// to record provenance without overwriting evidence the caller passed explicitly.
+pub fn set_evidence_if_empty(
+    path: &Path,
+    uuid: &str,
+    evidence: &str,
+) -> crate::error::Result<()> {
+    if !path.exists() || evidence.is_empty() {
+        return Ok(());
+    }
+    let conn = open_db(path)?;
+    conn.execute(
+        "UPDATE knowledge SET evidence = ?1 WHERE uuid = ?2 AND (evidence IS NULL OR evidence = '')",
+        params![evidence, uuid],
+    )
+    .map_err(|e| crate::error::KodexError::Other(format!("SQLite set_evidence: {e}")))?;
+    cache_remove(path);
+    Ok(())
+}
+
+/// Increment fetch_count + last_fetched + nudge confidence for the given UUIDs.
+/// Direct UPDATE (no full rewrite) — cheap to call on every recall. Confidence
+/// bump is small (+0.005) and capped at 0.95. Cache is invalidated.
+pub fn bump_fetch_counters(path: &Path, uuids: &[String]) -> crate::error::Result<()> {
+    if uuids.is_empty() || !path.exists() {
+        return Ok(());
+    }
+    let conn = open_db(path)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let mut stmt = conn
+        .prepare(
+            "UPDATE knowledge SET fetch_count = fetch_count + 1, last_fetched = ?1, \
+             confidence = MIN(0.95, confidence + 0.005) WHERE uuid = ?2",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("SQLite prepare bump: {e}")))?;
+    for uuid in uuids {
+        stmt.execute(params![now, uuid])
+            .map_err(|e| crate::error::KodexError::Other(format!("SQLite bump: {e}")))?;
+    }
+    cache_remove(path);
+    Ok(())
+}
+
 /// Save only knowledge/links/review_queue — true incremental, no graph rebuild.
 pub fn save_knowledge_only(path: &Path, data: &KodexData) -> crate::error::Result<()> {
     if !path.exists() {
@@ -298,6 +344,8 @@ pub fn append_knowledge_with_uuid(
             updated_at: now,
             author: String::new(),
             trigger: String::new(),
+            fetch_count: 0,
+            last_fetched: 0,
         });
         new_uuid
     };
@@ -310,6 +358,21 @@ pub fn append_knowledge_with_uuid(
     };
     if !auto_linked.is_empty() {
         data.links.extend(auto_linked);
+    }
+    // Auto-link to similar existing knowledge entries (cluster discovery).
+    if knowledge_uuid.is_none() {
+        let kk_links = auto_link_knowledge_to_knowledge(
+            &data,
+            &k_uuid,
+            title,
+            description,
+            knowledge_type,
+            tags,
+            now,
+        );
+        if !kk_links.is_empty() {
+            data.links.extend(kk_links);
+        }
     }
 
     if let Some(nodes) = related_nodes {
@@ -518,7 +581,8 @@ fn create_tables(conn: &Connection) -> crate::error::Result<()> {
             last_validated_at INTEGER DEFAULT 0, applies_when TEXT DEFAULT '',
             supersedes TEXT DEFAULT '', superseded_by TEXT DEFAULT '',
             evidence TEXT DEFAULT '', created_at INTEGER DEFAULT 0,
-            updated_at INTEGER DEFAULT 0, author TEXT DEFAULT '', trigger TEXT DEFAULT ''
+            updated_at INTEGER DEFAULT 0, author TEXT DEFAULT '', trigger TEXT DEFAULT '',
+            fetch_count INTEGER DEFAULT 0, last_fetched INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS links (
             knowledge_uuid TEXT, node_uuid TEXT, relation TEXT, target_type TEXT DEFAULT '',
@@ -537,6 +601,33 @@ fn create_tables(conn: &Connection) -> crate::error::Result<()> {
         ",
     )
     .map_err(|e| crate::error::KodexError::Other(format!("SQLite tables: {e}")))?;
+    migrate_columns(conn)?;
+    Ok(())
+}
+
+/// Add missing columns to existing tables. SQLite has no IF NOT EXISTS for columns,
+/// so we probe with PRAGMA table_info and ignore "duplicate column" errors.
+fn migrate_columns(conn: &Connection) -> crate::error::Result<()> {
+    let existing: std::collections::HashSet<String> = {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(knowledge)")
+            .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma rows: {e}")))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    let want = [
+        ("fetch_count", "INTEGER DEFAULT 0"),
+        ("last_fetched", "INTEGER DEFAULT 0"),
+    ];
+    for (col, decl) in want {
+        if !existing.contains(col) {
+            let sql = format!("ALTER TABLE knowledge ADD COLUMN {col} {decl}");
+            conn.execute(&sql, [])
+                .map_err(|e| crate::error::KodexError::Other(format!("ALTER {col}: {e}")))?;
+        }
+    }
     Ok(())
 }
 
@@ -619,7 +710,7 @@ fn write_knowledge(conn: &Connection, knowledge: &[KnowledgeEntry]) -> crate::er
     }
     let mut stmt = conn
         .prepare(
-            "INSERT INTO knowledge (uuid,title,knowledge_type,description,confidence,observations,tags,scope,status,source,last_validated_at,applies_when,supersedes,superseded_by,evidence,created_at,updated_at,author,trigger) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            "INSERT INTO knowledge (uuid,title,knowledge_type,description,confidence,observations,tags,scope,status,source,last_validated_at,applies_when,supersedes,superseded_by,evidence,created_at,updated_at,author,trigger,fetch_count,last_fetched) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
         )
         .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
     for k in knowledge {
@@ -643,6 +734,8 @@ fn write_knowledge(conn: &Connection, knowledge: &[KnowledgeEntry]) -> crate::er
             k.updated_at as i64,
             k.author,
             k.trigger,
+            k.fetch_count,
+            k.last_fetched as i64,
         ])
         .map_err(|e| crate::error::KodexError::Other(format!("SQLite insert knowledge: {e}")))?;
     }
@@ -813,7 +906,7 @@ fn read_extraction(conn: &Connection) -> crate::error::Result<ExtractionResult> 
 fn read_knowledge(conn: &Connection) -> crate::error::Result<Vec<KnowledgeEntry>> {
     let mut stmt = conn
         .prepare(
-            "SELECT uuid,title,knowledge_type,description,confidence,observations,tags,scope,status,source,last_validated_at,applies_when,supersedes,superseded_by,evidence,created_at,updated_at,author,trigger FROM knowledge",
+            "SELECT uuid,title,knowledge_type,description,confidence,observations,tags,scope,status,source,last_validated_at,applies_when,supersedes,superseded_by,evidence,created_at,updated_at,author,trigger,fetch_count,last_fetched FROM knowledge",
         )
         .map_err(|e| crate::error::KodexError::Other(format!("SQLite: {e}")))?;
     let rows = stmt
@@ -848,6 +941,8 @@ fn read_knowledge(conn: &Connection) -> crate::error::Result<Vec<KnowledgeEntry>
                 updated_at: row.get::<_, i64>(16)? as u64,
                 author: row.get(17)?,
                 trigger: row.get(18)?,
+                fetch_count: row.get::<_, i64>(19)? as u32,
+                last_fetched: row.get::<_, i64>(20)? as u64,
             })
         })
         .map_err(|e| crate::error::KodexError::Other(format!("SQLite read knowledge: {e}")))?;
@@ -921,6 +1016,134 @@ fn graph_to_extraction(graph: &KodexGraph) -> ExtractionResult {
         hyperedges: graph.hyperedges.clone(),
         ..Default::default()
     }
+}
+
+/// Auto-link a freshly saved knowledge entry to existing knowledge entries that
+/// look related (same type + shared title/tag tokens). Caps at 3 links to avoid
+/// cluster pollution and never duplicates an existing edge.
+fn auto_link_knowledge_to_knowledge(
+    data: &KodexData,
+    new_uuid: &str,
+    title: &str,
+    description: &str,
+    knowledge_type: &str,
+    tags: &[String],
+    now: u64,
+) -> Vec<KnowledgeLink> {
+    const MAX_AUTO_K_LINKS: usize = 3;
+    const TOKEN_OVERLAP_MIN: f64 = 0.5;
+
+    let new_title_tokens: std::collections::HashSet<String> = title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.len() > 2)
+        .map(String::from)
+        .collect();
+    if new_title_tokens.is_empty() {
+        return Vec::new();
+    }
+    let new_desc_first: String = description
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+        .chars()
+        .take(200)
+        .collect();
+    let new_desc_tokens: std::collections::HashSet<String> = new_desc_first
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|t| t.len() > 2)
+        .map(String::from)
+        .collect();
+    let new_tags: std::collections::HashSet<String> =
+        tags.iter().map(|t| t.to_lowercase()).collect();
+
+    let mut scored: Vec<(String, f64)> = Vec::new();
+    for k in &data.knowledge {
+        if k.uuid == new_uuid || k.status == "obsolete" {
+            continue;
+        }
+        // Title token overlap
+        let other_title_tokens: std::collections::HashSet<String> = k
+            .title
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|t| t.len() > 2)
+            .map(String::from)
+            .collect();
+        let title_common = new_title_tokens
+            .iter()
+            .filter(|t| other_title_tokens.contains(*t))
+            .count();
+        let title_total = new_title_tokens.len().max(other_title_tokens.len()).max(1);
+        let title_overlap = title_common as f64 / title_total as f64;
+
+        // Description first-line overlap
+        let other_desc_first: String = k
+            .description
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_lowercase()
+            .chars()
+            .take(200)
+            .collect();
+        let other_desc_tokens: std::collections::HashSet<String> = other_desc_first
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|t| t.len() > 2)
+            .map(String::from)
+            .collect();
+        let desc_common = new_desc_tokens
+            .iter()
+            .filter(|t| other_desc_tokens.contains(*t))
+            .count();
+        let desc_total = new_desc_tokens.len().max(other_desc_tokens.len()).max(1);
+        let desc_overlap = desc_common as f64 / desc_total as f64;
+
+        // Tag overlap
+        let other_tags: std::collections::HashSet<String> =
+            k.tags.iter().map(|t| t.to_lowercase()).collect();
+        let tag_common = new_tags.iter().filter(|t| other_tags.contains(*t)).count();
+        let tag_total = new_tags.len().max(other_tags.len()).max(1);
+        let tag_overlap = tag_common as f64 / tag_total as f64;
+
+        let same_type = if k.knowledge_type == knowledge_type {
+            0.1
+        } else {
+            0.0
+        };
+        let score = 0.5 * title_overlap + 0.3 * desc_overlap + 0.2 * tag_overlap + same_type;
+        if score >= TOKEN_OVERLAP_MIN {
+            scored.push((k.uuid.clone(), score));
+        }
+    }
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut out = Vec::new();
+    for (target_uuid, _) in scored.into_iter().take(MAX_AUTO_K_LINKS) {
+        let exists = data.links.iter().any(|l| {
+            l.knowledge_uuid == new_uuid
+                && l.node_uuid == target_uuid
+                && l.is_knowledge_link()
+        });
+        if exists {
+            continue;
+        }
+        out.push(KnowledgeLink {
+            knowledge_uuid: new_uuid.to_string(),
+            node_uuid: target_uuid,
+            relation: "related_to".to_string(),
+            target_type: "knowledge".to_string(),
+            confidence: 0.6,
+            created_at: now,
+            source: "inferred".to_string(),
+            ..Default::default()
+        });
+    }
+    out
 }
 
 fn auto_link_knowledge(

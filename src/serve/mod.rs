@@ -1,6 +1,6 @@
 mod traversal;
 
-pub use traversal::{bfs, dfs, score_nodes, subgraph_to_text};
+pub use traversal::{bfs, dfs, score_nodes, subgraph_to_mermaid, subgraph_to_text};
 
 use std::collections::HashMap;
 use std::path::Path;

@@ -272,6 +272,12 @@ pub struct KnowledgeEntry {
     /// What triggered this: "PR#123", "commit:abc", "manual", "import"
     #[serde(default)]
     pub trigger: String,
+    /// Number of times this entry has been returned by recall/recall_for_task/recall_for_diff
+    #[serde(default)]
+    pub fetch_count: u32,
+    /// Last time this entry was returned by a recall (unix timestamp, 0 = never)
+    #[serde(default)]
+    pub last_fetched: u64,
 }
 
 // ---------------------------------------------------------------------------

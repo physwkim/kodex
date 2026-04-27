@@ -177,7 +177,7 @@ fn process_request(input: &str) -> String {
     let params = req.get("params").cloned().unwrap_or(serde_json::json!({}));
 
     // Resolve project db path from params or CWD
-    let _project_dir = params
+    let project_dir = params
         .get("project_dir")
         .and_then(|v| v.as_str())
         .unwrap_or(".");
@@ -199,6 +199,10 @@ fn process_request(input: &str) -> String {
                 .get("token_budget")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(2000) as usize;
+            let format = params
+                .get("format")
+                .and_then(|v| v.as_str())
+                .unwrap_or("text");
             let terms: Vec<String> = question
                 .split_whitespace()
                 .filter(|t| t.len() > 2)
@@ -207,9 +211,14 @@ fn process_request(input: &str) -> String {
             let scored = crate::serve::score_nodes(&graph, &terms);
             let start: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
             let (visited, edges) = crate::serve::bfs(&graph, &start, depth);
-            serde_json::json!(crate::serve::subgraph_to_text(
-                &graph, &visited, &edges, budget
-            ))
+            match format {
+                "mermaid" => serde_json::json!(crate::serve::subgraph_to_mermaid(
+                    &graph, &visited, &edges
+                )),
+                _ => serde_json::json!(crate::serve::subgraph_to_text(
+                    &graph, &visited, &edges, budget
+                )),
+            }
         }
         "get_node" => {
             let graph = match crate::serve::load_graph_smart(&db_path) {
@@ -259,19 +268,53 @@ fn process_request(input: &str) -> String {
             let related = extract_optional_string_array(&params, "related_nodes");
             let tags = extract_string_array(&params, "tags");
             let context_uuid = params.get("context_uuid").and_then(|v| v.as_str());
+            let supersedes = params.get("supersedes").and_then(|v| v.as_str());
             let kt = parse_knowledge_type(kt_str);
-            match crate::learn::learn_with_uuid(
-                &db_path,
-                knowledge_uuid,
-                kt,
-                title,
-                desc,
-                related.as_deref(),
-                &tags,
-                context_uuid,
-            ) {
+            // `supersedes` is only meaningful when creating a new entry.
+            let save_result = if knowledge_uuid.is_none() && supersedes.is_some_and(|s| !s.is_empty()) {
+                crate::learn::learn_supersedes(
+                    &db_path,
+                    kt,
+                    title,
+                    desc,
+                    related.as_deref(),
+                    &tags,
+                    supersedes.unwrap(),
+                )
+            } else {
+                crate::learn::learn_with_uuid(
+                    &db_path,
+                    knowledge_uuid,
+                    kt,
+                    title,
+                    desc,
+                    related.as_deref(),
+                    &tags,
+                    context_uuid,
+                )
+            };
+            match save_result {
                 Ok(uuid) => {
-                    serde_json::json!({"status": "learned", "uuid": uuid, "title": title})
+                    // Provenance: capture cwd / git HEAD if not already set
+                    if let Some(prov) =
+                        crate::learn::auto_provenance(std::path::Path::new(project_dir))
+                    {
+                        let _ = crate::storage::set_evidence_if_empty(&db_path, &uuid, &prov);
+                    }
+                    let merge_candidates =
+                        crate::learn::find_similar_to_uuid(&db_path, &uuid, 0.6);
+                    let mut resp = serde_json::json!({
+                        "status": "learned",
+                        "uuid": uuid,
+                        "title": title,
+                    });
+                    if !merge_candidates.is_empty() {
+                        resp["merge_candidates"] = serde_json::json!(merge_candidates);
+                        resp["hint"] = serde_json::json!(
+                            "consider merge_knowledge(keep=<uuid>, absorb=<uuid>) to consolidate"
+                        );
+                    }
+                    resp
                 }
                 Err(e) => serde_json::json!({"error": e.to_string()}),
             }
@@ -280,6 +323,8 @@ fn process_request(input: &str) -> String {
             let query = params.get("query").and_then(|v| v.as_str()).unwrap_or("");
             let type_filter = params.get("type").and_then(|v| v.as_str());
             let results = crate::learn::query_knowledge(&db_path, query, type_filter);
+            let uuids: Vec<String> = results.iter().map(|k| k.uuid.clone()).collect();
+            let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
             let items: Vec<serde_json::Value> = results
                 .iter()
                 .map(|k| {
@@ -298,7 +343,15 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(20) as usize;
-            serde_json::json!(crate::learn::knowledge_context(&db_path, max))
+            let inline_top_k = params
+                .get("inline_top_k")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            serde_json::json!(crate::learn::knowledge_context(
+                &db_path,
+                max,
+                inline_top_k
+            ))
         }
         "forget" => {
             let title = params.get("title").and_then(|v| v.as_str());
@@ -356,11 +409,23 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5) as usize;
-            let results =
-                crate::learn::recall_for_task(&db_path, question, &touched_files, &node_uuids, max);
+            let type_filter = params.get("type").and_then(|v| v.as_str());
+            // Use structured recall so we can surface the score breakdown.
+            let results = crate::learn::recall_for_task_structured(
+                &db_path,
+                question,
+                &touched_files,
+                &node_uuids,
+                max,
+                type_filter,
+            );
+            let uuids: Vec<String> =
+                results.iter().map(|r| r.knowledge.uuid.clone()).collect();
+            let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
             let items: Vec<serde_json::Value> = results
                 .iter()
-                .map(|k| {
+                .map(|r| {
+                    let k = &r.knowledge;
                     serde_json::json!({
                         "uuid": k.uuid, "title": k.title,
                         "type": k.knowledge_type.to_string(),
@@ -368,6 +433,17 @@ fn process_request(input: &str) -> String {
                         "confidence": (k.confidence * 100.0) as u32,
                         "observations": k.observations,
                         "related_nodes": k.related_nodes,
+                        "score_breakdown": {
+                            "total": r.score.total,
+                            "confidence": r.score.confidence,
+                            "node_overlap": r.score.node_overlap,
+                            "file_mention": r.score.file_mention,
+                            "applies_when": r.score.applies_when,
+                            "keyword_match": r.score.keyword_match,
+                            "recency": r.score.recency,
+                            "type_priority": r.score.type_priority,
+                            "reasons": r.score.reasons,
+                        },
                     })
                 })
                 .collect();
@@ -420,12 +496,14 @@ fn process_request(input: &str) -> String {
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(5) as usize;
+            let type_filter = params.get("type").and_then(|v| v.as_str());
             let results = crate::learn::recall_for_task_structured(
                 &db_path,
                 question,
                 &touched_files,
                 &node_uuids,
                 max,
+                type_filter,
             );
             serde_json::json!(results)
         }
@@ -441,15 +519,33 @@ fn process_request(input: &str) -> String {
             }
         }
         "mark_obsolete" => {
-            let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
-                Some(u) => u,
-                None => return error_response(&id, "uuid required"),
+            // Accept either single `uuid` or array `uuids` for bulk operations.
+            let uuids: Vec<String> = if let Some(arr) = params.get("uuids").and_then(|v| v.as_array()) {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            } else if let Some(u) = params.get("uuid").and_then(|v| v.as_str()) {
+                vec![u.to_string()]
+            } else {
+                return error_response(&id, "uuid or uuids required");
             };
-            let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-            match crate::learn::mark_obsolete(&db_path, uuid, reason) {
-                Ok(()) => serde_json::json!({"status": "obsoleted", "uuid": uuid}),
-                Err(e) => serde_json::json!({"error": e.to_string()}),
+            if uuids.is_empty() {
+                return error_response(&id, "uuid or uuids required");
             }
+            let reason = params.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+            let mut succeeded = Vec::new();
+            let mut errors = Vec::new();
+            for u in &uuids {
+                match crate::learn::mark_obsolete(&db_path, u, reason) {
+                    Ok(()) => succeeded.push(u.clone()),
+                    Err(e) => errors.push(serde_json::json!({"uuid": u, "error": e.to_string()})),
+                }
+            }
+            serde_json::json!({
+                "status": "obsoleted",
+                "succeeded": succeeded,
+                "errors": errors,
+            })
         }
         "update_knowledge" => {
             let uuid = match params.get("uuid").and_then(|v| v.as_str()) {
@@ -624,17 +720,46 @@ fn process_request(input: &str) -> String {
             serde_json::json!(candidates)
         }
         "merge_knowledge" => {
-            let keep = match params.get("keep_uuid").and_then(|v| v.as_str()) {
-                Some(u) => u,
-                None => return error_response(&id, "keep_uuid required"),
-            };
-            let absorb = match params.get("absorb_uuid").and_then(|v| v.as_str()) {
-                Some(u) => u,
-                None => return error_response(&id, "absorb_uuid required"),
-            };
-            match crate::learn::merge_knowledge(&db_path, keep, absorb) {
-                Ok(()) => serde_json::json!({"status": "merged", "kept": keep, "absorbed": absorb}),
-                Err(e) => serde_json::json!({"error": e.to_string()}),
+            // Bulk variant: pass `merges: [{keep_uuid, absorb_uuid}, ...]`.
+            // Single variant: keep_uuid + absorb_uuid (legacy).
+            if let Some(arr) = params.get("merges").and_then(|v| v.as_array()) {
+                let mut succeeded = Vec::new();
+                let mut errors = Vec::new();
+                for m in arr {
+                    let keep = m.get("keep_uuid").and_then(|v| v.as_str());
+                    let absorb = m.get("absorb_uuid").and_then(|v| v.as_str());
+                    match (keep, absorb) {
+                        (Some(k), Some(a)) => match crate::learn::merge_knowledge(&db_path, k, a) {
+                            Ok(()) => succeeded.push(serde_json::json!({"kept": k, "absorbed": a})),
+                            Err(e) => errors.push(serde_json::json!({
+                                "kept": k, "absorbed": a, "error": e.to_string()
+                            })),
+                        },
+                        _ => errors.push(serde_json::json!({
+                            "error": "each merge requires keep_uuid + absorb_uuid"
+                        })),
+                    }
+                }
+                serde_json::json!({
+                    "status": "merged",
+                    "succeeded": succeeded,
+                    "errors": errors,
+                })
+            } else {
+                let keep = match params.get("keep_uuid").and_then(|v| v.as_str()) {
+                    Some(u) => u,
+                    None => return error_response(&id, "keep_uuid or merges required"),
+                };
+                let absorb = match params.get("absorb_uuid").and_then(|v| v.as_str()) {
+                    Some(u) => u,
+                    None => return error_response(&id, "absorb_uuid required"),
+                };
+                match crate::learn::merge_knowledge(&db_path, keep, absorb) {
+                    Ok(()) => {
+                        serde_json::json!({"status": "merged", "kept": keep, "absorbed": absorb})
+                    }
+                    Err(e) => serde_json::json!({"error": e.to_string()}),
+                }
             }
         }
         "detect_conflicts" => {
@@ -672,9 +797,36 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10) as usize;
             let (analysis, results) = crate::learn::recall_for_diff(&db_path, diff_text, max);
+            let uuids: Vec<String> =
+                results.iter().map(|r| r.knowledge.uuid.clone()).collect();
+            let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
+            // Synthesize matched_by signals so the caller can tell why each entry surfaced.
+            let enriched: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    let mut signals: Vec<&str> = Vec::new();
+                    if r.score.file_mention > 0.0 {
+                        signals.push("filename_overlap");
+                    }
+                    if r.score.node_overlap > 0.0 {
+                        signals.push("node_overlap");
+                    }
+                    if r.score.keyword_match > 0.0 {
+                        signals.push("token_overlap");
+                    }
+                    if r.score.applies_when > 0.0 {
+                        signals.push("applies_when");
+                    }
+                    serde_json::json!({
+                        "knowledge": r.knowledge,
+                        "score": r.score,
+                        "matched_by": signals,
+                    })
+                })
+                .collect();
             serde_json::json!({
                 "analysis": analysis,
-                "relevant_knowledge": results,
+                "relevant_knowledge": enriched,
             })
         }
         // Gen3: knowledge graph reasoning

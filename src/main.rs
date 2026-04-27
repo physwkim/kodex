@@ -134,6 +134,9 @@ enum Commands {
     Context {
         #[arg(long, default_value_t = 20)]
         max_items: usize,
+        /// Inline full descriptions for the top-K most useful entries (0 = none).
+        #[arg(long, default_value_t = 0)]
+        inline_top_k: usize,
     },
 }
 
@@ -266,9 +269,15 @@ fn main() {
             }
         }
         Some(Commands::Actor) => kodex::actor::run_actor(),
-        Some(Commands::Context { max_items }) => {
+        Some(Commands::Context {
+            max_items,
+            inline_top_k,
+        }) => {
             let db = kodex::registry::global_db();
-            print!("{}", kodex::learn::knowledge_context(&db, max_items));
+            print!(
+                "{}",
+                kodex::learn::knowledge_context(&db, max_items, inline_top_k)
+            );
         }
         None => {
             if let Some(path) = cli.path {

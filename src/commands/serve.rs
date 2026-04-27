@@ -148,7 +148,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
     vec![
         tool_def(
             "learn",
-            "Store or reinforce knowledge. Pass context_uuid for chain of thought.",
+            "Store or reinforce knowledge. Save when discovering a non-obvious pattern, fixing a tricky bug, or making a design decision; skip if the compiler/linter would catch it. Save policy by type:\n  - bug_pattern: fix is non-obvious AND likely to recur (skip one-off compiler errors)\n  - convention: project-wide rule a newcomer wouldn't infer from the code\n  - decision: a chosen approach with rationale that future readers need to understand the code\n  - architecture: cross-module structure that isn't visible in any single file\n  - lesson: outcome of a failed approach worth remembering\n  - tech_debt: known shortcut with explicit owner/condition for cleanup\n  - performance: measured optimization (skip speculative ones)\nPass context_uuid for chain of thought. Pass supersedes=<old_uuid> when this entry replaces an obsolete one — old entry is auto-obsoleted and back-references are written. Response includes merge_candidates if a similar entry exists.",
             &[
                 ("title", "string", true),
                 ("description", "string", true),
@@ -157,6 +157,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 ("context_uuid", "string", false),
                 ("related_nodes", "array", false),
                 ("tags", "array", false),
+                ("supersedes", "string", false),
             ],
         ),
         tool_def(
@@ -166,12 +167,13 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "recall_for_task",
-            "Ranked knowledge retrieval for current task. Prefer this over recall for natural-language queries.",
+            "Ranked knowledge retrieval for current task. Prefer this over recall for natural-language queries. Optional `type` filters by knowledge type (e.g. bug_pattern, tech_debt).",
             &[
                 ("question", "string", false),
                 ("touched_files", "array", false),
                 ("node_uuids", "array", false),
                 ("max_items", "number", false),
+                ("type", "string", false),
             ],
         ),
         tool_def(
@@ -192,16 +194,20 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "knowledge_context",
-            "All knowledge for session bootstrap.",
-            &[("max_items", "number", false)],
+            "All knowledge for session bootstrap. Set `inline_top_k=N` to inline full descriptions of the N highest-priority entries (saves a follow-up `recall` round-trip).",
+            &[
+                ("max_items", "number", false),
+                ("inline_top_k", "number", false),
+            ],
         ),
         tool_def(
             "query_graph",
-            "BFS/DFS search over code graph.",
+            "BFS/DFS search over code graph. Set `format=mermaid` to get a Mermaid flowchart instead of plain text.",
             &[
                 ("question", "string", true),
                 ("depth", "number", false),
                 ("token_budget", "number", false),
+                ("format", "string", false),
             ],
         ),
         tool_def(
@@ -244,8 +250,12 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "mark_obsolete",
-            "Mark knowledge as obsolete.",
-            &[("uuid", "string", true), ("reason", "string", false)],
+            "Mark knowledge as obsolete. Pass `uuids` (array) instead of `uuid` to obsolete several at once.",
+            &[
+                ("uuid", "string", false),
+                ("uuids", "array", false),
+                ("reason", "string", false),
+            ],
         ),
         tool_def(
             "link_knowledge",
@@ -292,10 +302,11 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "merge_knowledge",
-            "Merge duplicate entries.",
+            "Merge duplicate entries. Pass `merges: [{keep_uuid, absorb_uuid}, ...]` to merge several pairs in one call.",
             &[
-                ("keep_uuid", "string", true),
-                ("absorb_uuid", "string", true),
+                ("keep_uuid", "string", false),
+                ("absorb_uuid", "string", false),
+                ("merges", "array", false),
             ],
         ),
         tool_def("detect_conflicts", "Find conflicting knowledge.", &[]),

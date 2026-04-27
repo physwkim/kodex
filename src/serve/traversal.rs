@@ -130,6 +130,56 @@ fn dfs_recurse(
     }
 }
 
+/// Render a subgraph as a Mermaid flowchart suitable for pasting into docs.
+/// Mermaid sanitizes node ids (alnum + underscore) and quotes labels.
+pub fn subgraph_to_mermaid(
+    graph: &KodexGraph,
+    nodes: &HashSet<String>,
+    _edges: &[(String, String)],
+) -> String {
+    fn sanitize_id(raw: &str) -> String {
+        let mut s = String::with_capacity(raw.len());
+        for c in raw.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                s.push(c);
+            } else {
+                s.push('_');
+            }
+        }
+        if s.chars().next().map(|c| c.is_numeric()).unwrap_or(true) {
+            s = format!("n_{s}");
+        }
+        s
+    }
+    fn escape_label(s: &str) -> String {
+        s.replace('"', "'")
+    }
+
+    let mut lines = vec!["flowchart LR".to_string()];
+    for nid in nodes {
+        let label = graph
+            .get_node(nid)
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| nid.clone());
+        lines.push(format!(
+            "    {}[\"{}\"]",
+            sanitize_id(nid),
+            escape_label(&label)
+        ));
+    }
+    for (src, tgt, edge) in graph.edges() {
+        if nodes.contains(src) && nodes.contains(tgt) {
+            lines.push(format!(
+                "    {} -->|{}| {}",
+                sanitize_id(src),
+                escape_label(&edge.relation),
+                sanitize_id(tgt)
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 /// Render a subgraph as text, limited by token budget (~4 chars per token).
 pub fn subgraph_to_text(
     graph: &KodexGraph,
@@ -172,5 +222,98 @@ pub fn subgraph_to_text(
         result[..end].to_string()
     } else {
         result
+    }
+}
+
+#[cfg(test)]
+mod traversal_tests {
+    use super::*;
+    use crate::graph::build_from_extraction;
+    use crate::types::{Confidence, Edge, ExtractionResult, FileType, Node};
+
+    fn make_graph() -> KodexGraph {
+        let extraction = ExtractionResult {
+            nodes: vec![
+                Node {
+                    id: "a-mod.foo".into(),
+                    label: "foo()".into(),
+                    file_type: FileType::Code,
+                    source_file: "a.py".into(),
+                    source_location: Some("L1".into()),
+                    confidence: Some(Confidence::EXTRACTED),
+                    confidence_score: Some(1.0),
+                    community: None,
+                    norm_label: None,
+                    degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
+                    body_hash: None,
+                },
+                Node {
+                    id: "b-mod.bar".into(),
+                    label: "bar()".into(),
+                    file_type: FileType::Code,
+                    source_file: "b.py".into(),
+                    source_location: Some("L1".into()),
+                    confidence: Some(Confidence::EXTRACTED),
+                    confidence_score: Some(1.0),
+                    community: None,
+                    norm_label: None,
+                    degree: None,
+                    uuid: None,
+                    fingerprint: None,
+                    logical_key: None,
+                    body_hash: None,
+                },
+            ],
+            edges: vec![Edge {
+                source: "a-mod.foo".into(),
+                target: "b-mod.bar".into(),
+                relation: "calls".into(),
+                confidence: Confidence::EXTRACTED,
+                source_file: "a.py".into(),
+                source_location: Some("L5".into()),
+                confidence_score: Some(1.0),
+                weight: 1.0,
+                original_src: None,
+                original_tgt: None,
+            }],
+            ..Default::default()
+        };
+        build_from_extraction(&extraction)
+    }
+
+    #[test]
+    fn test_subgraph_to_mermaid_renders_flowchart() {
+        let graph = make_graph();
+        let mut nodes = HashSet::new();
+        nodes.insert("a-mod.foo".to_string());
+        nodes.insert("b-mod.bar".to_string());
+        let edges = vec![("a-mod.foo".into(), "b-mod.bar".into())];
+        let out = subgraph_to_mermaid(&graph, &nodes, &edges);
+        assert!(
+            out.starts_with("flowchart LR"),
+            "should be a Mermaid flowchart: {out}"
+        );
+        assert!(out.contains("foo()"));
+        assert!(out.contains("bar()"));
+        assert!(out.contains("|calls|"));
+        // Ids must be alphanum/underscore (no '.' or '-')
+        for line in out.lines().skip(1) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Each subsequent line either declares a node ("id[\"label\"]") or an edge.
+            let id_part = trimmed.split('[').next().unwrap_or("").trim();
+            let id_part = id_part.split_whitespace().next().unwrap_or("");
+            for c in id_part.chars() {
+                assert!(
+                    c.is_alphanumeric() || c == '_',
+                    "invalid Mermaid id char {c:?} in line {trimmed}"
+                );
+            }
+        }
     }
 }

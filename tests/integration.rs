@@ -352,7 +352,7 @@ fn test_cluster_and_analyze() {
 }
 
 #[test]
-fn test_hdf5_round_trip() {
+fn test_sqlite_round_trip() {
     let dir = tempfile::TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
 
@@ -579,7 +579,7 @@ fn test_knowledge_context_index() {
     )
     .unwrap();
 
-    let ctx = kodex::learn::knowledge_context(&db, 10);
+    let ctx = kodex::learn::knowledge_context(&db, 10, 0);
     assert!(ctx.contains("Knowledge:"));
     assert!(ctx.contains("Use SQLite"));
     assert!(ctx.contains("Error Handling"));
@@ -724,6 +724,7 @@ fn test_knowledge_graph_scenario() {
         &["project/repo.py".into()],
         &["node-repo".into()],
         5,
+        None,
     );
     assert!(!results.is_empty());
     assert_eq!(
@@ -1127,8 +1128,14 @@ fn test_multi_project_recall() {
     assert_eq!(data.knowledge.len(), 2);
 
     // Recall for auth.py should prioritize Auth Pattern
-    let results =
-        kodex::learn::recall_for_task(&db, "auth", &["project-a/auth.py".into()], &[uuid_a], 5);
+    let results = kodex::learn::recall_for_task(
+        &db,
+        "auth",
+        &["project-a/auth.py".into()],
+        &[uuid_a],
+        5,
+        None,
+    );
     assert!(!results.is_empty());
     assert_eq!(
         results[0].title, "Auth Pattern A",
@@ -1142,6 +1149,7 @@ fn test_multi_project_recall() {
         &["project-b/payment.py".into()],
         &[uuid_b],
         5,
+        None,
     );
     assert!(!results.is_empty());
     assert_eq!(
@@ -1351,6 +1359,7 @@ fn test_reasoning_affects_ranking() {
         &["project/auth.py".into()],
         &["node-auth".into()],
         10,
+        None,
     );
 
     assert!(results.len() >= 2, "Should return both entries");
