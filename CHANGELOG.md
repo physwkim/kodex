@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.1 (2026-04-28)
+
+Documentation-only repositioning of the `embeddings` feature based on real-use evaluation: a 384-dim BGE-small cosine score is a worse equivalence judge than the LLM caller reading the inlined signature itself. The right framing is **candidate pre-filter at scale**, not "semantic match".
+
+- `compare_graphs` description now states explicitly that `semantic_embedding=true` returns candidates for the LLM to judge — it doesn't decide equivalence. For small gap counts (tens), the lexical Jaccard pass + LLM reasoning over `with_signature` output already outperforms cosine, and the embedding pipeline (~33MB model, ORT native dep, ~5min `kodex embed`) is overhead. Reach for it only at scale (hundreds of gaps), in batch automation without an LLM in the loop, or when token-budget for direct LLM judgment is expensive.
+- `kodex embed` CLI help and module docs updated with the same framing.
+- `embedding` module top-level doc rewritten to lead with positioning before mechanics.
+- No code changes — feature flag, defaults, and behavior are all unchanged.
+
 ## v0.9.0 (2026-04-28)
 
 New `detect_renames` MCP tool — keeps knowledge memories from drifting silently when code is refactored. The classic failure mode: you `learn()` something pointing at `Server::handle_search`, the function is renamed to `handle_search_request`, the link's `node_uuid` no longer resolves, and the memory becomes invisible to future recalls. `detect_renames` catches these orphans and proposes replacements you can act on.

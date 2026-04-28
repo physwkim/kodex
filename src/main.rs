@@ -130,7 +130,10 @@ enum Commands {
     },
     /// Run actor daemon (internal, started by serve)
     Actor,
-    /// Embed code symbols for semantic similarity search (`embeddings` feature only)
+    /// Embed code symbols as a candidate pre-filter for cross-language
+    /// semantic search. Only useful at scale (hundreds of gaps); for small
+    /// counts the LLM's reasoning over `with_signature` output is better.
+    /// Requires `embeddings` Cargo feature.
     Embed {
         /// Limit to nodes whose source_file matches this substring
         #[arg(long)]

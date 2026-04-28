@@ -1,9 +1,15 @@
 //! `kodex embed`: precompute embeddings for code-symbol nodes.
 //!
 //! Walks the graph, builds an embedding text for each function/class/method
-//! node (label optionally augmented with source_location), and stores the
-//! resulting vectors in the `node_embeddings` SQLite table. Used by
-//! `compare_graphs --semantic-embedding` for cross-language semantic match.
+//! node (label augmented with the surrounding signature + docstring lines),
+//! and stores the resulting vectors in the `node_embeddings` SQLite table.
+//!
+//! Used by `compare_graphs --semantic-embedding` as a **candidate
+//! pre-filter** — it returns top-K right-side labels by cosine but doesn't
+//! decide equivalence. The LLM caller is expected to read each candidate's
+//! inlined signature (via `with_signature=true`) and judge equivalence
+//! with its own reasoning. See `kodex::embedding` for the full positioning
+//! note.
 
 #![cfg(feature = "embeddings")]
 

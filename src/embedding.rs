@@ -1,15 +1,33 @@
-//! Optional sentence embedding for cross-language semantic similarity.
+//! Optional sentence embedding — a **candidate pre-filter** for
+//! cross-language semantic similarity.
+//!
+//! ## Positioning
+//!
+//! This is not an equivalence judge. The 384-dim BGE-small vectors capture
+//! surface co-occurrence patterns, not deep semantic understanding. The
+//! intended use is to *narrow* a large right-side candidate pool down to
+//! the top-K nearest neighbors so the LLM caller can read each one's
+//! signature + docstring (via `with_signature=true`) and make the actual
+//! equivalence call with its own native reasoning.
+//!
+//! For most workflows the lexical token-Jaccard pass (`semantic_threshold`,
+//! v0.7.0) plus the LLM's own semantic understanding over inlined
+//! signatures already outperforms cosine, and the embedding pipeline
+//! (~33MB model, ORT native dep, ~5min first-time `kodex embed`) is
+//! overhead. Reach for it only when scale demands it: hundreds of gaps to
+//! classify, batch automation without an LLM in the loop, or contexts
+//! where token-budget for direct LLM judgment is expensive.
+//!
+//! ## Mechanics
 //!
 //! Compiled only with the `embeddings` Cargo feature so the default build
-//! stays free of ONNX runtime / model download weight. Used by:
+//! stays free of ONNX runtime / model download weight. Two surfaces:
 //!
 //! - `kodex embed`: precompute embeddings for every code symbol and store
-//!   them in SQLite.
-//! - `compare_graphs --semantic-embedding`: find right-side labels whose
-//!   embedding has high cosine similarity to a left-side gap, catching
-//!   "implemented under a different name" cases that the lexical
-//!   token-Jaccard pass misses (e.g. C++ `Value::copyIn` vs Rust
-//!   `Value::set<T>`).
+//!   them in SQLite (`node_embeddings` table).
+//! - `compare_graphs --semantic-embedding`: cosine over precomputed
+//!   right-side embeddings, returns top-K candidates merged into each
+//!   gap's `candidate_matches` array.
 //!
 //! Default model: BAAI/bge-small-en-v1.5 (384-dim, ~33MB on disk after the
 //! first-use download). Caches under `~/.cache/fastembed/` by default.
