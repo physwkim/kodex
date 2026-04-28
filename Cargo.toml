@@ -1,6 +1,6 @@
 [package]
 name = "kodex"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
@@ -27,6 +27,7 @@ globset = "0.4"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
 nucleo-matcher = "0.3"
+fastembed = { version = "4", optional = true }
 
 # Optional dependencies
 tree-sitter = { version = "0.24", optional = true }
@@ -90,4 +91,5 @@ mcp = ["tokio"]
 svg = ["plotters"]
 parallel = ["rayon"]
 video = ["whisper-rs", "hound"]
+embeddings = ["fastembed"]
 all = ["all-languages", "fetch", "watch", "mcp", "svg", "parallel"]

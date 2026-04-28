@@ -5,6 +5,8 @@ pub mod cache;
 pub mod cluster;
 pub mod detect;
 pub mod diff;
+#[cfg(feature = "embeddings")]
+pub mod embedding;
 pub mod error;
 pub mod export;
 pub mod extract;

@@ -595,8 +595,62 @@ fn process_request(input: &str) -> String {
                     .map(|g| serde_json::to_value(g).unwrap_or(serde_json::Value::Null))
                     .collect()
             };
+
+            // Optional embedding-based semantic pass — cosine similarity
+            // over precomputed sentence vectors. Requires `kodex embed` to
+            // have been run, plus building with --features embeddings.
+            let semantic_embedding = params
+                .get("semantic_embedding")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let _embedding_threshold = params
+                .get("embedding_threshold")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+                .unwrap_or(0.65);
+            let _embedding_top_per_gap = params
+                .get("embedding_top_per_gap")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(3);
+            let final_enriched: Vec<serde_json::Value> = {
+                #[cfg(feature = "embeddings")]
+                {
+                    if semantic_embedding {
+                        match semantic_embedding_pass(
+                            &graph,
+                            enriched,
+                            &right.to_lowercase(),
+                            &db_path,
+                            _embedding_threshold,
+                            _embedding_top_per_gap,
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                return error_response(
+                                    &id,
+                                    &format!("semantic_embedding pass failed: {e}"),
+                                );
+                            }
+                        }
+                    } else {
+                        enriched
+                    }
+                }
+                #[cfg(not(feature = "embeddings"))]
+                {
+                    if semantic_embedding {
+                        return error_response(
+                            &id,
+                            "semantic_embedding=true requires kodex built with --features embeddings",
+                        );
+                    }
+                    enriched
+                }
+            };
+
             let mut response = serde_json::json!({
-                "gaps": enriched,
+                "gaps": final_enriched,
                 "count": gaps.len(),
             });
             if let Some(stale) = staleness_warning(project_dir) {
@@ -1305,6 +1359,121 @@ fn process_request(input: &str) -> String {
         serde_json::to_string(&result).unwrap_or_default(),
         serde_json::to_string(&id).unwrap_or_default(),
     )
+}
+
+#[cfg(feature = "embeddings")]
+struct Candidate {
+    label: String,
+    source_file: String,
+    vec: Vec<f32>,
+}
+
+/// Embedding-based pass for `compare_graphs --semantic-embedding`. For each
+/// gap object in `enriched`, embed the gap's label, compute cosine vs all
+/// stored embeddings whose source_file matches `right_pattern`, and merge
+/// top-K matches above the threshold into the gap's `candidate_matches`
+/// array (de-duplicated by label). Returns the modified array.
+#[cfg(feature = "embeddings")]
+fn semantic_embedding_pass(
+    graph: &crate::graph::KodexGraph,
+    mut enriched: Vec<serde_json::Value>,
+    right_pattern: &str,
+    db_path: &std::path::Path,
+    threshold: f32,
+    top_per_gap: usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    use crate::embedding::{bytes_to_vec, cosine, Embedder};
+
+    let stored = crate::storage::load_all_embeddings(db_path)
+        .map_err(|e| e.to_string())?;
+    if stored.is_empty() {
+        return Err("no embeddings stored — run `kodex embed` first".into());
+    }
+
+    // Restrict the candidate pool to right-pattern files. Build a parallel
+    // vec of (label, source_file, vector) so we don't re-look up the graph
+    // node per gap.
+    let candidates: Vec<Candidate> = stored
+        .into_iter()
+        .filter_map(|row| {
+            let node = graph.get_node(&row.node_id)?;
+            if !node.source_file.to_lowercase().contains(right_pattern) {
+                return None;
+            }
+            let v = bytes_to_vec(&row.vec);
+            if v.is_empty() {
+                None
+            } else {
+                Some(Candidate {
+                    label: node.label.clone(),
+                    source_file: node.source_file.clone(),
+                    vec: v,
+                })
+            }
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(enriched);
+    }
+
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    for gap in enriched.iter_mut() {
+        let label = match gap.get("label").and_then(|v| v.as_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let q = match embedder.embed_one(&label) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let mut scored: Vec<(f32, &Candidate)> = candidates
+            .iter()
+            .map(|c| (cosine(&q, &c.vec), c))
+            .filter(|(s, _)| *s >= threshold)
+            .collect();
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        scored.truncate(top_per_gap.max(1));
+        if scored.is_empty() {
+            continue;
+        }
+        // Merge with existing lexical candidate_matches; dedupe by label.
+        let mut existing: Vec<serde_json::Value> = gap
+            .get("candidate_matches")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for (cos, c) in scored {
+            if let Some(item) = existing.iter_mut().find(|v| {
+                v.get("label").and_then(|x| x.as_str()) == Some(c.label.as_str())
+            }) {
+                item["cosine"] = serde_json::json!(cos);
+            } else {
+                existing.push(serde_json::json!({
+                    "label": c.label,
+                    "source_file": c.source_file,
+                    "jaccard": 0.0_f32,
+                    "cosine": cos,
+                }));
+            }
+        }
+        // Re-sort the merged list by cosine desc (then jaccard desc).
+        existing.sort_by(|a, b| {
+            let ac = a
+                .get("cosine")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let bc = b
+                .get("cosine")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            bc.partial_cmp(&ac).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        gap["candidate_matches"] = serde_json::json!(existing);
+    }
+    Ok(enriched)
 }
 
 /// Report whether the graph is behind the project's git HEAD. Returns a JSON

@@ -543,6 +543,119 @@ pub fn forget_project(db_path: &Path, project_path: &str) -> crate::error::Resul
 }
 
 // ---------------------------------------------------------------------------
+// Node embeddings
+// ---------------------------------------------------------------------------
+
+/// One stored embedding row (always available regardless of `embeddings`
+/// feature — the BLOB is opaque bytes here; encoding/decoding is in the
+/// `embedding` module).
+#[derive(Debug, Clone)]
+pub struct StoredEmbedding {
+    pub node_id: String,
+    pub model: String,
+    pub dim: usize,
+    pub vec: Vec<u8>,
+}
+
+/// Upsert one embedding row.
+pub fn store_embedding(
+    db_path: &Path,
+    node_id: &str,
+    model: &str,
+    dim: usize,
+    vec: &[u8],
+) -> crate::error::Result<()> {
+    let conn = open_db(db_path)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    conn.execute(
+        "INSERT INTO node_embeddings (node_id, model, dim, vec, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(node_id) DO UPDATE SET model=excluded.model, dim=excluded.dim, vec=excluded.vec, updated_at=excluded.updated_at",
+        rusqlite::params![node_id, model, dim as i64, vec, ts],
+    )
+    .map_err(|e| crate::error::KodexError::Other(format!("store_embedding: {e}")))?;
+    Ok(())
+}
+
+/// Bulk upsert. Wraps everything in a single transaction for speed.
+pub fn store_embeddings_bulk(
+    db_path: &Path,
+    rows: &[StoredEmbedding],
+) -> crate::error::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_db(db_path)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let tx = conn
+        .transaction()
+        .map_err(|e| crate::error::KodexError::Other(format!("tx: {e}")))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO node_embeddings (node_id, model, dim, vec, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(node_id) DO UPDATE SET model=excluded.model, dim=excluded.dim, vec=excluded.vec, updated_at=excluded.updated_at",
+            )
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.node_id,
+                r.model,
+                r.dim as i64,
+                &r.vec,
+                ts
+            ])
+            .map_err(|e| crate::error::KodexError::Other(format!("exec: {e}")))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| crate::error::KodexError::Other(format!("commit: {e}")))?;
+    Ok(())
+}
+
+/// Load all embeddings as `(node_id, vec_bytes)`. Caller decodes via
+/// `embedding::bytes_to_vec` if the `embeddings` feature is enabled.
+pub fn load_all_embeddings(
+    db_path: &Path,
+) -> crate::error::Result<Vec<StoredEmbedding>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare("SELECT node_id, model, dim, vec FROM node_embeddings")
+        .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(StoredEmbedding {
+                node_id: row.get(0)?,
+                model: row.get(1)?,
+                dim: row.get::<_, i64>(2)? as usize,
+                vec: row.get(3)?,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?);
+    }
+    Ok(out)
+}
+
+/// Count embedded nodes (status indicator for the `kodex embed` command).
+pub fn count_embeddings(db_path: &Path) -> crate::error::Result<usize> {
+    let conn = open_db(db_path)?;
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM node_embeddings", [], |r| r.get(0))
+        .map_err(|e| crate::error::KodexError::Other(format!("count: {e}")))?;
+    Ok(n as usize)
+}
+
+// ---------------------------------------------------------------------------
 // SQLite internals
 // ---------------------------------------------------------------------------
 
@@ -593,6 +706,13 @@ fn create_tables(conn: &Connection) -> crate::error::Result<()> {
         CREATE TABLE IF NOT EXISTS review_queue (
             knowledge_uuid TEXT, reason TEXT, created_at INTEGER, priority INTEGER,
             completed INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS node_embeddings (
+            node_id TEXT PRIMARY KEY,
+            model TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            vec BLOB NOT NULL,
+            updated_at INTEGER DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
         CREATE INDEX IF NOT EXISTS idx_knowledge_title ON knowledge(title);

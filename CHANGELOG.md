@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.8.0 (2026-04-28)
+
+Embedding-based semantic similarity for cross-language API parity. Catches the cases the v0.7.0 token-Jaccard pass misses (e.g. C++ `Value::copyIn(const void*, StoreType)` ↔ Rust `Value::set<T>(...)` — different identifiers, same purpose).
+
+### `embeddings` Cargo feature (default off)
+
+- Optional dependency on `fastembed` 4.x (bundles ONNX runtime via `ort`). The default build stays unchanged in size and dependencies; users opt in with `cargo install kodex --features embeddings`.
+- Default model: BAAI/BGE-small-en-v1.5 (384-dim, ~33MB on first-use download, cached under `~/.cache/fastembed/`).
+
+### New CLI: `kodex embed`
+
+- Walks the global graph, embeds every function/class/method node's label (augmented with the source file basename for tiny disambiguation context), and stores the resulting f32 vectors in a new `node_embeddings` SQLite table.
+- Skips file-level / concept hubs (no semantic content) and existing rows by default. Narrow with `--source-pattern PATTERN`.
+- Without `--features embeddings`: prints a clear "rebuild with --features embeddings" message instead of a confusing error.
+
+### `compare_graphs --semantic-embedding`
+
+- New `semantic_embedding=true` flag. When set, after the lexical Jaccard pass, each gap's label is embedded and cosine-compared against the precomputed embeddings of right-side labels (filtered by `right_pattern`). Top matches above `embedding_threshold` (default 0.65) are merged into `candidate_matches` with both `cosine` and `jaccard` populated, sorted by cosine.
+- De-duplicates by label across the two passes, so a candidate that lights up on both scores well on both axes.
+- Returns a clear error if `kodex embed` hasn't been run, or if the binary lacks the `embeddings` feature.
+
+### Internals
+
+- New `embedding` module: `Embedder` (model wrapper), `cosine`, `vec_to_bytes`/`bytes_to_vec` (BLOB codec).
+- New `storage::store_embedding`/`store_embeddings_bulk`/`load_all_embeddings`/`count_embeddings` (always available — the BLOB is opaque without the feature).
+- New `node_embeddings` SQLite table, transparently created by the existing `create_tables` migration.
+- 5 new tests for embedding round-trip and cosine math (lib total: 124).
+
 ## v0.7.2 (2026-04-28)
 
 `query_graph` outputs now expose enough metadata to chain into the next call without a follow-up `get_node`.

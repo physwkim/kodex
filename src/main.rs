@@ -130,6 +130,15 @@ enum Commands {
     },
     /// Run actor daemon (internal, started by serve)
     Actor,
+    /// Embed code symbols for semantic similarity search (`embeddings` feature only)
+    Embed {
+        /// Limit to nodes whose source_file matches this substring
+        #[arg(long)]
+        source_pattern: Option<String>,
+        /// Embed only nodes that don't already have a stored embedding
+        #[arg(long, default_value_t = true)]
+        skip_existing: bool,
+    },
     /// Print knowledge context summary (for SessionStart hooks)
     Context {
         #[arg(long, default_value_t = 20)]
@@ -269,6 +278,28 @@ fn main() {
             }
         }
         Some(Commands::Actor) => kodex::actor::run_actor(),
+        Some(Commands::Embed {
+            source_pattern,
+            skip_existing,
+        }) => {
+            #[cfg(feature = "embeddings")]
+            {
+                let db = kodex::registry::global_db();
+                match commands::embed::embed_nodes(&db, source_pattern.as_deref(), skip_existing)
+                {
+                    Ok(n) => println!("Embedded {n} nodes."),
+                    Err(e) => eprintln!("Embed error: {e}"),
+                }
+            }
+            #[cfg(not(feature = "embeddings"))]
+            {
+                let _ = (source_pattern, skip_existing);
+                eprintln!(
+                    "kodex was built without the `embeddings` feature. Reinstall with: \
+                     cargo install kodex --features embeddings"
+                );
+            }
+        }
         Some(Commands::Context {
             max_items,
             inline_top_k,

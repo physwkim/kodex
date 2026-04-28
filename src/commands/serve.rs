@@ -261,6 +261,9 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 ("semantic_threshold", "number", false),
                 ("semantic_top_per_gap", "number", false),
                 ("compose_priority", "boolean", false),
+                ("semantic_embedding", "boolean", false),
+                ("embedding_threshold", "number", false),
+                ("embedding_top_per_gap", "number", false),
             ],
         ),
         tool_def(

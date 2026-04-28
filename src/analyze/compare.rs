@@ -156,6 +156,14 @@ pub struct CandidateMatch {
     pub label: String,
     pub source_file: String,
     pub jaccard: f32,
+    /// Cosine similarity from the embedding pass. 0.0 when only the lexical
+    /// (token-Jaccard) pass produced this match.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub cosine: f32,
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// Normalize a label to a comparable identifier form:
@@ -319,6 +327,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
                             label: label.to_string(),
                             source_file: source.to_string(),
                             jaccard: j,
+                            cosine: 0.0,
                         })
                     } else {
                         None

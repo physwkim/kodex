@@ -1,3 +1,5 @@
+#[cfg(feature = "embeddings")]
+pub mod embed;
 pub mod query;
 pub mod run;
 pub mod serve;
