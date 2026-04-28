@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.1 (2026-04-28)
+
+Workflow follow-ups based on real-use feedback from v0.6.0.
+
+- `query_graph`: vague natural-language `question` paired with a precise `source_pattern` (e.g. `"how does monitor receive updates"` + `pvxs/src/clientmon`) used to return empty — fuzzy scoring found nothing in scope. Now falls back to seeding with the highest-degree filter-passing nodes, so the caller still gets an architectural overview.
+- `get_node`: new `expand=<relation>` parameter (e.g. `expand="contains"`) enumerates the top candidate's outgoing neighbors via that relation, sorted by degree. Replaces grep + manual reading when listing a class's API surface. The candidate with the most matching outgoing edges is auto-selected (returned as `members_source`), so a file-level hub with 18 real methods beats an empty stub class on a tied fuzzy score.
+- `get_node`: new `source_pattern` filter so cross-language overloaded names (`SharedPV` in pvxs vs pva-rs) can be disambiguated without iterating top-N.
+- `compare_graphs` description rewritten to lead with the API-parity use case and recommend the `compare_graphs` → `get_node` → `query_graph` workflow.
+- 2 new tests for `top_degree_in_filter` and `TraversalFilter::is_active`.
+
 ## v0.6.0 (2026-04-28)
 
 MCP retrieval upgrade: filtering, set-difference, and nucleo-matcher fuzzy ranking.

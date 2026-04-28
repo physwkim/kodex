@@ -105,6 +105,34 @@ pub fn score_nodes_filtered(
     scored
 }
 
+/// True if any field of `filter` constrains node selection. Used by the
+/// query_graph fallback: a vague natural-language question against a precise
+/// `source_pattern` produces zero scored hits because nucleo terms don't
+/// fuzzy-match anything in the scoped subset — in that case the caller wants
+/// "show me what's in this area" instead of an empty result.
+impl TraversalFilter {
+    pub fn is_active(&self) -> bool {
+        self.source_pattern.is_some() || self.community.is_some()
+    }
+}
+
+/// Top-N filter-passing nodes by degree. Used as fallback seeds when fuzzy
+/// scoring produces nothing within the filter's scope.
+pub fn top_degree_in_filter(
+    graph: &KodexGraph,
+    filter: &TraversalFilter,
+    n: usize,
+) -> Vec<String> {
+    let mut ranked: Vec<(usize, String)> = graph
+        .node_ids()
+        .filter(|id| filter.matches_node(graph, id))
+        .map(|id| (graph.degree(id), id.clone()))
+        .filter(|(d, _)| *d > 0)
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    ranked.into_iter().take(n).map(|(_, id)| id).collect()
+}
+
 /// Return the match positions (char indices) of `query` against `label`,
 /// using the same matcher kodex uses for ranking. Empty vec when no match.
 /// Useful for `get_node` to highlight which characters made a candidate rank.
@@ -360,6 +388,81 @@ mod traversal_tests {
     #[test]
     fn label_match_indices_empty_query_returns_empty() {
         assert!(label_match_indices("anything", "").is_empty());
+    }
+
+    #[test]
+    fn top_degree_in_filter_returns_high_degree_in_scope() {
+        // Build: 1 high-degree node in `domain.rs`, 1 high-degree node out of scope.
+        // top_degree_in_filter should only return the in-scope one.
+        let mut nodes = vec![
+            mk_simple_node("a", "in_scope_hub", "domain.rs"),
+            mk_simple_node("b", "out_of_scope", "other.rs"),
+        ];
+        let mut edges = Vec::new();
+        for i in 0..6 {
+            nodes.push(mk_simple_node(&format!("u{i}"), &format!("user{i}"), "domain.rs"));
+            edges.push(Edge {
+                source: "a".into(),
+                target: format!("u{i}"),
+                relation: "calls".into(),
+                confidence: Confidence::EXTRACTED,
+                source_file: "domain.rs".into(),
+                source_location: None,
+                confidence_score: Some(1.0),
+                weight: 1.0,
+                original_src: None,
+                original_tgt: None,
+            });
+            edges.push(Edge {
+                source: "b".into(),
+                target: format!("u{i}"),
+                relation: "calls".into(),
+                confidence: Confidence::EXTRACTED,
+                source_file: "other.rs".into(),
+                source_location: None,
+                confidence_score: Some(1.0),
+                weight: 1.0,
+                original_src: None,
+                original_tgt: None,
+            });
+        }
+        let g = build_from_extraction(&ExtractionResult {
+            nodes,
+            edges,
+            ..Default::default()
+        });
+        let filter = TraversalFilter {
+            source_pattern: Some("domain".into()),
+            ..Default::default()
+        };
+        let top = top_degree_in_filter(&g, &filter, 3);
+        assert!(top.contains(&"a".to_string()), "in-scope hub must seed: {top:?}");
+        assert!(
+            !top.contains(&"b".to_string()),
+            "out-of-scope must not seed: {top:?}"
+        );
+    }
+
+    #[test]
+    fn filter_is_active_detects_constraints() {
+        assert!(!TraversalFilter::default().is_active());
+        assert!(TraversalFilter {
+            source_pattern: Some("x".into()),
+            ..Default::default()
+        }
+        .is_active());
+        assert!(TraversalFilter {
+            community: Some(7),
+            ..Default::default()
+        }
+        .is_active());
+        // hub_threshold alone is not a "constraint" — it tunes BFS but doesn't
+        // restrict the scope.
+        assert!(!TraversalFilter {
+            hub_threshold: Some(50),
+            ..Default::default()
+        }
+        .is_active());
     }
 
     #[test]

@@ -231,7 +231,15 @@ fn process_request(input: &str) -> String {
                 .map(|t| t.to_lowercase())
                 .collect();
             let scored = crate::serve::score_nodes_filtered(&graph, &terms, &filter);
-            let start: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
+            let mut start: Vec<String> =
+                scored.into_iter().take(3).map(|(_, id)| id).collect();
+            // Fallback: vague question + precise filter (e.g. source_pattern) often
+            // produces zero fuzzy hits because no labels in the scoped subset
+            // match the question terms. Seed with high-degree nodes in scope so
+            // the caller still sees something useful.
+            if start.is_empty() && filter.is_active() {
+                start = crate::serve::top_degree_in_filter(&graph, &filter, 3);
+            }
             let (visited, edges) = crate::serve::bfs_filtered(&graph, &start, depth, &filter);
             match format {
                 "mermaid" => serde_json::json!(crate::serve::subgraph_to_mermaid(
@@ -253,15 +261,60 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize)
                 .unwrap_or(3);
-            let matches = crate::serve::score_nodes(&graph, &[label.to_lowercase()]);
+            let expand = params
+                .get("expand")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let expand_top_n = params
+                .get("expand_top_n")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(20);
+            let source_pattern = params
+                .get("source_pattern")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let filter = crate::serve::TraversalFilter {
+                source_pattern,
+                ..Default::default()
+            };
+            let matches = crate::serve::score_nodes_filtered(
+                &graph,
+                &[label.to_lowercase()],
+                &filter,
+            );
             if matches.is_empty() {
                 serde_json::json!({"error": "not found", "candidates": []})
             } else {
-                let candidates: Vec<serde_json::Value> = matches
-                    .into_iter()
-                    .take(top_n.max(1))
+                let top_matches: Vec<(usize, String)> =
+                    matches.into_iter().take(top_n.max(1)).collect();
+
+                // When expanding, the candidate with the highest fuzzy score
+                // isn't always the one with the API surface — `SharedPV::Impl`
+                // (single-class, deg 1) and `sharedpv` (file hub, deg 21) tie
+                // on label match but only the file hub `contains` the methods.
+                // Pick the candidate with the most matching outgoing edges.
+                let expand_target: Option<String> = expand.as_deref().and_then(|rel| {
+                    top_matches
+                        .iter()
+                        .map(|(_, id)| {
+                            let count = graph
+                                .edges()
+                                .filter(|(s, _, e)| *s == id.as_str() && e.relation == rel)
+                                .count();
+                            (count, id.clone())
+                        })
+                        .max_by_key(|(c, _)| *c)
+                        .filter(|(c, _)| *c > 0)
+                        .map(|(_, id)| id)
+                });
+
+                let candidates: Vec<serde_json::Value> = top_matches
+                    .iter()
                     .filter_map(|(score, nid)| {
-                        let node = graph.get_node(&nid)?;
+                        let node = graph.get_node(nid)?;
                         let indices =
                             crate::serve::label_match_indices(&node.label, label);
                         let highlight = highlight_label(&node.label, &indices);
@@ -274,11 +327,43 @@ fn process_request(input: &str) -> String {
                             "source_file": node.source_file,
                             "source_location": node.source_location,
                             "community": node.community,
-                            "degree": graph.degree(&nid),
+                            "degree": graph.degree(nid),
                         }))
                     })
                     .collect();
-                serde_json::json!({ "candidates": candidates })
+
+                let mut response = serde_json::json!({ "candidates": candidates });
+                if let (Some(rel), Some(tid)) = (expand.as_deref(), expand_target.as_deref()) {
+                    let mut members: Vec<(usize, serde_json::Value)> = graph
+                        .edges()
+                        .filter(|(s, _, e)| *s == tid && e.relation == rel)
+                        .filter_map(|(_, t, _)| {
+                            let n = graph.get_node(t)?;
+                            let deg = graph.degree(t);
+                            Some((
+                                deg,
+                                serde_json::json!({
+                                    "label": n.label,
+                                    "source_file": n.source_file,
+                                    "source_location": n.source_location,
+                                    "degree": deg,
+                                }),
+                            ))
+                        })
+                        .collect();
+                    members.sort_by(|a, b| b.0.cmp(&a.0));
+                    let total = members.len();
+                    let trimmed: Vec<serde_json::Value> = members
+                        .into_iter()
+                        .take(expand_top_n)
+                        .map(|(_, v)| v)
+                        .collect();
+                    response["members"] = serde_json::json!(trimmed);
+                    response["members_total"] = serde_json::json!(total);
+                    response["members_relation"] = serde_json::json!(rel);
+                    response["members_source"] = serde_json::json!(tid);
+                }
+                response
             }
         }
         "god_nodes" => {

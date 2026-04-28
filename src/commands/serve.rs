@@ -202,7 +202,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "query_graph",
-            "BFS search over the code graph. Filters: `source_pattern` (limit to a path substring), `community` (limit to one community id), `exclude_hubs` (true → skip BFS expansion through degree>50 nodes; or pass a number for a custom threshold) — use these to cut noise from generic hubs like ok()/len(). Set `format=mermaid` for a flowchart.",
+            "BFS search over the code graph. Filters: `source_pattern` (limit to a path substring), `community` (limit to one community id), `exclude_hubs` (true → skip BFS expansion through degree>50 nodes; or pass a number for a custom threshold) — use these to cut noise from generic hubs like ok()/len(). Vague natural-language `question` paired with a precise `source_pattern` is fine — when fuzzy scoring finds nothing in scope, the tool falls back to seeding with the highest-degree nodes that pass the filter, so you still get an architectural overview. Set `format=mermaid` for a flowchart.",
             &[
                 ("question", "string", true),
                 ("depth", "number", false),
@@ -215,10 +215,13 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "get_node",
-            "Get node details by label. Returns the top-N scored matches (default 3) with source_file, source_location, community, and degree — useful for disambiguating overloaded names. Set `top_n=1` for a single best match.",
+            "Get node details by label. Returns the top-N scored matches (default 3) with source_file, source_location, community, and degree — useful for disambiguating overloaded names. Set `top_n=1` for a single best match. Use `source_pattern` to scope to one repo (e.g. `pvxs/` vs `pva-rs/`) when the same identifier exists in both. Pass `expand=<relation>` (e.g. `contains`, `calls`) to also list the top candidate's outgoing neighbors via that relation, sorted by degree — use this to enumerate API surface (e.g. all methods of a class) without grep. When expanding, the candidate with the most matching outgoing edges is auto-selected (returned as `members_source`), so a file-level hub beats an empty stub class.",
             &[
                 ("label", "string", true),
                 ("top_n", "number", false),
+                ("source_pattern", "string", false),
+                ("expand", "string", false),
+                ("expand_top_n", "number", false),
             ],
         ),
         tool_def(
@@ -233,7 +236,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "compare_graphs",
-            "Set difference between two source-file patterns. Returns labels in `left_pattern` files that have no normalized match in `right_pattern` files (camelCase vs snake_case is collapsed). File-level / concept hubs (e.g. `data`, `pvxs`, `evhelper`) are skipped by default — set `skip_file_nodes=false` to include them. Narrow with `pattern` (label substring) or `min_degree`. Use for parity checks like 'what's in pvxs that pva-rs doesn't have'.",
+            "**API parity / port-completeness check between two codebases.** Use this FIRST when working on porting, reimplementation, or feature parity — it surfaces which symbols exist in `left_pattern` files but have no normalized match in `right_pattern` files. Saves you from grep + manual diffing across upstream sources. Labels are normalized (camelCase ↔ snake_case ↔ scope qualifiers collapse) so naming-convention drift across languages doesn't generate false gaps. File-level / module hubs (e.g. `data`, `pvxs`, `evhelper`) are skipped by default — set `skip_file_nodes=false` to include them. Narrow with `pattern` (label substring, e.g. `pattern=\"connect\"` for connection-related gaps) or `min_degree`. Recommended workflow: (1) `compare_graphs` to find candidate gaps → (2) `get_node` on each gap to see source location and disambiguation → (3) `query_graph` with `source_pattern` to trace its callers/dependencies.",
             &[
                 ("left_pattern", "string", true),
                 ("right_pattern", "string", true),
