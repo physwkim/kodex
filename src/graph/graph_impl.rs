@@ -77,6 +77,21 @@ impl KodexGraph {
             .unwrap_or(0)
     }
 
+    /// Number of incoming edges — proxy for callsite count / API centrality.
+    /// Higher fan-in means more places reference this node, so it's a better
+    /// signal for "what's architecturally important" than raw degree (which
+    /// also counts outgoing edges from leaf nodes).
+    pub fn fan_in(&self, id: &str) -> usize {
+        self.node_index
+            .get(id)
+            .map(|&idx| {
+                self.inner
+                    .edges_directed(idx, petgraph::Direction::Incoming)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Get neighbor node IDs for a given node ID.
     pub fn neighbors(&self, id: &str) -> Vec<String> {
         self.node_index

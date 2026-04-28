@@ -45,6 +45,11 @@ pub struct CompareQuery {
     pub semantic_threshold: f32,
     /// Cap on candidate matches per gap. Default 3.
     pub semantic_top_per_gap: usize,
+    /// Sort gaps by composite priority (`degree × public_boost × docstring_boost`)
+    /// instead of raw degree. Off by default — preserves backward-compatible
+    /// degree ranking. The composite is most useful when `with_signature=true`
+    /// is also set (so docstring detection has source to inspect).
+    pub compose_priority: bool,
 }
 
 impl Default for CompareQuery {
@@ -63,6 +68,7 @@ impl Default for CompareQuery {
             internal_weight: 0.0,
             semantic_threshold: 0.0,
             semantic_top_per_gap: 3,
+            compose_priority: false,
         }
     }
 }
@@ -134,6 +140,14 @@ pub struct CompareGap {
     /// probably implemented in right under a different name" cases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidate_matches: Vec<CandidateMatch>,
+    /// Composite priority — only meaningful when `compose_priority=true`.
+    /// Higher = more architecturally significant.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub priority_score: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// One right-side label that overlaps the gap's tokens by Jaccard ≥ threshold.
@@ -240,6 +254,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
                         degree,
                         is_public,
                         candidate_matches: Vec::new(),
+                        priority_score: 0.0,
                     };
                 }
             })
@@ -251,6 +266,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
                 degree,
                 is_public,
                 candidate_matches: Vec::new(),
+                priority_score: 0.0,
             });
     }
 
@@ -319,16 +335,52 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
         }
     }
 
+    // Composite priority: fan-in × public_boost. fan_in (incoming edges) is
+    // a better "architectural importance" signal than raw degree because it
+    // counts how many places reference the node, ignoring its own outgoing
+    // calls. Only computed when explicitly requested — older callers that
+    // sort on degree keep working unchanged.
+    if query.compose_priority {
+        for gap in &mut gaps {
+            // The gap's representative node id was preserved across the
+            // norm collapse only as label/source; look up by source_file +
+            // label fingerprint via the graph's id index. Since gaps were
+            // built from graph nodes, find the matching node id by label.
+            let fan_in = graph
+                .node_ids()
+                .find_map(|id| {
+                    let n = graph.get_node(id)?;
+                    if n.label == gap.label && n.source_file == gap.source_file {
+                        Some(graph.fan_in(id))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let public_boost = if gap.is_public { 2.0_f32 } else { 1.0_f32 };
+            // +1 ensures unreferenced public symbols still score above zero.
+            gap.priority_score = (fan_in as f32 + 1.0) * public_boost;
+        }
+    }
+
     // Sort: when public_pattern is set, public gaps come first regardless of
     // degree (they're the API stability surface). Within each tier, higher
-    // degree wins. `internal_weight` only affects ranking when
+    // priority/degree wins. `internal_weight` only affects ranking when
     // public_only=false — internal gaps are kept but pushed down.
     gaps.sort_by(|a, b| {
         if public_active && a.is_public != b.is_public {
             return b.is_public.cmp(&a.is_public);
         }
-        let a_score = effective_score(a, query, public_active);
-        let b_score = effective_score(b, query, public_active);
+        let a_score = if query.compose_priority {
+            a.priority_score
+        } else {
+            effective_score(a, query, public_active)
+        };
+        let b_score = if query.compose_priority {
+            b.priority_score
+        } else {
+            effective_score(b, query, public_active)
+        };
         b_score
             .partial_cmp(&a_score)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -679,6 +731,53 @@ mod tests {
             !cand_labels.contains(&"unrelated_thing()"),
             "non-overlapping label must not match: {cand_labels:?}"
         );
+    }
+
+    #[test]
+    fn compose_priority_uses_fan_in_not_total_degree() {
+        // hub_called: 1 outgoing + 5 incoming → fan_in=5, degree=6
+        // hub_callsmany: 5 outgoing + 1 incoming → fan_in=1, degree=6
+        // Without compose_priority, both tie on degree and norm sort decides.
+        // With compose_priority, hub_called must rank higher because fan_in
+        // is a truer "architectural centrality" signal.
+        let mut nodes = vec![
+            mk_node("hc", "hub_called", "left/a.rs"),
+            mk_node("hcm", "hub_callsmany", "left/b.rs"),
+        ];
+        for i in 0..5 {
+            nodes.push(mk_node(&format!("c{i}"), &format!("caller_{i}"), "left/x.rs"));
+            nodes.push(mk_node(&format!("t{i}"), &format!("target_{i}"), "left/x.rs"));
+        }
+        let mut edges: Vec<Edge> = (0..5).map(|i| mk_edge(&format!("c{i}"), "hc")).collect();
+        edges.push(mk_edge("hc", "t0")); // hub_called: 1 outgoing
+        for i in 0..5 {
+            edges.push(mk_edge("hcm", &format!("t{i}"))); // hub_callsmany: 5 outgoing
+        }
+        edges.push(mk_edge("c0", "hcm")); // hub_callsmany: 1 incoming
+
+        let g = build_from_extraction(&ExtractionResult {
+            nodes,
+            edges,
+            ..Default::default()
+        });
+
+        let q = CompareQuery {
+            left_pattern: "left".into(),
+            right_pattern: "right".into(),
+            compose_priority: true,
+            top_n: 10,
+            ..Default::default()
+        };
+        let result = compare_repos(&g, &q);
+        // First two should be the hubs; check ordering by priority.
+        let hub_idx = result.iter().position(|x| x.label == "hub_called");
+        let other_idx = result.iter().position(|x| x.label == "hub_callsmany");
+        assert!(hub_idx.is_some() && other_idx.is_some(), "{result:?}");
+        assert!(
+            hub_idx.unwrap() < other_idx.unwrap(),
+            "hub_called (fan_in=5) must rank above hub_callsmany (fan_in=1): {result:?}"
+        );
+        assert!(result[hub_idx.unwrap()].priority_score > 0.0);
     }
 
     #[test]

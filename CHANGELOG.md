@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.1 (2026-04-28)
+
+Composite priority for `compare_graphs` — replaces raw degree with a fan-in × public-boost score so the top of the gap list is "what's actually called by many places" instead of "what has many edges of any kind".
+
+- New `compose_priority=true` flag on `compare_graphs`. When set, each gap's `priority_score = (fan_in + 1) × public_boost`. `fan_in` is incoming-edge count (callsite proxy); `public_boost = 2.0` when the source_file matches `public_pattern`, else `1.0`.
+- New `KodexGraph::fan_in(id)` helper exposes incoming-edge count alongside total `degree`. Reusable for future scoring.
+- Default off — existing callers sorting on degree keep working unchanged.
+- 1 new test (`compose_priority_uses_fan_in_not_total_degree`).
+
 ## v0.7.0 (2026-04-28)
 
 Four follow-ups from real-use feedback after v0.6.2 — closes most of the user-reported gaps in the parity workflow. Targets "discover" and "verify" stages, not just "compare".

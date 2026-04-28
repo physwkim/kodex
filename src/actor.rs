@@ -514,6 +514,10 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize)
                 .unwrap_or(3);
+            let compose_priority = params
+                .get("compose_priority")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let q = crate::analyze::CompareQuery {
                 left_pattern: left.to_string(),
                 right_pattern: right.to_string(),
@@ -528,6 +532,7 @@ fn process_request(input: &str) -> String {
                 internal_weight,
                 semantic_threshold,
                 semantic_top_per_gap,
+                compose_priority,
             };
             let gaps = crate::analyze::compare_repos(&graph, &q);
             let with_signature = params
