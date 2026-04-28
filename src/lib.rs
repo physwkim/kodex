@@ -25,6 +25,7 @@ pub mod registry;
 pub mod report;
 pub mod security;
 pub mod serve;
+pub mod source_lookup;
 pub mod storage;
 pub mod transcribe;
 pub mod types;

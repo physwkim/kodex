@@ -26,6 +26,17 @@ pub struct CompareQuery {
     /// `evhelper`). Default true — these are almost never the answer to
     /// "what's missing in repo Y".
     pub skip_file_nodes: bool,
+    /// Optional path substring (e.g. `"/include/"`, `"src/pvxs/"`) marking
+    /// public/exported headers. When set, gaps in matching files are kept;
+    /// non-matching gaps are either dropped (`public_only=true`) or
+    /// down-weighted by `internal_penalty` so the public surface dominates
+    /// the top of the result list.
+    pub public_pattern: Option<String>,
+    pub public_only: bool,
+    /// Multiplier applied to non-public gaps when `public_pattern` is set
+    /// but `public_only` is false. Default 0 keeps internal gaps but pushes
+    /// them below all public ones; set to e.g. 0.5 for a softer weighting.
+    pub internal_weight: f32,
 }
 
 impl Default for CompareQuery {
@@ -39,6 +50,9 @@ impl Default for CompareQuery {
             label_pattern: None,
             min_degree: 0,
             skip_file_nodes: true,
+            public_pattern: None,
+            public_only: false,
+            internal_weight: 0.0,
         }
     }
 }
@@ -53,6 +67,10 @@ pub struct CompareGap {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_location: Option<String>,
     pub degree: usize,
+    /// True when the gap's source_file matches `CompareQuery::public_pattern`.
+    /// Always `false` when no public_pattern was supplied.
+    #[serde(default)]
+    pub is_public: bool,
 }
 
 /// Normalize a label to a comparable identifier form:
@@ -84,6 +102,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
     let left_pat = query.left_pattern.to_lowercase();
     let right_pat = query.right_pattern.to_lowercase();
     let label_pat = query.label_pattern.as_deref().map(str::to_lowercase);
+    let public_pat = query.public_pattern.as_deref().map(str::to_lowercase);
 
     // Collect right-side normalized labels regardless of file/concept status —
     // the goal is "is this name present anywhere in right?", not "is this a
@@ -129,18 +148,26 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
         if degree < query.min_degree {
             continue;
         }
+        let is_public = public_pat
+            .as_deref()
+            .is_some_and(|p| node.source_file.to_lowercase().contains(p));
 
-        // Keep the highest-degree representative of each normalized label.
+        // Keep the highest-degree representative of each normalized label,
+        // breaking ties in favour of the public-API occurrence so the user
+        // sees `pvxs/include/...` paths before internal `.cpp` definitions.
         left_by_norm
             .entry(norm.clone())
             .and_modify(|existing| {
-                if degree > existing.degree {
+                let prefer_new =
+                    degree > existing.degree || (is_public && !existing.is_public);
+                if prefer_new {
                     *existing = CompareGap {
                         label: node.label.clone(),
                         norm: norm.clone(),
                         source_file: node.source_file.clone(),
                         source_location: node.source_location.clone(),
                         degree,
+                        is_public,
                     };
                 }
             })
@@ -150,24 +177,50 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
                 source_file: node.source_file.clone(),
                 source_location: node.source_location.clone(),
                 degree,
+                is_public,
             });
     }
 
+    let public_active = public_pat.is_some();
     let mut gaps: Vec<CompareGap> = left_by_norm
         .into_iter()
         .filter_map(|(norm, gap)| {
             if right_norms.contains(&norm) {
-                None
-            } else {
-                Some(gap)
+                return None;
             }
+            if public_active && query.public_only && !gap.is_public {
+                return None;
+            }
+            Some(gap)
         })
         .collect();
 
-    // High-degree gaps first — they're the most architecturally significant.
-    gaps.sort_by(|a, b| b.degree.cmp(&a.degree).then_with(|| a.norm.cmp(&b.norm)));
+    // Sort: when public_pattern is set, public gaps come first regardless of
+    // degree (they're the API stability surface). Within each tier, higher
+    // degree wins. `internal_weight` only affects ranking when
+    // public_only=false — internal gaps are kept but pushed down.
+    gaps.sort_by(|a, b| {
+        if public_active && a.is_public != b.is_public {
+            return b.is_public.cmp(&a.is_public);
+        }
+        let a_score = effective_score(a, query, public_active);
+        let b_score = effective_score(b, query, public_active);
+        b_score
+            .partial_cmp(&a_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.norm.cmp(&b.norm))
+    });
     gaps.truncate(query.top_n);
     gaps
+}
+
+fn effective_score(g: &CompareGap, q: &CompareQuery, public_active: bool) -> f32 {
+    let base = g.degree as f32;
+    if public_active && !g.is_public {
+        base * q.internal_weight
+    } else {
+        base
+    }
 }
 
 #[cfg(test)]
@@ -368,6 +421,75 @@ mod tests {
         let gaps = compare_repos(&graph, &q);
         let labels: Vec<&str> = gaps.iter().map(|g| g.label.as_str()).collect();
         assert_eq!(labels, vec!["hub_func()"]);
+    }
+
+    #[test]
+    fn public_pattern_promotes_header_gaps_above_internal() {
+        // Two gaps in pvxs but pva-rs has nothing: a low-degree public-header
+        // symbol and a high-degree internal symbol. Without public_pattern,
+        // degree wins (internal first). With public_pattern, header wins.
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_node("p", "publicSym()", "pvxs/include/pvxs/server.h"),
+                mk_node("i", "internalSym()", "pvxs/src/internal.cpp"),
+                mk_node("u1", "user1", "pvxs/src/internal.cpp"),
+                mk_node("u2", "user2", "pvxs/src/internal.cpp"),
+                mk_node("u3", "user3", "pvxs/src/internal.cpp"),
+            ],
+            edges: vec![
+                mk_edge("i", "u1"),
+                mk_edge("i", "u2"),
+                mk_edge("i", "u3"),
+            ],
+            ..Default::default()
+        };
+        let g = build_from_extraction(&extraction);
+
+        let no_pub = CompareQuery {
+            left_pattern: "pvxs".into(),
+            right_pattern: "pva-rs".into(),
+            ..Default::default()
+        };
+        let r1 = compare_repos(&g, &no_pub);
+        let labels1: Vec<&str> = r1.iter().map(|x| x.label.as_str()).collect();
+        assert_eq!(labels1[0], "internalSym()", "no public_pattern → degree wins");
+
+        let with_pub = CompareQuery {
+            left_pattern: "pvxs".into(),
+            right_pattern: "pva-rs".into(),
+            public_pattern: Some("/include/".into()),
+            ..Default::default()
+        };
+        let r2 = compare_repos(&g, &with_pub);
+        let labels2: Vec<&str> = r2.iter().map(|x| x.label.as_str()).collect();
+        assert_eq!(
+            labels2[0], "publicSym()",
+            "public header gap should outrank internal high-degree: {labels2:?}"
+        );
+        assert!(r2[0].is_public);
+        assert!(!r2[1].is_public);
+    }
+
+    #[test]
+    fn public_only_drops_internal_gaps() {
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_node("p", "publicSym()", "pvxs/include/pvxs/server.h"),
+                mk_node("i", "internalSym()", "pvxs/src/internal.cpp"),
+            ],
+            ..Default::default()
+        };
+        let g = build_from_extraction(&extraction);
+        let q = CompareQuery {
+            left_pattern: "pvxs".into(),
+            right_pattern: "pva-rs".into(),
+            public_pattern: Some("/include/".into()),
+            public_only: true,
+            ..Default::default()
+        };
+        let result = compare_repos(&g, &q);
+        let labels: Vec<&str> = result.iter().map(|x| x.label.as_str()).collect();
+        assert_eq!(labels, vec!["publicSym()"]);
     }
 
     #[test]

@@ -231,23 +231,62 @@ fn process_request(input: &str) -> String {
                 .map(|t| t.to_lowercase())
                 .collect();
             let scored = crate::serve::score_nodes_filtered(&graph, &terms, &filter);
+            let scored_count = scored.len();
             let mut start: Vec<String> =
                 scored.into_iter().take(3).map(|(_, id)| id).collect();
+            let mut used_fallback = false;
             // Fallback: vague question + precise filter (e.g. source_pattern) often
             // produces zero fuzzy hits because no labels in the scoped subset
             // match the question terms. Seed with high-degree nodes in scope so
             // the caller still sees something useful.
             if start.is_empty() && filter.is_active() {
                 start = crate::serve::top_degree_in_filter(&graph, &filter, 3);
+                used_fallback = !start.is_empty();
             }
             let (visited, edges) = crate::serve::bfs_filtered(&graph, &start, depth, &filter);
-            match format {
-                "mermaid" => serde_json::json!(crate::serve::subgraph_to_mermaid(
-                    &graph, &visited, &edges
-                )),
-                _ => serde_json::json!(crate::serve::subgraph_to_text(
-                    &graph, &visited, &edges, budget
-                )),
+            let rendered = match format {
+                "mermaid" => crate::serve::subgraph_to_mermaid(&graph, &visited, &edges),
+                _ => crate::serve::subgraph_to_text(&graph, &visited, &edges, budget),
+            };
+            // Empty-result diagnostics: tell the caller why nothing came back so
+            // they know whether to broaden the question, drop a filter, or raise
+            // depth. Backward-compatible: non-empty returns the rendered string
+            // unchanged.
+            if rendered.trim().is_empty() {
+                let mut reasons: Vec<String> = Vec::new();
+                if terms.is_empty() {
+                    reasons.push(
+                        "question has no usable terms (>2 chars after split)".into(),
+                    );
+                } else if scored_count == 0 {
+                    reasons.push(format!(
+                        "no fuzzy hit for terms={terms:?} within filter (source_pattern={:?}, community={:?})",
+                        filter.source_pattern, filter.community
+                    ));
+                }
+                if !start.is_empty() && visited.len() <= start.len() {
+                    reasons.push(format!(
+                        "BFS expanded 0 from {} seed(s) at depth={} (try higher depth, or hub_threshold may have stopped expansion)",
+                        start.len(),
+                        depth
+                    ));
+                }
+                if start.is_empty() && !filter.is_active() {
+                    reasons.push("no seeds and no filter to fall back on".into());
+                }
+                let why = if reasons.is_empty() {
+                    "empty result (no diagnostic available)".to_string()
+                } else {
+                    reasons.join("; ")
+                };
+                let fallback_note = if used_fallback {
+                    " [fallback: seeded with top-degree filter-passing nodes]"
+                } else {
+                    ""
+                };
+                serde_json::json!(format!("(empty){fallback_note}: {why}"))
+            } else {
+                serde_json::json!(rendered)
             }
         }
         "get_node" => {
@@ -441,6 +480,20 @@ fn process_request(input: &str) -> String {
                 .get("skip_file_nodes")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            let public_pattern = params
+                .get("public_pattern")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let public_only = params
+                .get("public_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let internal_weight = params
+                .get("internal_weight")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+                .unwrap_or(0.0);
             let q = crate::analyze::CompareQuery {
                 left_pattern: left.to_string(),
                 right_pattern: right.to_string(),
@@ -450,10 +503,59 @@ fn process_request(input: &str) -> String {
                 label_pattern,
                 min_degree,
                 skip_file_nodes,
+                public_pattern,
+                public_only,
+                internal_weight,
             };
             let gaps = crate::analyze::compare_repos(&graph, &q);
+            let with_signature = params
+                .get("with_signature")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let signature_lines_above = params
+                .get("signature_lines_above")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(2);
+            let signature_lines_below = params
+                .get("signature_lines_below")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(0);
+            let signature_max_top = params
+                .get("signature_max_top")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(20);
+            // Inline a few lines around each gap's source_location so callers
+            // don't have to re-grep the upstream to verify whether a gap is
+            // truly missing or just renamed/reshaped. Only enrich the top-K
+            // gaps to keep the response size bounded.
+            let enriched: Vec<serde_json::Value> = if with_signature {
+                gaps.iter()
+                    .enumerate()
+                    .map(|(i, g)| {
+                        let mut v = serde_json::to_value(g).unwrap_or(serde_json::Value::Null);
+                        if i < signature_max_top {
+                            if let Some(snippet) = crate::source_lookup::snippet_for(
+                                &g.source_file,
+                                g.source_location.as_deref(),
+                                signature_lines_above,
+                                signature_lines_below,
+                            ) {
+                                v["signature"] = serde_json::json!(snippet);
+                            }
+                        }
+                        v
+                    })
+                    .collect()
+            } else {
+                gaps.iter()
+                    .map(|g| serde_json::to_value(g).unwrap_or(serde_json::Value::Null))
+                    .collect()
+            };
             serde_json::json!({
-                "gaps": gaps,
+                "gaps": enriched,
                 "count": gaps.len(),
             })
         }
@@ -1030,11 +1132,33 @@ fn process_request(input: &str) -> String {
         },
         // Gen3: diff-aware recall
         "recall_for_diff" => {
-            let diff_text = params.get("diff").and_then(|v| v.as_str()).unwrap_or("");
             let max = params
                 .get("max_items")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10) as usize;
+            let auto = params
+                .get("auto")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let base_ref = params
+                .get("base_ref")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("HEAD");
+            // When auto=true, derive the diff from the project's working tree
+            // against `base_ref` (default HEAD) so the caller doesn't have to
+            // pre-fetch git output. Falls through to user-supplied `diff` on
+            // git failure so the call doesn't error out silently.
+            let auto_diff: Option<String> = if auto {
+                run_git_diff(project_dir, base_ref).ok()
+            } else {
+                None
+            };
+            let supplied = params.get("diff").and_then(|v| v.as_str()).unwrap_or("");
+            let diff_text: &str = auto_diff
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(supplied);
             let (analysis, results) = crate::learn::recall_for_diff(&db_path, diff_text, max);
             let uuids: Vec<String> =
                 results.iter().map(|r| r.knowledge.uuid.clone()).collect();
@@ -1063,10 +1187,18 @@ fn process_request(input: &str) -> String {
                     })
                 })
                 .collect();
-            serde_json::json!({
+            let mut response = serde_json::json!({
                 "analysis": analysis,
                 "relevant_knowledge": enriched,
-            })
+            });
+            if auto {
+                response["diff_source"] = serde_json::json!(if auto_diff.is_some() {
+                    format!("git diff {base_ref}")
+                } else {
+                    "git failed; used supplied diff".to_string()
+                });
+            }
+            response
         }
         // Gen3: knowledge graph reasoning
         "reason" => {
@@ -1088,6 +1220,25 @@ fn process_request(input: &str) -> String {
         serde_json::to_string(&result).unwrap_or_default(),
         serde_json::to_string(&id).unwrap_or_default(),
     )
+}
+
+/// Run `git diff <base_ref>` in `cwd` and return stdout. Used by
+/// `recall_for_diff` when `auto=true` so the agent doesn't have to shell out
+/// before retrieving knowledge for the working-tree state.
+fn run_git_diff(cwd: &str, base_ref: &str) -> std::io::Result<String> {
+    let output = std::process::Command::new("git")
+        .arg("diff")
+        .arg(base_ref)
+        .current_dir(cwd)
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "git diff exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Wrap matched characters in `[...]` so JSON consumers can render highlights

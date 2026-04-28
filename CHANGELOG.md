@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.2 (2026-04-28)
+
+Cuts FP verification time on parity workflows by inlining source context, and makes diff-aware retrieval one call instead of two. Driven by real-use feedback after v0.6.1.
+
+- `compare_graphs` gains `with_signature=true` — inlines a few lines around each gap's source location (default 2 above + signature, configurable via `signature_lines_above`/`signature_lines_below`) so the caller can verify "is this gap real, or just renamed?" without re-grepping upstream sources. Bounded to top-K by `signature_max_top` (default 20) to keep the response size in check.
+- `compare_graphs` gains `public_pattern` — path substring marking public/exported headers (e.g. `pvxs/src/pvxs/`). Gaps in matching files are promoted above all internals; `public_only=true` drops internals entirely; `internal_weight` (default 0) lets you keep internals at the bottom. On a real pvxs vs pva-rs run this collapsed top results from internal scheduler functions to the actual API surface (`sharedArray::reserve/resize/swap`, `client::info`, etc).
+- New `source_lookup` module: registry-aware path resolution + line-bounded snippet reader. Used by `compare_graphs --with-signature`; available to other tools later.
+- `recall_for_diff` gains `auto=true` (with optional `base_ref`, default `HEAD`) — actor runs `git diff` in the project working tree and feeds the result into recall. Eliminates the agent-side round-trip of pre-fetching diff output. Falls back to user-supplied `diff` if git fails. The response surfaces `diff_source` so the caller knows which path was taken.
+- `query_graph` empty results now return a diagnostic string instead of `""` — names the failing stage (no fuzzy hit / BFS expanded 0 / hub-skipped / no seeds) so the agent can broaden the question, raise depth, or drop a filter without guessing.
+- 5 new tests (public ranking, public_only, signature snippet I/O, line-number parsing, registry resolution).
+
 ## v0.6.1 (2026-04-28)
 
 Workflow follow-ups based on real-use feedback from v0.6.0.

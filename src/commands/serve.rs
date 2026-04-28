@@ -178,8 +178,13 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "recall_for_diff",
-            "Recall knowledge relevant to a git diff.",
-            &[("diff", "string", true), ("max_items", "number", false)],
+            "Recall knowledge relevant to a git diff. Pass `auto=true` to have the actor run `git diff <base_ref>` (default `HEAD`) in the project working tree and use that — saves the caller from pre-fetching diff output. Falls back to the supplied `diff` if git fails.",
+            &[
+                ("diff", "string", false),
+                ("max_items", "number", false),
+                ("auto", "boolean", false),
+                ("base_ref", "string", false),
+            ],
         ),
         tool_def(
             "get_task_context",
@@ -236,7 +241,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "compare_graphs",
-            "**API parity / port-completeness check between two codebases.** Use this FIRST when working on porting, reimplementation, or feature parity — it surfaces which symbols exist in `left_pattern` files but have no normalized match in `right_pattern` files. Saves you from grep + manual diffing across upstream sources. Labels are normalized (camelCase ↔ snake_case ↔ scope qualifiers collapse) so naming-convention drift across languages doesn't generate false gaps. File-level / module hubs (e.g. `data`, `pvxs`, `evhelper`) are skipped by default — set `skip_file_nodes=false` to include them. Narrow with `pattern` (label substring, e.g. `pattern=\"connect\"` for connection-related gaps) or `min_degree`. Recommended workflow: (1) `compare_graphs` to find candidate gaps → (2) `get_node` on each gap to see source location and disambiguation → (3) `query_graph` with `source_pattern` to trace its callers/dependencies.",
+            "**API parity / port-completeness check between two codebases.** Use this FIRST when working on porting, reimplementation, or feature parity — it surfaces which symbols exist in `left_pattern` files but have no normalized match in `right_pattern` files. Saves you from grep + manual diffing across upstream sources. Labels are normalized (camelCase ↔ snake_case ↔ scope qualifiers collapse) so naming-convention drift across languages doesn't generate false gaps. File-level / module hubs (e.g. `data`, `pvxs`, `evhelper`) are skipped by default — set `skip_file_nodes=false` to include them. Narrow with `pattern` (label substring, e.g. `pattern=\"connect\"` for connection-related gaps) or `min_degree`. Set `with_signature=true` to inline a few lines around each gap's source location (signature + preceding doc comment) so you can verify whether a gap is truly missing or just renamed/reshaped, without re-grepping the upstream. Pass `public_pattern` (e.g. `\"/include/\"`, `\"src/pvxs/\"`) to promote gaps in public-API headers above internal symbols — this typically cuts noise from internal scheduler/util functions by a large margin; `public_only=true` drops internals entirely. Recommended workflow: (1) `compare_graphs` with `with_signature=true` and `public_pattern` to find API-stable gaps with context → (2) `get_node` on each gap for full disambiguation → (3) `query_graph` with `source_pattern` to trace callers.",
             &[
                 ("left_pattern", "string", true),
                 ("right_pattern", "string", true),
@@ -246,6 +251,13 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 ("pattern", "string", false),
                 ("min_degree", "number", false),
                 ("skip_file_nodes", "boolean", false),
+                ("with_signature", "boolean", false),
+                ("signature_lines_above", "number", false),
+                ("signature_lines_below", "number", false),
+                ("signature_max_top", "number", false),
+                ("public_pattern", "string", false),
+                ("public_only", "boolean", false),
+                ("internal_weight", "number", false),
             ],
         ),
         tool_def(
