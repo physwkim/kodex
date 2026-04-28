@@ -2,7 +2,8 @@ mod traversal;
 
 pub use traversal::{
     bfs, bfs_filtered, dfs, label_match_indices, score_nodes, score_nodes_filtered,
-    subgraph_to_mermaid, subgraph_to_text, top_degree_in_filter, TraversalFilter,
+    subgraph_to_json, subgraph_to_mermaid, subgraph_to_text, top_degree_in_filter,
+    TraversalFilter,
 };
 
 use std::collections::HashMap;

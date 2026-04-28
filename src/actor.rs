@@ -244,6 +244,20 @@ fn process_request(input: &str) -> String {
                 used_fallback = !start.is_empty();
             }
             let (visited, edges) = crate::serve::bfs_filtered(&graph, &start, depth, &filter);
+            // `format=json` returns a structured object so the caller can
+            // iterate nodes/edges programmatically; `mermaid` and `text`
+            // (default) keep their string-return shape for backward compat.
+            if format == "json" {
+                let mut payload = crate::serve::subgraph_to_json(&graph, &visited, &edges);
+                if let Some(stale) = staleness_warning(project_dir) {
+                    payload["stale"] = stale;
+                }
+                return format!(
+                    r#"{{"jsonrpc":"2.0","result":{},"id":{}}}"#,
+                    serde_json::to_string(&payload).unwrap_or_default(),
+                    serde_json::to_string(&id).unwrap_or_default(),
+                );
+            }
             let mut rendered = match format {
                 "mermaid" => crate::serve::subgraph_to_mermaid(&graph, &visited, &edges),
                 _ => crate::serve::subgraph_to_text(&graph, &visited, &edges, budget),

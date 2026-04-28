@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.2 (2026-04-28)
+
+`query_graph` outputs now expose enough metadata to chain into the next call without a follow-up `get_node`.
+
+- Text mode: each NODE line gains `c=<community>` and `deg=<degree>` so you can pick a useful `community=N` filter or spot hubs immediately.
+- New `format=json` returns a structured object: `{ nodes:[{id,label,source_file,source_location,community,degree,fan_in}], edges:[{source,target,relation,confidence}], stale? }`. Use when iterating programmatically (e.g. extracting all communities, feeding nodes to another tool) instead of parsing text.
+- Mermaid mode unchanged.
+- New `serve::subgraph_to_json` helper (re-exported).
+
 ## v0.7.1 (2026-04-28)
 
 Composite priority for `compare_graphs` — replaces raw degree with a fan-in × public-boost score so the top of the gap list is "what's actually called by many places" instead of "what has many edges of any kind".

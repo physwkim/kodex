@@ -288,6 +288,9 @@ pub fn subgraph_to_mermaid(
 }
 
 /// Render a subgraph as text, limited by token budget (~4 chars per token).
+/// Each NODE line includes `c=N` (community) and `deg=N` (total degree) so
+/// the caller can decide whether to follow up with `community=N` filter on
+/// `query_graph` or with `get_node` for full disambiguation.
 pub fn subgraph_to_text(
     graph: &KodexGraph,
     nodes: &HashSet<String>,
@@ -299,11 +302,16 @@ pub fn subgraph_to_text(
 
     for nid in nodes {
         if let Some(node) = graph.get_node(nid) {
+            let community = node
+                .community
+                .map(|c| format!(" c={c}"))
+                .unwrap_or_default();
             lines.push(format!(
-                "NODE {} src={} loc={}",
+                "NODE {} src={} loc={}{community} deg={}",
                 node.label,
                 node.source_file,
-                node.source_location.as_deref().unwrap_or("")
+                node.source_location.as_deref().unwrap_or(""),
+                graph.degree(nid)
             ));
         }
     }
@@ -330,6 +338,50 @@ pub fn subgraph_to_text(
     } else {
         result
     }
+}
+
+/// Render a subgraph as a structured JSON value with full per-node metadata.
+/// Use when the caller wants to programmatically iterate (e.g. extract all
+/// communities present, or feed nodes to a follow-up tool) instead of
+/// parsing text. Edge confidence uses the same string form as the text mode.
+pub fn subgraph_to_json(
+    graph: &KodexGraph,
+    nodes: &HashSet<String>,
+    _edges: &[(String, String)],
+) -> serde_json::Value {
+    let node_objs: Vec<serde_json::Value> = nodes
+        .iter()
+        .filter_map(|nid| {
+            let node = graph.get_node(nid)?;
+            Some(serde_json::json!({
+                "id": nid,
+                "label": node.label,
+                "source_file": node.source_file,
+                "source_location": node.source_location,
+                "community": node.community,
+                "degree": graph.degree(nid),
+                "fan_in": graph.fan_in(nid),
+            }))
+        })
+        .collect();
+
+    let edge_objs: Vec<serde_json::Value> = graph
+        .edges()
+        .filter(|(s, t, _)| nodes.contains(*s) && nodes.contains(*t))
+        .map(|(s, t, edge)| {
+            serde_json::json!({
+                "source": s,
+                "target": t,
+                "relation": edge.relation,
+                "confidence": edge.confidence.to_string(),
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "nodes": node_objs,
+        "edges": edge_objs,
+    })
 }
 
 #[cfg(test)]

@@ -207,7 +207,7 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "query_graph",
-            "BFS search over the code graph. Filters: `source_pattern` (limit to a path substring), `community` (limit to one community id), `exclude_hubs` (true → skip BFS expansion through degree>50 nodes; or pass a number for a custom threshold) — use these to cut noise from generic hubs like ok()/len(). Vague natural-language `question` paired with a precise `source_pattern` is fine — when fuzzy scoring finds nothing in scope, the tool falls back to seeding with the highest-degree nodes that pass the filter, so you still get an architectural overview. Set `format=mermaid` for a flowchart.",
+            "BFS search over the code graph. Filters: `source_pattern` (limit to a path substring), `community` (limit to one community id), `exclude_hubs` (true → skip BFS expansion through degree>50 nodes; or pass a number for a custom threshold) — use these to cut noise from generic hubs like ok()/len(). Vague natural-language `question` paired with a precise `source_pattern` is fine — when fuzzy scoring finds nothing in scope, the tool falls back to seeding with the highest-degree nodes that pass the filter. Output formats: `text` (default, human-readable, each NODE line includes `c=N` community + `deg=N` so you can pick a follow-up community filter), `json` (structured `{nodes:[{id,label,source_file,source_location,community,degree,fan_in}], edges:[{source,target,relation,confidence}]}` for programmatic iteration), or `mermaid` (flowchart).",
             &[
                 ("question", "string", true),
                 ("depth", "number", false),
