@@ -1,6 +1,6 @@
 [package]
 name = "kodex"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
@@ -26,6 +26,7 @@ dirs = "6"
 globset = "0.4"
 uuid = { version = "1", features = ["v4"] }
 rusqlite = { version = "0.34", features = ["bundled"] }
+nucleo-matcher = "0.3"
 
 # Optional dependencies
 tree-sitter = { version = "0.24", optional = true }

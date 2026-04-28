@@ -1,72 +1,129 @@
 use std::collections::HashSet;
 
-use crate::export::strip_diacritics;
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
+
 use crate::graph::KodexGraph;
 
-/// Score nodes by keyword matching with fuzzy support.
-/// Matches: exact substring > token overlap > edit distance.
+/// Optional filters for [`score_nodes_filtered`] and [`bfs_filtered`].
+///
+/// `source_pattern` and `community` constrain *both* seeding and expansion.
+/// `hub_threshold` only constrains expansion: BFS will visit a hub but not
+/// traverse outward through it, preventing the explosion through generic
+/// nodes like `ok()`, `len()`, file-level containers.
+#[derive(Debug, Default, Clone)]
+pub struct TraversalFilter {
+    pub source_pattern: Option<String>,
+    pub community: Option<usize>,
+    pub hub_threshold: Option<usize>,
+}
+
+impl TraversalFilter {
+    fn matches_node(&self, graph: &KodexGraph, id: &str) -> bool {
+        let node = match graph.get_node(id) {
+            Some(n) => n,
+            None => return false,
+        };
+        if let Some(sp) = self.source_pattern.as_deref() {
+            if !node.source_file.to_lowercase().contains(&sp.to_lowercase()) {
+                return false;
+            }
+        }
+        if let Some(cid) = self.community {
+            if node.community != Some(cid) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Score nodes by keyword matching using nucleo-matcher (fzf-style fuzzy).
+///
+/// The query is scored against `label` (weight 2), `source_file` (path-aware
+/// matcher, weight 1), and `logical_key` (path-aware, weight 1). Camel/snake
+/// boundaries, path separators, and consecutive matches all earn bonuses, so
+/// `tickSearch` ranks `tickSearch()` above `tickSetSomethingElse()`.
 pub fn score_nodes(graph: &KodexGraph, terms: &[String]) -> Vec<(usize, String)> {
+    score_nodes_filtered(graph, terms, &TraversalFilter::default())
+}
+
+/// Filtered variant of [`score_nodes`].
+pub fn score_nodes_filtered(
+    graph: &KodexGraph,
+    terms: &[String],
+    filter: &TraversalFilter,
+) -> Vec<(usize, String)> {
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let query: String = terms.join(" ");
+    let pattern = Pattern::parse(&query, CaseMatching::Smart, Normalization::Smart);
+
+    let mut name_matcher = Matcher::new(Config::DEFAULT);
+    let mut path_matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let mut buf: Vec<char> = Vec::new();
+
     let mut scored: Vec<(usize, String)> = Vec::new();
     for id in graph.node_ids() {
-        if let Some(node) = graph.get_node(id) {
-            let label = strip_diacritics(&node.label).to_lowercase();
-            let source = node.source_file.to_lowercase();
-            let logical = node.logical_key.as_deref().unwrap_or("").to_lowercase();
+        if !filter.matches_node(graph, id) {
+            continue;
+        }
+        let node = match graph.get_node(id) {
+            Some(n) => n,
+            None => continue,
+        };
 
-            let mut score = 0usize;
-            for term in terms {
-                // Exact substring in label (strongest)
-                if label.contains(term.as_str()) {
-                    score += 10;
-                    continue;
-                }
-                // Exact substring in source_file or logical_key
-                if source.contains(term.as_str()) || logical.contains(term.as_str()) {
-                    score += 5;
-                    continue;
-                }
-                // Token overlap: split label into parts and match
-                let label_tokens: Vec<&str> = label
-                    .split(|c: char| !c.is_alphanumeric())
-                    .filter(|s| s.len() > 1)
-                    .collect();
-                if label_tokens.iter().any(|lt| lt.contains(term.as_str())) {
-                    score += 7;
-                    continue;
-                }
-                // Fuzzy: edit distance ≤ 2 for tokens > 4 chars
-                if term.len() > 4 {
-                    for lt in &label_tokens {
-                        if lt.len() > 4 && edit_distance(term, lt) <= 2 {
-                            score += 3;
-                            break;
-                        }
-                    }
-                }
-            }
-            if score > 0 {
-                scored.push((score, id.clone()));
-            }
+        let label_score = pattern
+            .score(Utf32Str::new(&node.label, &mut buf), &mut name_matcher)
+            .unwrap_or(0) as usize;
+        let path_score = pattern
+            .score(
+                Utf32Str::new(&node.source_file, &mut buf),
+                &mut path_matcher,
+            )
+            .unwrap_or(0) as usize;
+        let logical_score = node
+            .logical_key
+            .as_deref()
+            .map(|s| {
+                pattern
+                    .score(Utf32Str::new(s, &mut buf), &mut path_matcher)
+                    .unwrap_or(0) as usize
+            })
+            .unwrap_or(0);
+
+        // Label dominates (weight 4) — without this, a weak label match plus a
+        // strong path match can outvote a perfect label hit. Path/logical act
+        // as tiebreakers between similarly-labeled candidates.
+        let total = label_score.saturating_mul(4) + path_score + logical_score;
+        if total > 0 {
+            scored.push((total, id.clone()));
         }
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0));
     scored
 }
 
-/// Simple edit distance (Levenshtein).
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut prev = (0..=b.len()).collect::<Vec<_>>();
-    for (i, ca) in a.iter().enumerate() {
-        let mut curr = vec![i + 1; b.len() + 1];
-        for (j, cb) in b.iter().enumerate() {
-            let cost = if ca == cb { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
-        }
-        prev = curr;
+/// Return the match positions (char indices) of `query` against `label`,
+/// using the same matcher kodex uses for ranking. Empty vec when no match.
+/// Useful for `get_node` to highlight which characters made a candidate rank.
+pub fn label_match_indices(label: &str, query: &str) -> Vec<u32> {
+    if query.is_empty() {
+        return Vec::new();
     }
-    prev[b.len()]
+    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    let mut buf: Vec<char> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+    pattern.indices(
+        Utf32Str::new(label, &mut buf),
+        &mut matcher,
+        &mut indices,
+    );
+    indices.sort_unstable();
+    indices.dedup();
+    indices
 }
 
 /// Breadth-first traversal from start nodes.
@@ -75,6 +132,18 @@ pub fn bfs(
     start_nodes: &[String],
     depth: usize,
 ) -> (HashSet<String>, Vec<(String, String)>) {
+    bfs_filtered(graph, start_nodes, depth, &TraversalFilter::default())
+}
+
+/// Filtered BFS. Neighbors that fail [`TraversalFilter::matches_node`] are
+/// dropped entirely. Nodes whose degree exceeds `hub_threshold` are added to
+/// the visited set (so the caller can see them as boundary) but not expanded.
+pub fn bfs_filtered(
+    graph: &KodexGraph,
+    start_nodes: &[String],
+    depth: usize,
+    filter: &TraversalFilter,
+) -> (HashSet<String>, Vec<(String, String)>) {
     let mut visited: HashSet<String> = start_nodes.iter().cloned().collect();
     let mut frontier: HashSet<String> = visited.clone();
     let mut result_edges = Vec::new();
@@ -82,11 +151,21 @@ pub fn bfs(
     for _ in 0..depth {
         let mut next_frontier = HashSet::new();
         for nid in &frontier {
-            for neighbor in graph.neighbors(nid) {
-                if !visited.contains(&neighbor) {
-                    result_edges.push((nid.clone(), neighbor.clone()));
-                    next_frontier.insert(neighbor);
+            // Stop expanding through hubs to prevent explosion through ok()/len() etc.
+            if let Some(t) = filter.hub_threshold {
+                if graph.degree(nid) > t {
+                    continue;
                 }
+            }
+            for neighbor in graph.neighbors(nid) {
+                if visited.contains(&neighbor) {
+                    continue;
+                }
+                if !filter.matches_node(graph, &neighbor) {
+                    continue;
+                }
+                result_edges.push((nid.clone(), neighbor.clone()));
+                next_frontier.insert(neighbor);
             }
         }
         visited.extend(next_frontier.iter().cloned());
@@ -231,6 +310,68 @@ mod traversal_tests {
     use crate::graph::build_from_extraction;
     use crate::types::{Confidence, Edge, ExtractionResult, FileType, Node};
 
+    fn mk_simple_node(id: &str, label: &str, source_file: &str) -> Node {
+        Node {
+            id: id.into(),
+            label: label.into(),
+            file_type: FileType::Code,
+            source_file: source_file.into(),
+            source_location: Some("L1".into()),
+            confidence: Some(Confidence::EXTRACTED),
+            confidence_score: Some(1.0),
+            community: None,
+            norm_label: None,
+            degree: None,
+            uuid: None,
+            fingerprint: None,
+            logical_key: None,
+            body_hash: None,
+        }
+    }
+
+    #[test]
+    fn nucleo_ranks_camelcase_boundary_match_above_buried_substring() {
+        // Both labels contain "tickSearch" as a substring, but only one has it
+        // at a camelCase boundary. nucleo's word-boundary bonus should put the
+        // boundary match first.
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_simple_node("a", "tickSearch()", "client.cpp"),
+                mk_simple_node("b", "internal_tickSearchCallback()", "client.cpp"),
+            ],
+            ..Default::default()
+        };
+        let g = build_from_extraction(&extraction);
+        let scored = score_nodes(&g, &["ticksearch".into()]);
+        assert!(!scored.is_empty(), "expected at least one match");
+        assert_eq!(
+            scored[0].1, "a",
+            "tickSearch() should outrank internal_tickSearchCallback() — boundary win"
+        );
+    }
+
+    #[test]
+    fn label_match_indices_marks_matched_chars() {
+        // "close" against "close_file": match positions are 0,1,2,3,4.
+        let indices = label_match_indices("close_file", "close");
+        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn label_match_indices_empty_query_returns_empty() {
+        assert!(label_match_indices("anything", "").is_empty());
+    }
+
+    #[test]
+    fn empty_terms_returns_empty() {
+        let extraction = ExtractionResult {
+            nodes: vec![mk_simple_node("a", "foo", "f.rs")],
+            ..Default::default()
+        };
+        let g = build_from_extraction(&extraction);
+        assert!(score_nodes(&g, &[]).is_empty());
+    }
+
     fn make_graph() -> KodexGraph {
         let extraction = ExtractionResult {
             nodes: vec![
@@ -282,6 +423,132 @@ mod traversal_tests {
             ..Default::default()
         };
         build_from_extraction(&extraction)
+    }
+
+    /// Build a graph where a hub node connects unrelated clusters: a seed
+    /// node `seed` is one hop from `hub`, and `hub` connects to many
+    /// `noise_*` nodes. Without a hub threshold, BFS depth=2 from `seed`
+    /// drags every noise node in.
+    fn graph_with_hub() -> KodexGraph {
+        let mut nodes = vec![
+            Node {
+                id: "seed".into(),
+                label: "seed".into(),
+                file_type: FileType::Code,
+                source_file: "domain.rs".into(),
+                source_location: Some("L1".into()),
+                confidence: Some(Confidence::EXTRACTED),
+                confidence_score: Some(1.0),
+                community: None,
+                norm_label: None,
+                degree: None,
+                uuid: None,
+                fingerprint: None,
+                logical_key: None,
+                body_hash: None,
+            },
+            Node {
+                id: "hub".into(),
+                label: "ok".into(),
+                file_type: FileType::Code,
+                source_file: "util.rs".into(),
+                source_location: Some("L1".into()),
+                confidence: Some(Confidence::EXTRACTED),
+                confidence_score: Some(1.0),
+                community: None,
+                norm_label: None,
+                degree: None,
+                uuid: None,
+                fingerprint: None,
+                logical_key: None,
+                body_hash: None,
+            },
+        ];
+        let mut edges = vec![Edge {
+            source: "seed".into(),
+            target: "hub".into(),
+            relation: "calls".into(),
+            confidence: Confidence::EXTRACTED,
+            source_file: "domain.rs".into(),
+            source_location: None,
+            confidence_score: Some(1.0),
+            weight: 1.0,
+            original_src: None,
+            original_tgt: None,
+        }];
+        for i in 0..15 {
+            nodes.push(Node {
+                id: format!("noise_{i}"),
+                label: format!("noise_{i}"),
+                file_type: FileType::Code,
+                source_file: "util.rs".into(),
+                source_location: Some("L1".into()),
+                confidence: Some(Confidence::EXTRACTED),
+                confidence_score: Some(1.0),
+                community: None,
+                norm_label: None,
+                degree: None,
+                uuid: None,
+                fingerprint: None,
+                logical_key: None,
+                body_hash: None,
+            });
+            edges.push(Edge {
+                source: "hub".into(),
+                target: format!("noise_{i}"),
+                relation: "calls".into(),
+                confidence: Confidence::EXTRACTED,
+                source_file: "util.rs".into(),
+                source_location: None,
+                confidence_score: Some(1.0),
+                weight: 1.0,
+                original_src: None,
+                original_tgt: None,
+            });
+        }
+        crate::graph::build_from_extraction(&ExtractionResult {
+            nodes,
+            edges,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn bfs_unfiltered_explodes_through_hub() {
+        let g = graph_with_hub();
+        let (visited, _) = bfs(&g, &["seed".to_string()], 2);
+        // seed → hub → 15 noise nodes
+        assert!(visited.len() >= 16, "should pull in all noise: {visited:?}");
+    }
+
+    #[test]
+    fn bfs_with_hub_threshold_stops_at_hub() {
+        let g = graph_with_hub();
+        let filter = TraversalFilter {
+            hub_threshold: Some(5),
+            ..Default::default()
+        };
+        let (visited, _) = bfs_filtered(&g, &["seed".to_string()], 2, &filter);
+        // seed + hub only — hub has degree 16, not expanded.
+        assert!(visited.contains("seed"));
+        assert!(visited.contains("hub"));
+        assert!(
+            !visited.iter().any(|v| v.starts_with("noise_")),
+            "noise should not leak through hub: {visited:?}"
+        );
+    }
+
+    #[test]
+    fn bfs_with_source_pattern_skips_unmatched_files() {
+        let g = graph_with_hub();
+        let filter = TraversalFilter {
+            source_pattern: Some("domain".into()),
+            ..Default::default()
+        };
+        let (visited, _) = bfs_filtered(&g, &["seed".to_string()], 3, &filter);
+        // hub is in util.rs, gets filtered out; only seed remains.
+        assert_eq!(visited.len(), 1);
+        assert!(visited.contains("seed"));
     }
 
     #[test]

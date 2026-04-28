@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.6.0 (2026-04-28)
+
+MCP retrieval upgrade: filtering, set-difference, and nucleo-matcher fuzzy ranking.
+
+The motivating use case is cross-codebase parity (e.g. "what's in pvxs that pva-rs is missing"). Previous workflow forced grep over upstream sources because `god_nodes` returned generic hubs (`ok()`, `len()`), `query_graph` BFS exploded through those same hubs, and there was no way to ask the graph for a set difference.
+
+**New MCP tools**
+
+- `compare_graphs` — set difference between two `source_file` patterns. Labels are normalized (camelCase ↔ snake_case ↔ scope qualifiers collapse to alphanumeric form) so naming-convention drift across languages doesn't generate false gaps. File-level / concept hubs are skipped by default; narrow further with `pattern` (label substring) or `min_degree`. Returns each gap's representative node (highest-degree occurrence) with degree/source.
+- `list_communities` — enumerate Louvain communities with top high-degree symbols and dominant source files per cluster, so the new `community=N` filter on `query_graph` is actually usable.
+
+**New filters on existing tools**
+
+- `god_nodes`: `pattern`, `source_pattern`, `min_degree` — scope to a domain instead of always returning generic hubs.
+- `query_graph`: `source_pattern`, `community`, `exclude_hubs` — `exclude_hubs=true` (or numeric threshold) stops BFS from expanding through high-degree nodes, eliminating the noise blast through `ok()`/`len()`.
+- `get_node`: returns top-N scored candidates (default 3) with `score`/`degree`/`community`/`source_file` for disambiguation, plus `highlight` (e.g. `[close]()`) and `match_indices` so the agent can see *why* each candidate ranked.
+
+**Fuzzy matcher upgrade (nucleo-matcher 0.3)**
+
+- `score_nodes` rewritten on top of nucleo-matcher's fzf-style scoring. Camel/snake boundaries, path separators, and consecutive-match runs all earn bonuses. Path matching uses nucleo's `match_paths()` config.
+- Composite score: `label×4 + source_file + logical_key`. The 4× label weight prevents a strong path hit from outvoting a perfect label match (without it, `closure()` in `yacc/closure.c` outranked the actual `close()`).
+- Adds `nucleo-matcher` 0.3 dependency (one transitive: `unicode-segmentation`).
+
+**Tests**
+
+- 107 lib + 22 integration tests pass (12 new tests covering filters, set difference, community summaries, camel-boundary ranking, match-index helper).
+- Removed the home-grown Levenshtein scorer.
+
 ## v0.4.3 (2026-04-28)
 
 Cleanup of legacy HDF5 naming and new `kodex context` subcommand.

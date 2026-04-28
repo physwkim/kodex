@@ -202,23 +202,57 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
         ),
         tool_def(
             "query_graph",
-            "BFS/DFS search over code graph. Set `format=mermaid` to get a Mermaid flowchart instead of plain text.",
+            "BFS search over the code graph. Filters: `source_pattern` (limit to a path substring), `community` (limit to one community id), `exclude_hubs` (true → skip BFS expansion through degree>50 nodes; or pass a number for a custom threshold) — use these to cut noise from generic hubs like ok()/len(). Set `format=mermaid` for a flowchart.",
             &[
                 ("question", "string", true),
                 ("depth", "number", false),
                 ("token_budget", "number", false),
                 ("format", "string", false),
+                ("source_pattern", "string", false),
+                ("community", "number", false),
+                ("exclude_hubs", "boolean", false),
             ],
         ),
         tool_def(
             "get_node",
-            "Get node details by label.",
-            &[("label", "string", true)],
+            "Get node details by label. Returns the top-N scored matches (default 3) with source_file, source_location, community, and degree — useful for disambiguating overloaded names. Set `top_n=1` for a single best match.",
+            &[
+                ("label", "string", true),
+                ("top_n", "number", false),
+            ],
         ),
         tool_def(
             "god_nodes",
-            "Most-connected entities.",
-            &[("top_n", "number", false)],
+            "Most-connected entities. Filter to a domain with `pattern` (label substring), `source_pattern` (file path substring), or `min_degree` to skip generic hubs like ok()/len().",
+            &[
+                ("top_n", "number", false),
+                ("pattern", "string", false),
+                ("source_pattern", "string", false),
+                ("min_degree", "number", false),
+            ],
+        ),
+        tool_def(
+            "compare_graphs",
+            "Set difference between two source-file patterns. Returns labels in `left_pattern` files that have no normalized match in `right_pattern` files (camelCase vs snake_case is collapsed). File-level / concept hubs (e.g. `data`, `pvxs`, `evhelper`) are skipped by default — set `skip_file_nodes=false` to include them. Narrow with `pattern` (label substring) or `min_degree`. Use for parity checks like 'what's in pvxs that pva-rs doesn't have'.",
+            &[
+                ("left_pattern", "string", true),
+                ("right_pattern", "string", true),
+                ("file_type", "string", false),
+                ("min_norm_len", "number", false),
+                ("top_n", "number", false),
+                ("pattern", "string", false),
+                ("min_degree", "number", false),
+                ("skip_file_nodes", "boolean", false),
+            ],
+        ),
+        tool_def(
+            "list_communities",
+            "Enumerate code communities (Louvain clusters) with top high-degree symbols and dominant source files. Use this first to pick a useful `community=N` value for `query_graph`. Defaults: top 3 symbols + 3 files per community, min size 3, return up to 20 communities.",
+            &[
+                ("top_per_community", "number", false),
+                ("min_size", "number", false),
+                ("limit", "number", false),
+            ],
         ),
         tool_def("graph_stats", "Node/edge/community counts.", &[]),
         tool_def(

@@ -203,14 +203,36 @@ fn process_request(input: &str) -> String {
                 .get("format")
                 .and_then(|v| v.as_str())
                 .unwrap_or("text");
+
+            let source_pattern = params
+                .get("source_pattern")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let community = params
+                .get("community")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+            // exclude_hubs: bool (default threshold 50) OR explicit numeric threshold
+            let hub_threshold = match params.get("exclude_hubs") {
+                Some(serde_json::Value::Bool(true)) => Some(50usize),
+                Some(serde_json::Value::Bool(false)) | None => None,
+                Some(v) => v.as_u64().map(|n| n as usize),
+            };
+            let filter = crate::serve::TraversalFilter {
+                source_pattern,
+                community,
+                hub_threshold,
+            };
+
             let terms: Vec<String> = question
                 .split_whitespace()
                 .filter(|t| t.len() > 2)
                 .map(|t| t.to_lowercase())
                 .collect();
-            let scored = crate::serve::score_nodes(&graph, &terms);
+            let scored = crate::serve::score_nodes_filtered(&graph, &terms, &filter);
             let start: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
-            let (visited, edges) = crate::serve::bfs(&graph, &start, depth);
+            let (visited, edges) = crate::serve::bfs_filtered(&graph, &start, depth, &filter);
             match format {
                 "mermaid" => serde_json::json!(crate::serve::subgraph_to_mermaid(
                     &graph, &visited, &edges
@@ -226,12 +248,37 @@ fn process_request(input: &str) -> String {
                 Err(e) => return error_response(&id, &e.to_string()),
             };
             let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
+            let top_n = params
+                .get("top_n")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(3);
             let matches = crate::serve::score_nodes(&graph, &[label.to_lowercase()]);
-            match matches.first() {
-                Some((_, nid)) => {
-                    serde_json::json!({"node": graph.get_node(nid), "degree": graph.degree(nid)})
-                }
-                None => serde_json::json!({"error": "not found"}),
+            if matches.is_empty() {
+                serde_json::json!({"error": "not found", "candidates": []})
+            } else {
+                let candidates: Vec<serde_json::Value> = matches
+                    .into_iter()
+                    .take(top_n.max(1))
+                    .filter_map(|(score, nid)| {
+                        let node = graph.get_node(&nid)?;
+                        let indices =
+                            crate::serve::label_match_indices(&node.label, label);
+                        let highlight = highlight_label(&node.label, &indices);
+                        Some(serde_json::json!({
+                            "score": score,
+                            "id": nid,
+                            "label": node.label,
+                            "highlight": highlight,
+                            "match_indices": indices,
+                            "source_file": node.source_file,
+                            "source_location": node.source_location,
+                            "community": node.community,
+                            "degree": graph.degree(&nid),
+                        }))
+                    })
+                    .collect();
+                serde_json::json!({ "candidates": candidates })
             }
         }
         "god_nodes" => {
@@ -240,11 +287,118 @@ fn process_request(input: &str) -> String {
                 Err(e) => return error_response(&id, &e.to_string()),
             };
             let top_n = params.get("top_n").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-            let gods = crate::analyze::god_nodes(&graph, top_n);
+            let filter = crate::analyze::GodNodesFilter {
+                pattern: params
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                source_pattern: params
+                    .get("source_pattern")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+                min_degree: params
+                    .get("min_degree")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize),
+            };
+            let gods = crate::analyze::god_nodes_filtered(&graph, top_n, &filter);
             let list: Vec<serde_json::Value> = gods.iter().map(|g| {
                 serde_json::json!({"label": g.label, "degree": g.degree, "source_file": g.source_file})
             }).collect();
             serde_json::json!(list)
+        }
+        "compare_graphs" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let left = params
+                .get("left_pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let right = params
+                .get("right_pattern")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if left.is_empty() || right.is_empty() {
+                return error_response(
+                    &id,
+                    "compare_graphs requires non-empty left_pattern and right_pattern",
+                );
+            }
+            let file_type = params
+                .get("file_type")
+                .and_then(|v| v.as_str())
+                .and_then(crate::types::FileType::from_str_loose);
+            let min_norm_len = params
+                .get("min_norm_len")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(3);
+            let top_n = params
+                .get("top_n")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(200);
+            let label_pattern = params
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let min_degree = params
+                .get("min_degree")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(0);
+            let skip_file_nodes = params
+                .get("skip_file_nodes")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let q = crate::analyze::CompareQuery {
+                left_pattern: left.to_string(),
+                right_pattern: right.to_string(),
+                file_type,
+                min_norm_len,
+                top_n,
+                label_pattern,
+                min_degree,
+                skip_file_nodes,
+            };
+            let gaps = crate::analyze::compare_repos(&graph, &q);
+            serde_json::json!({
+                "gaps": gaps,
+                "count": gaps.len(),
+            })
+        }
+        "list_communities" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let top_per_community = params
+                .get("top_per_community")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(3);
+            let min_size = params
+                .get("min_size")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(3);
+            let limit = params
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(20);
+            let mut summaries =
+                crate::analyze::community_summaries(&graph, top_per_community, min_size);
+            summaries.truncate(limit);
+            serde_json::json!({
+                "communities": summaries,
+                "count": summaries.len(),
+            })
         }
         "graph_stats" => {
             let graph = match crate::serve::load_graph_smart(&db_path) {
@@ -849,6 +1003,30 @@ fn process_request(input: &str) -> String {
         serde_json::to_string(&result).unwrap_or_default(),
         serde_json::to_string(&id).unwrap_or_default(),
     )
+}
+
+/// Wrap matched characters in `[...]` so JSON consumers can render highlights
+/// without parsing index arrays. e.g. `close_file` + indices [0,1,2] → `[clo]se_file`.
+fn highlight_label(label: &str, indices: &[u32]) -> String {
+    if indices.is_empty() {
+        return label.to_string();
+    }
+    let mut out = String::with_capacity(label.len() + 4);
+    let mut prev_in_match = false;
+    for (i, c) in label.chars().enumerate() {
+        let in_match = indices.binary_search(&(i as u32)).is_ok();
+        if in_match && !prev_in_match {
+            out.push('[');
+        } else if !in_match && prev_in_match {
+            out.push(']');
+        }
+        out.push(c);
+        prev_in_match = in_match;
+    }
+    if prev_in_match {
+        out.push(']');
+    }
+    out
 }
 
 fn error_response(id: &serde_json::Value, msg: &str) -> String {
