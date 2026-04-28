@@ -4,11 +4,13 @@ pub mod compare;
 pub mod god_nodes;
 pub mod helpers;
 pub mod questions;
+pub mod rename_detect;
 pub mod surprising;
 
 pub use co_change::{co_changes, CoChange, CoChangeQuery, CoChangeResult};
 pub use communities::{community_summaries, CommunityNodeRef, CommunitySummary};
 pub use compare::{compare_repos, normalize_label, CompareGap, CompareQuery};
+pub use rename_detect::{detect_renames, DetectQuery, OrphanedLink, RenameCandidate};
 pub use god_nodes::{god_nodes, god_nodes_filtered, GodNodesFilter};
 pub use helpers::{is_concept_node, is_file_node};
 pub use questions::suggest_questions;

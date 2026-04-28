@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.9.0 (2026-04-28)
+
+New `detect_renames` MCP tool — keeps knowledge memories from drifting silently when code is refactored. The classic failure mode: you `learn()` something pointing at `Server::handle_search`, the function is renamed to `handle_search_request`, the link's `node_uuid` no longer resolves, and the memory becomes invisible to future recalls. `detect_renames` catches these orphans and proposes replacements you can act on.
+
+### Signals (combined)
+
+- **`same_source_file`** — the orphan's `linked_logical_key` recorded the file path; current nodes in that file are the first-pass pool. Adds 0.4 to confidence on its own.
+- **`token_jaccard_<x>`** — camelCase / snake_case identifier-token overlap between the lost label and each candidate. Adds up to 0.4 weighted by the score.
+- **`body_hash_match`** / **`body_hash_match_cross_file`** — same body content under a different uuid is a near-certain rename. Floors confidence at 0.9-0.95, and is the only signal that crosses file boundaries (catches "moved to a new home" refactors).
+
+### MCP shape
+
+```jsonc
+{
+  "count": N,
+  "orphans": [
+    {
+      "knowledge_uuid": "...",
+      "knowledge_title": "...",            // when available
+      "lost_node_uuid": "...",
+      "lost_logical_key": "src/old.rs::doSomething",
+      "candidates": [
+        {
+          "node_uuid": "...",
+          "label": "do_something",
+          "logical_key": "src/new.rs::do_something",
+          "source_file": "src/new.rs",
+          "confidence": 0.85,
+          "signals": ["same_source_file", "token_jaccard_0.50"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Orphans are sorted by their best candidate's confidence so the cleanest renames surface first. `apply_rename` (actually rewriting the link) is intentionally separate from this tool — `detect_renames` is read-only so an agent can review suggestions before mutation.
+
+### Internals
+
+- New `analyze::rename_detect` module with `detect_renames`, `DetectQuery`, `OrphanedLink`, `RenameCandidate`.
+- 4 new tests (logical_key parsing, same-file token-Jaccard, cross-file body-hash, no-orphan health check). Lib total: 123.
+
 ## v0.8.2 (2026-04-28)
 
 New `analyze_change` MCP tool — diff-aware change-impact briefing in a single call. Wraps `recall_for_diff` + per-file `co_changes` + the diff summary so the agent doesn't need N+1 round-trips when verifying a change or reviewing a PR.

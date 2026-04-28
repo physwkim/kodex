@@ -767,6 +767,49 @@ fn process_request(input: &str) -> String {
             }
             response
         }
+        "detect_renames" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let data = match crate::storage::load(&db_path) {
+                Ok(d) => d,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let titles: std::collections::HashMap<String, String> = data
+                .knowledge
+                .iter()
+                .map(|k| (k.uuid.clone(), k.title.clone()))
+                .collect();
+            let q = crate::analyze::DetectQuery {
+                top_n: params
+                    .get("top_n")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize)
+                    .unwrap_or(50),
+                candidates_per_orphan: params
+                    .get("candidates_per_orphan")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize)
+                    .unwrap_or(3),
+                min_confidence: params
+                    .get("min_confidence")
+                    .and_then(|v| v.as_f64())
+                    .map(|f| f as f32)
+                    .unwrap_or(0.3),
+                source_pattern: params
+                    .get("source_pattern")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            };
+            let orphans =
+                crate::analyze::detect_renames(&graph, &data.links, &titles, &q);
+            serde_json::json!({
+                "orphans": orphans,
+                "count": orphans.len(),
+            })
+        }
         "co_changes" => {
             let file = params
                 .get("file")

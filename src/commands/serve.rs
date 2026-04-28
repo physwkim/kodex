@@ -280,6 +280,16 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             ],
         ),
         tool_def(
+            "detect_renames",
+            "Find knowledge links whose target node has vanished (typically because the function was renamed, the file was moved, or the method was extracted). Returns orphaned links with ranked replacement candidates: same-file token-Jaccard matches first, plus body-hash equality (cross-file move). Use after a refactor to migrate stale knowledge before it gets silently disconnected. Tunable: `min_confidence` (default 0.3), `candidates_per_orphan` (default 3), `source_pattern` (limit scan to one path substring).",
+            &[
+                ("top_n", "number", false),
+                ("candidates_per_orphan", "number", false),
+                ("min_confidence", "number", false),
+                ("source_pattern", "string", false),
+            ],
+        ),
+        tool_def(
             "co_changes",
             "Find files that frequently co-change with a target file in git history. Reveals architectural seams that aren't visible in the static graph — when X is touched, Y typically needs review too. Scans the last `commit_limit` commits (default 200) and returns top files ranked by co-change count + weight (=co_commits / target_commits). Use after editing a file to surface hidden coupling, or to evaluate the blast radius of a planned change.",
             &[
