@@ -159,6 +159,58 @@ fn test_extract_go() {
 }
 
 #[test]
+#[cfg(feature = "lang-rust")]
+fn test_extract_rust_trait_impl_attaches_methods_to_type() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.rs");
+    let result = kodex::extract::generic::extract_generic(
+        &path,
+        &kodex::extract::languages::rust_lang::RUST_CONFIG,
+    );
+
+    assert!(result.error.is_none(), "Extract error: {:?}", result.error);
+    let labels: Vec<&str> = result.nodes.iter().map(|n| n.label.as_str()).collect();
+
+    // The struct itself.
+    assert!(
+        labels.contains(&"LocalChannel"),
+        "expected LocalChannel struct: {labels:?}"
+    );
+
+    // Methods from `impl LocalChannel` AND `impl ChannelSource for LocalChannel`
+    // both have to land under a node labelled `LocalChannel`. We look at
+    // contains-edges sourced from any node whose label is "LocalChannel".
+    let local_channel_ids: Vec<String> = result
+        .nodes
+        .iter()
+        .filter(|n| n.label == "LocalChannel")
+        .map(|n| n.id.clone())
+        .collect();
+
+    let method_labels: Vec<&str> = result
+        .edges
+        .iter()
+        .filter(|e| {
+            (e.relation == "contains" || e.relation == "method")
+                && local_channel_ids.contains(&e.source)
+        })
+        .filter_map(|e| {
+            result
+                .nodes
+                .iter()
+                .find(|n| n.id == e.target)
+                .map(|n| n.label.as_str())
+        })
+        .collect();
+
+    for expected in &["new()", "name()", "open()", "close()"] {
+        assert!(
+            method_labels.iter().any(|l| l == expected),
+            "expected `{expected}` under LocalChannel, got: {method_labels:?}"
+        );
+    }
+}
+
+#[test]
 #[cfg(feature = "lang-python")]
 fn test_full_pipeline_on_fixtures() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");

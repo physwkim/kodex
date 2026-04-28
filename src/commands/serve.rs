@@ -258,6 +258,18 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
                 ("public_pattern", "string", false),
                 ("public_only", "boolean", false),
                 ("internal_weight", "number", false),
+                ("semantic_threshold", "number", false),
+                ("semantic_top_per_gap", "number", false),
+            ],
+        ),
+        tool_def(
+            "co_changes",
+            "Find files that frequently co-change with a target file in git history. Reveals architectural seams that aren't visible in the static graph — when X is touched, Y typically needs review too. Scans the last `commit_limit` commits (default 200) and returns top files ranked by co-change count + weight (=co_commits / target_commits). Use after editing a file to surface hidden coupling, or to evaluate the blast radius of a planned change.",
+            &[
+                ("file", "string", true),
+                ("commit_limit", "number", false),
+                ("top_n", "number", false),
+                ("min_weight", "number", false),
             ],
         ),
         tool_def(

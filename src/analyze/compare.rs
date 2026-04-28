@@ -37,6 +37,14 @@ pub struct CompareQuery {
     /// but `public_only` is false. Default 0 keeps internal gaps but pushes
     /// them below all public ones; set to e.g. 0.5 for a softer weighting.
     pub internal_weight: f32,
+    /// Minimum identifier-token Jaccard for a right-side label to be flagged
+    /// as a candidate semantic match for a gap. 0 disables the check.
+    /// Recommended start: 0.4 (catches `tickSearch` ↔ `process_search` while
+    /// skipping noise). Off by default — adds an O(left_gaps × right_nodes)
+    /// pass.
+    pub semantic_threshold: f32,
+    /// Cap on candidate matches per gap. Default 3.
+    pub semantic_top_per_gap: usize,
 }
 
 impl Default for CompareQuery {
@@ -53,7 +61,56 @@ impl Default for CompareQuery {
             public_pattern: None,
             public_only: false,
             internal_weight: 0.0,
+            semantic_threshold: 0.0,
+            semantic_top_per_gap: 3,
         }
+    }
+}
+
+/// Split a label into lowercase identifier tokens (camelCase + snake_case +
+/// scope qualifiers all unified). e.g. `tickSearch()` → ["tick", "search"];
+/// `Server::handle_request` → ["server", "handle", "request"].
+pub fn tokenize_label(label: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut prev_lower = false;
+    for c in label.chars() {
+        if c.is_alphanumeric() {
+            if c.is_uppercase() && prev_lower && !current.is_empty() {
+                // camelCase boundary: flush current
+                tokens.push(current.to_lowercase());
+                current = String::new();
+            }
+            current.push(c);
+            prev_lower = c.is_lowercase();
+        } else {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current).to_lowercase());
+            }
+            prev_lower = false;
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current.to_lowercase());
+    }
+    // Drop single-character tokens (loop vars, separators) — too noisy. Keep
+    // 2-char tokens because `io`, `fs`, `os`, `id` etc. are meaningful in code.
+    tokens.retain(|t| t.len() > 1);
+    tokens
+}
+
+fn jaccard(a: &[String], b: &[String]) -> f32 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let set_a: std::collections::HashSet<&str> = a.iter().map(|s| s.as_str()).collect();
+    let set_b: std::collections::HashSet<&str> = b.iter().map(|s| s.as_str()).collect();
+    let intersection = set_a.intersection(&set_b).count();
+    let union = set_a.union(&set_b).count();
+    if union == 0 {
+        0.0
+    } else {
+        intersection as f32 / union as f32
     }
 }
 
@@ -71,6 +128,20 @@ pub struct CompareGap {
     /// Always `false` when no public_pattern was supplied.
     #[serde(default)]
     pub is_public: bool,
+    /// Semantic-token candidates from the right side that share enough
+    /// identifier tokens with this gap's label. Empty unless
+    /// `CompareQuery::semantic_threshold > 0`. Use to spot "this gap is
+    /// probably implemented in right under a different name" cases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_matches: Vec<CandidateMatch>,
+}
+
+/// One right-side label that overlaps the gap's tokens by Jaccard ≥ threshold.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CandidateMatch {
+    pub label: String,
+    pub source_file: String,
+    pub jaccard: f32,
 }
 
 /// Normalize a label to a comparable identifier form:
@@ -168,6 +239,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
                         source_location: node.source_location.clone(),
                         degree,
                         is_public,
+                        candidate_matches: Vec::new(),
                     };
                 }
             })
@@ -178,6 +250,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
                 source_location: node.source_location.clone(),
                 degree,
                 is_public,
+                candidate_matches: Vec::new(),
             });
     }
 
@@ -194,6 +267,57 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
             Some(gap)
         })
         .collect();
+
+    // Optional semantic-token Jaccard pass: for each gap, scan right-side
+    // labels in `right_pattern` files and flag those that share enough
+    // identifier tokens. Catches "the gap is implemented in right under a
+    // different name" cases (`tickSearch` ↔ `process_search_request`).
+    if query.semantic_threshold > 0.0 {
+        let right_nodes: Vec<(&str, &str, Vec<String>)> = graph
+            .node_ids()
+            .filter_map(|id| {
+                let node = graph.get_node(id)?;
+                if !node.source_file.to_lowercase().contains(&right_pat) {
+                    return None;
+                }
+                Some((
+                    node.label.as_str(),
+                    node.source_file.as_str(),
+                    tokenize_label(&node.label),
+                ))
+            })
+            .filter(|(_, _, toks)| !toks.is_empty())
+            .collect();
+
+        for gap in &mut gaps {
+            let gap_tokens = tokenize_label(&gap.label);
+            if gap_tokens.is_empty() {
+                continue;
+            }
+            let mut matches: Vec<CandidateMatch> = right_nodes
+                .iter()
+                .filter_map(|(label, source, toks)| {
+                    let j = jaccard(&gap_tokens, toks);
+                    if j >= query.semantic_threshold {
+                        Some(CandidateMatch {
+                            label: label.to_string(),
+                            source_file: source.to_string(),
+                            jaccard: j,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            matches.sort_by(|a, b| {
+                b.jaccard
+                    .partial_cmp(&a.jaccard)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            matches.truncate(query.semantic_top_per_gap.max(1));
+            gap.candidate_matches = matches;
+        }
+    }
 
     // Sort: when public_pattern is set, public gaps come first regardless of
     // degree (they're the API stability surface). Within each tier, higher
@@ -490,6 +614,71 @@ mod tests {
         let result = compare_repos(&g, &q);
         let labels: Vec<&str> = result.iter().map(|x| x.label.as_str()).collect();
         assert_eq!(labels, vec!["publicSym()"]);
+    }
+
+    #[test]
+    fn tokenize_splits_camel_and_snake_case() {
+        assert_eq!(tokenize_label("tickSearch()"), vec!["tick", "search"]);
+        assert_eq!(
+            tokenize_label("Server::handle_REQUEST"),
+            vec!["server", "handle", "request"]
+        );
+        // 2-char tokens are kept (`io`, `fs` are meaningful); 1-char dropped.
+        assert_eq!(tokenize_label("io_op"), vec!["io", "op"]);
+        assert_eq!(tokenize_label("Foo::x"), vec!["foo"]);
+    }
+
+    #[test]
+    fn semantic_check_flags_token_overlap_candidates() {
+        // pvxs gap `tickSearch()` has no normalized match in pva-rs, but the
+        // pva-rs side has `process_search_request()` — same `search` token.
+        // Without semantic_threshold the gap is reported standalone; with
+        // it we get a candidate_matches entry.
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_node("g", "tickSearch()", "pvxs/src/client.cpp"),
+                mk_node("c", "process_search_request()", "pva-rs/src/client.rs"),
+                mk_node("u", "unrelated_thing()", "pva-rs/src/util.rs"),
+            ],
+            ..Default::default()
+        };
+        let g = build_from_extraction(&extraction);
+
+        let no_sem = CompareQuery {
+            left_pattern: "pvxs".into(),
+            right_pattern: "pva-rs".into(),
+            ..Default::default()
+        };
+        let r1 = compare_repos(&g, &no_sem);
+        assert!(
+            r1.iter().all(|gap| gap.candidate_matches.is_empty()),
+            "no semantic_threshold → no candidate_matches"
+        );
+
+        let with_sem = CompareQuery {
+            left_pattern: "pvxs".into(),
+            right_pattern: "pva-rs".into(),
+            semantic_threshold: 0.2,
+            ..Default::default()
+        };
+        let r2 = compare_repos(&g, &with_sem);
+        let gap = r2
+            .iter()
+            .find(|x| x.label == "tickSearch()")
+            .expect("gap missing");
+        let cand_labels: Vec<&str> = gap
+            .candidate_matches
+            .iter()
+            .map(|c| c.label.as_str())
+            .collect();
+        assert!(
+            cand_labels.contains(&"process_search_request()"),
+            "expected token-overlap match: {cand_labels:?}"
+        );
+        assert!(
+            !cand_labels.contains(&"unrelated_thing()"),
+            "non-overlapping label must not match: {cand_labels:?}"
+        );
     }
 
     #[test]

@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.7.0 (2026-04-28)
+
+Four follow-ups from real-use feedback after v0.6.2 — closes most of the user-reported gaps in the parity workflow. Targets "discover" and "verify" stages, not just "compare".
+
+### Staleness detection (real-use pain #4)
+
+- `kodex run` now records the project's git HEAD SHA in the registry as `last_indexed_commit`.
+- `compare_graphs`, `get_node`, and `query_graph` responses include a `stale: {indexed_commit, current_commit, hint}` field (or `[STALE: ...]` prefix on string returns) when the working tree has moved past the indexed snapshot. Stops the agent from trusting answers built on a stale graph.
+- Pre-v0.7 registry entries continue to work — they just don't surface staleness until next `kodex run`.
+
+### Co-change analysis (real-use pain #10)
+
+- New `co_changes(file, commit_limit, top_n, min_weight)` MCP tool — scans the last N commits with `git log --name-only` and returns files that frequently co-change with the target, ranked by commit count and weight (=co_commits / target_commits). Reveals architectural seams that aren't visible in the static graph.
+- Smoke test against the kodex repo itself: `Cargo.toml` co-changes with `CHANGELOG.md` (73%), `Cargo.lock` (54%), `src/storage.rs` (35%) — exactly the touch-set for a release.
+
+### Rust trait-impl extraction (real-use pain #7)
+
+- `impl Trait for Type { ... }` methods now attach to the `Type` node (previously orphaned at file scope because `impl_item` has no `name` field). All `impl` blocks for the same `Type` collide on a shared node id, so a single `get_node("LocalChannel", expand="contains")` enumerates the full API across direct + trait impls.
+- New integration test (`test_extract_rust_trait_impl_attaches_methods_to_type`) on `tests/fixtures/sample.rs`.
+
+### Semantic-token gap matching (real-use pain #8, lightweight v1)
+
+- `compare_graphs` gains `semantic_threshold` (default 0 = off). When >0, each gap is scored against right-side labels by camelCase/snake_case token Jaccard; matches above the threshold are attached as `candidate_matches: [{label, source_file, jaccard}]`. Catches "this is implemented in right under a different name" cases (`tickSearch` → `process_search_request`).
+- Smoke against pvxs↔pva-rs: gap `handle_CONNECTION_VALIDATION` now surfaces three candidates including `ConnectionValidationRequest` (jaccard 0.50) and `build_client_connection_validation` (0.40) — verifying which gaps are real vs. renamed without manual browse.
+- True semantic embeddings (cross-language equivalence beyond shared tokens) deferred to a future release; this v1 catches the common cases without adding model dependencies.
+
+### New helpers
+
+- `analyze::co_change` module with `CoChangeQuery`, `CoChangeResult`.
+- `analyze::compare::tokenize_label` — public for external token-Jaccard use.
+- `registry::current_head_commit`, `registry::drift`, `registry::entry_for_dir` — used by the actor for staleness detection; reusable.
+
 ## v0.6.2 (2026-04-28)
 
 Cuts FP verification time on parity workflows by inlining source context, and makes diff-aware retrieval one call instead of two. Driven by real-use feedback after v0.6.1.

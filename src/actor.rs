@@ -244,10 +244,17 @@ fn process_request(input: &str) -> String {
                 used_fallback = !start.is_empty();
             }
             let (visited, edges) = crate::serve::bfs_filtered(&graph, &start, depth, &filter);
-            let rendered = match format {
+            let mut rendered = match format {
                 "mermaid" => crate::serve::subgraph_to_mermaid(&graph, &visited, &edges),
                 _ => crate::serve::subgraph_to_text(&graph, &visited, &edges, budget),
             };
+            // Surface staleness inline since query_graph returns a plain
+            // string — agents reading the output will see the warning even
+            // though older clients still parse the body unchanged.
+            if let Some(stale) = staleness_warning(project_dir) {
+                let hint = stale.get("hint").and_then(|v| v.as_str()).unwrap_or("");
+                rendered = format!("[STALE: {hint}]\n{rendered}");
+            }
             // Empty-result diagnostics: tell the caller why nothing came back so
             // they know whether to broaden the question, drop a filter, or raise
             // depth. Backward-compatible: non-empty returns the rendered string
@@ -402,6 +409,9 @@ fn process_request(input: &str) -> String {
                     response["members_relation"] = serde_json::json!(rel);
                     response["members_source"] = serde_json::json!(tid);
                 }
+                if let Some(stale) = staleness_warning(project_dir) {
+                    response["stale"] = stale;
+                }
                 response
             }
         }
@@ -494,6 +504,16 @@ fn process_request(input: &str) -> String {
                 .and_then(|v| v.as_f64())
                 .map(|f| f as f32)
                 .unwrap_or(0.0);
+            let semantic_threshold = params
+                .get("semantic_threshold")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+                .unwrap_or(0.0);
+            let semantic_top_per_gap = params
+                .get("semantic_top_per_gap")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(3);
             let q = crate::analyze::CompareQuery {
                 left_pattern: left.to_string(),
                 right_pattern: right.to_string(),
@@ -506,6 +526,8 @@ fn process_request(input: &str) -> String {
                 public_pattern,
                 public_only,
                 internal_weight,
+                semantic_threshold,
+                semantic_top_per_gap,
             };
             let gaps = crate::analyze::compare_repos(&graph, &q);
             let with_signature = params
@@ -554,10 +576,54 @@ fn process_request(input: &str) -> String {
                     .map(|g| serde_json::to_value(g).unwrap_or(serde_json::Value::Null))
                     .collect()
             };
-            serde_json::json!({
+            let mut response = serde_json::json!({
                 "gaps": enriched,
                 "count": gaps.len(),
-            })
+            });
+            if let Some(stale) = staleness_warning(project_dir) {
+                response["stale"] = stale;
+            }
+            response
+        }
+        "co_changes" => {
+            let file = params
+                .get("file")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if file.is_empty() {
+                return error_response(&id, "co_changes: `file` is required");
+            }
+            let commit_limit = params
+                .get("commit_limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(200);
+            let top_n = params
+                .get("top_n")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(20);
+            let min_weight = params
+                .get("min_weight")
+                .and_then(|v| v.as_f64())
+                .map(|f| f as f32)
+                .unwrap_or(0.0);
+            let query = crate::analyze::CoChangeQuery {
+                file: file.to_string(),
+                commit_limit,
+                top_n,
+                min_weight,
+            };
+            // Resolve repo root from the project_dir the MCP layer injects;
+            // fall back to the registry entry path so the caller can run from
+            // a sub-directory.
+            let repo_dir = crate::registry::entry_for_dir(std::path::Path::new(project_dir))
+                .map(|e| e.path)
+                .unwrap_or_else(|| std::path::PathBuf::from(project_dir));
+            match crate::analyze::co_changes(&repo_dir, &query) {
+                Ok(r) => serde_json::json!(r),
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
         }
         "list_communities" => {
             let graph = match crate::serve::load_graph_smart(&db_path) {
@@ -1220,6 +1286,23 @@ fn process_request(input: &str) -> String {
         serde_json::to_string(&result).unwrap_or_default(),
         serde_json::to_string(&id).unwrap_or_default(),
     )
+}
+
+/// Report whether the graph is behind the project's git HEAD. Returns a JSON
+/// object describing the drift, or `None` when in sync / unknown.
+fn staleness_warning(project_dir: &str) -> Option<serde_json::Value> {
+    let dir = std::path::Path::new(project_dir);
+    let entry = crate::registry::entry_for_dir(dir)?;
+    let current = crate::registry::drift(&entry, &entry.path)?;
+    Some(serde_json::json!({
+        "indexed_commit": entry.last_indexed_commit,
+        "current_commit": current,
+        "project_path": entry.path.display().to_string(),
+        "hint": format!(
+            "graph is behind HEAD; run `kodex run {}` to refresh",
+            entry.path.display()
+        ),
+    }))
 }
 
 /// Run `git diff <base_ref>` in `cwd` and return stdout. Used by

@@ -7,6 +7,34 @@ fn read_text<'a>(node: &Node, source: &'a [u8]) -> &'a str {
     std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
 }
 
+/// Resolve names that the default `child_by_field_name("name")` lookup misses.
+/// Specifically, `impl_item` has no `name` field — its identity is the type
+/// being implemented. Returning that type as the name causes the generic
+/// extractor to treat each `impl Foo for Bar { ... }` block as a class node
+/// with `Bar` as its label, so all methods across all impl blocks for `Bar`
+/// become siblings under a single node (the impls' make_id collides on
+/// "Bar", which is the desired merge).
+///
+/// Strips generic parameters (`Bar<T>` → `Bar`) since the user-facing query
+/// is by base name.
+fn resolve_name_rust(node: &Node, source: &[u8]) -> Option<String> {
+    if node.kind() != "impl_item" {
+        return None;
+    }
+    let type_node = node.child_by_field_name("type")?;
+    let raw = read_text(&type_node, source).trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Drop everything from the first generic angle bracket onward.
+    let base = raw.split('<').next().unwrap_or(raw).trim();
+    if base.is_empty() {
+        None
+    } else {
+        Some(base.to_string())
+    }
+}
+
 fn import_rust(
     node: &Node,
     source: &[u8],
@@ -57,6 +85,6 @@ pub static RUST_CONFIG: LanguageConfig = LanguageConfig {
     function_boundary_types: &["function_item", "closure_expression"],
     function_label_parens: true,
     import_handler: Some(import_rust),
-    resolve_function_name: None,
+    resolve_function_name: Some(resolve_name_rust),
     extra_walk: None,
 };
