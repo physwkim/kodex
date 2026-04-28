@@ -658,6 +658,115 @@ fn process_request(input: &str) -> String {
             }
             response
         }
+        "analyze_change" => {
+            // Orchestrator: combines recall_for_diff (knowledge memories) +
+            // co_changes (architectural blast radius) into one call. Saves
+            // the agent from making N+1 round-trips when verifying a diff.
+            let max_items = params
+                .get("max_items")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10) as usize;
+            let auto = params
+                .get("auto")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let base_ref = params
+                .get("base_ref")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("HEAD");
+            let cochange_top_n = params
+                .get("co_change_top_n")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(8);
+            let cochange_commit_limit = params
+                .get("co_change_commit_limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(200);
+            let cochange_max_files = params
+                .get("co_change_max_files")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(5);
+
+            let auto_diff: Option<String> = if auto {
+                run_git_diff(project_dir, base_ref).ok()
+            } else {
+                None
+            };
+            let supplied = params.get("diff").and_then(|v| v.as_str()).unwrap_or("");
+            let diff_text: &str = auto_diff
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(supplied);
+            if diff_text.trim().is_empty() {
+                return error_response(
+                    &id,
+                    "analyze_change: empty diff (set auto=true or supply `diff`)",
+                );
+            }
+
+            let (analysis, results) =
+                crate::learn::recall_for_diff(&db_path, diff_text, max_items);
+            let uuids: Vec<String> =
+                results.iter().map(|r| r.knowledge.uuid.clone()).collect();
+            let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
+            let knowledge: Vec<serde_json::Value> = results
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "knowledge": r.knowledge,
+                        "score": r.score,
+                    })
+                })
+                .collect();
+
+            // Per-file co_changes — capped to keep the response bounded.
+            let repo_dir =
+                crate::registry::entry_for_dir(std::path::Path::new(project_dir))
+                    .map(|e| e.path)
+                    .unwrap_or_else(|| std::path::PathBuf::from(project_dir));
+            let mut co_change_groups: Vec<serde_json::Value> = Vec::new();
+            for file in analysis.changed_files.iter().take(cochange_max_files) {
+                let q = crate::analyze::CoChangeQuery {
+                    file: file.clone(),
+                    commit_limit: cochange_commit_limit,
+                    top_n: cochange_top_n,
+                    min_weight: 0.0,
+                };
+                if let Ok(r) = crate::analyze::co_changes(&repo_dir, &q) {
+                    if !r.co_changes.is_empty() {
+                        co_change_groups.push(serde_json::json!({
+                            "file": file,
+                            "target_commits": r.target_commits,
+                            "co_changes": r.co_changes,
+                        }));
+                    }
+                }
+            }
+
+            let mut response = serde_json::json!({
+                "diff_summary": {
+                    "changed_files": analysis.changed_files,
+                    "changed_node_uuids": analysis.changed_node_uuids,
+                },
+                "knowledge": knowledge,
+                "co_changes": co_change_groups,
+            });
+            if auto {
+                response["diff_source"] = serde_json::json!(if auto_diff.is_some() {
+                    format!("git diff {base_ref}")
+                } else {
+                    "git failed; used supplied diff".to_string()
+                });
+            }
+            if let Some(stale) = staleness_warning(project_dir) {
+                response["stale"] = stale;
+            }
+            response
+        }
         "co_changes" => {
             let file = params
                 .get("file")

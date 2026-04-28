@@ -267,6 +267,19 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             ],
         ),
         tool_def(
+            "analyze_change",
+            "Diff-aware change-impact briefing. One call combines `recall_for_diff` (relevant knowledge memories), per-file `co_changes` (architectural blast radius from git history), and the diff summary. Use after editing a file or before reviewing a PR — surfaces \"what should I also look at\" without N+1 round-trips. `auto=true` runs `git diff <base_ref>` (default HEAD) in the project working tree; otherwise pass `diff` directly. Tunable: `co_change_max_files` (per-file cap, default 5), `co_change_top_n` (top files per group, default 8), `co_change_commit_limit` (history depth, default 200), `max_items` (knowledge cap, default 10).",
+            &[
+                ("diff", "string", false),
+                ("auto", "boolean", false),
+                ("base_ref", "string", false),
+                ("max_items", "number", false),
+                ("co_change_max_files", "number", false),
+                ("co_change_top_n", "number", false),
+                ("co_change_commit_limit", "number", false),
+            ],
+        ),
+        tool_def(
             "co_changes",
             "Find files that frequently co-change with a target file in git history. Reveals architectural seams that aren't visible in the static graph — when X is touched, Y typically needs review too. Scans the last `commit_limit` commits (default 200) and returns top files ranked by co-change count + weight (=co_commits / target_commits). Use after editing a file to surface hidden coupling, or to evaluate the blast radius of a planned change.",
             &[

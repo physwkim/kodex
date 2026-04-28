@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.8.2 (2026-04-28)
+
+New `analyze_change` MCP tool — diff-aware change-impact briefing in a single call. Wraps `recall_for_diff` + per-file `co_changes` + the diff summary so the agent doesn't need N+1 round-trips when verifying a change or reviewing a PR.
+
+- `auto=true` runs `git diff <base_ref>` (default HEAD) in the project working tree; otherwise pass `diff` directly.
+- For each touched file (capped by `co_change_max_files`, default 5), the response includes its top architectural co-changers from git history.
+- Combined response shape: `{ diff_summary: {changed_files, changed_node_uuids}, knowledge: [...], co_changes: [{file, target_commits, co_changes: [...]}], stale? }`.
+- Smoke against the kodex repo: a 2-file edit returned 3 relevant knowledge entries, plus the cross-file co-change pattern (CHANGELOG/Cargo.lock at 50-72% with `src/commands/serve.rs`) — matches the "version-bump release" workflow exactly.
+
 ## v0.8.1 (2026-04-28)
 
 Embedding quality boost: `kodex embed` now feeds the function signature + preceding doc comment to the embedding model instead of just the label. The same v0.6.2 `source_lookup` infrastructure used by `compare_graphs --with-signature` is reused, so no new disk-read code paths.
