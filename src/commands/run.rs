@@ -133,6 +133,14 @@ pub fn run_pipeline(path: &Path) {
         Err(e) => eprintln!("  HTML: {e}"),
     }
 
+    // JSON (networkx node-link) — consumed by the Obsidian plugin and any
+    // external visualizer. Kept alongside graph.html so a single
+    // `kodex run` covers both presentations of the graph.
+    match kodex::export::to_json(&graph, &communities, &out_dir.join("graph.json")) {
+        Ok(()) => println!("  exported graph.json"),
+        Err(e) => eprintln!("  JSON: {e}"),
+    }
+
     // Report
     let cohesion = kodex::cluster::score_all(&graph, &communities);
     let gods = kodex::analyze::god_nodes(&graph, 10);

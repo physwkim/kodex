@@ -13,31 +13,41 @@ use crate::graph::build_from_extraction;
 use crate::graph::KodexGraph;
 use crate::types::ExtractionResult;
 
-/// Smart graph loading — SQLite first, vault as fallback.
+/// Smart graph loading — SQLite first, JSON next, vault as fallback.
 ///
 /// Priority:
-/// 1. SQLite (.db) — fast, source of truth for data
-/// 2. Vault directory (.md files) — fallback, slower
+/// 1. SQLite (.db / .sqlite) — fast, source of truth for data
+/// 2. JSON (.json) — networkx node-link format, used by the Obsidian
+///    plugin and external visualizers (matches `kodex run`'s graph.json
+///    output)
+/// 3. Vault directory (.md files) — slower fallback
 pub fn load_graph_smart(path: &Path) -> crate::error::Result<KodexGraph> {
-    // Explicit SQLite file
-    if path
-        .extension()
-        .map(|e| e == "db" || e == "sqlite")
-        .unwrap_or(false)
-    {
+    let ext = path.extension().and_then(|e| e.to_str());
+
+    if matches!(ext, Some("db") | Some("sqlite")) {
         return crate::storage::load_db(path);
     }
+    if matches!(ext, Some("json")) {
+        return load_graph(path);
+    }
 
-    // Directory: look for kodex.db inside, then vault .md
+    // Directory: look for kodex.db inside, then graph.json, then vault .md.
+    // graph.json fallback lets the Obsidian plugin point at a kodex-out/
+    // directory and still resolve.
     if path.is_dir() {
         let db_in_dir = path.join("kodex.db");
         if db_in_dir.exists() {
             return crate::storage::load_db(&db_in_dir);
         }
+        let json_in_dir = path.join("graph.json");
+        if json_in_dir.exists() {
+            return load_graph(&json_in_dir);
+        }
         return crate::vault::load_graph_from_vault(path);
     }
 
-    // Try as SQLite regardless of extension
+    // Last resort: try as SQLite regardless of extension (old `.h5` paths
+    // pointing at the migrated DB file land here).
     crate::storage::load_db(path)
 }
 

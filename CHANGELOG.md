@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.10.0 (2026-04-28)
+
+Three correctness fixes from a code review — Obsidian/CLI contract drift, ad-hoc schema migration, and a shell-injection surface in the plugin.
+
+### `graph.json` contract restored
+
+- `kodex run` now emits `kodex-out/graph.json` alongside `graph.html` and `GRAPH_REPORT.md`. The Obsidian plugin and external visualizers expect this file (`graphJsonPath` defaults to `graph.json`); previously it was missing despite being the documented contract.
+- `serve::load_graph_smart` now recognizes `.json` (networkx node-link format) and falls back to `<dir>/graph.json` when scanning a directory. Plugins pointing at a `kodex-out/` directory or a JSON file directly now resolve correctly without forcing SQLite.
+
+### Versioned SQLite migrations
+
+- Replaced the inline `migrate_columns` ad-hoc probe with a real migration framework: `PRAGMA user_version` tracks schema state, and a numbered match arm registers each migration step. `SCHEMA_VERSION` is the current head.
+- v0→v1 (knowledge.fetch_count, knowledge.last_fetched — was the only existing migration) is now an explicit numbered step and runs idempotently. Future schema bumps just add a `migrate_vN_to_vM` arm.
+- New `test_migration_v0_to_v1_idempotent` test synthesizes a legacy DB by stripping the columns + resetting `user_version`, then verifies a re-open re-applies the migration cleanly.
+
+### Plugin shell-injection surface closed
+
+- `obsidian-plugin/main.ts`: replaced `exec(string)` with `execFile(binary, args[])`. Node labels, file paths, and queries now pass to kodex verbatim — no shell metacharacter parsing, no injection. Affects `runKodex` and all 5 call sites (query, path, explain, god-nodes, rebuild).
+
+### Tier 2 (separate work)
+
+The same review flagged four larger structural opportunities — MCP tool registry unification, recall quality eval harness, actor graph cache, and extraction accuracy (cross-file call resolution). Each is its own milestone and is **not** in this release; they need design choices that warrant a separate cycle each.
+
 ## v0.9.1 (2026-04-28)
 
 Documentation-only repositioning of the `embeddings` feature based on real-use evaluation: a 384-dim BGE-small cosine score is a worse equivalence judge than the LLM caller reading the inlined signature itself. The right framing is **candidate pre-filter at scale**, not "semantic match".

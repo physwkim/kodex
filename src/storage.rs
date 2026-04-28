@@ -721,20 +721,59 @@ fn create_tables(conn: &Connection) -> crate::error::Result<()> {
         ",
     )
     .map_err(|e| crate::error::KodexError::Other(format!("SQLite tables: {e}")))?;
-    migrate_columns(conn)?;
+    run_migrations(conn)?;
     Ok(())
 }
 
-/// Add missing columns to existing tables. SQLite has no IF NOT EXISTS for columns,
-/// so we probe with PRAGMA table_info and ignore "duplicate column" errors.
-fn migrate_columns(conn: &Connection) -> crate::error::Result<()> {
+/// Current schema version. Bump when a migration is added below; the
+/// matching arm in `run_migrations` is what actually applies it.
+///
+/// History:
+/// - v0: pre-tracking — schemas before this constant existed. Detected by
+///   `PRAGMA user_version = 0` (SQLite default for fresh DBs *and* legacy
+///   DBs alike), so the v0→v1 migration always probes for missing
+///   knowledge.{fetch_count,last_fetched} columns.
+/// - v1: knowledge.fetch_count + knowledge.last_fetched (added 2026-04 to
+///   support recall ranking by usage).
+const SCHEMA_VERSION: i64 = 1;
+
+/// Apply any pending migrations from `current` up to `SCHEMA_VERSION`.
+/// Idempotent — running twice on the same DB is a no-op.
+fn run_migrations(conn: &Connection) -> crate::error::Result<()> {
+    let current: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|e| crate::error::KodexError::Other(format!("user_version read: {e}")))?;
+
+    for next in (current + 1)..=SCHEMA_VERSION {
+        match next {
+            1 => migrate_v0_to_v1(conn)?,
+            other => {
+                return Err(crate::error::KodexError::Other(format!(
+                    "no migration registered for schema v{other}"
+                )));
+            }
+        }
+        conn.pragma_update(None, "user_version", next).map_err(|e| {
+            crate::error::KodexError::Other(format!("user_version write: {e}"))
+        })?;
+    }
+    Ok(())
+}
+
+/// v0 → v1: add `fetch_count` and `last_fetched` columns to `knowledge`
+/// for recall-ranking by usage. Idempotent — probes `PRAGMA table_info`
+/// before each ALTER so a fresh-from-CREATE-TABLE schema (which already
+/// has the columns from the current `create_tables` SQL) skips the work.
+fn migrate_v0_to_v1(conn: &Connection) -> crate::error::Result<()> {
     let existing: std::collections::HashSet<String> = {
         let mut stmt = conn
             .prepare("PRAGMA table_info(knowledge)")
             .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma: {e}")))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma rows: {e}")))?;
+            .map_err(|e| {
+                crate::error::KodexError::Other(format!("SQLite pragma rows: {e}"))
+            })?;
         rows.filter_map(|r| r.ok()).collect()
     };
     let want = [
@@ -1426,6 +1465,71 @@ mod tests {
         assert_eq!(na.uuid.as_deref(), Some("uuid-a"));
         assert_eq!(na.source_location.as_deref(), Some("L1"));
         assert_eq!(loaded.extraction.edges[0].source_file, "a.py");
+    }
+
+    /// Simulate a pre-v1 database (legacy ad-hoc migration era) by stripping
+    /// the `fetch_count` / `last_fetched` columns and resetting `user_version`
+    /// to 0. `open_db` should detect the old version and re-apply the v0→v1
+    /// migration, leaving the columns + a bumped `user_version`.
+    #[test]
+    fn test_migration_v0_to_v1_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("legacy.db");
+        // First open creates a fresh schema and stamps user_version=1.
+        {
+            let _ = open_db(&db).expect("open fresh");
+        }
+        // Roll back: drop the columns and the version stamp.
+        {
+            let conn = Connection::open(&db).unwrap();
+            // SQLite < 3.35 has no DROP COLUMN; re-create the table without
+            // them. Production ALTERs are forward-only, so this rollback is
+            // synthetic — just enough to flip the migration trigger.
+            conn.execute_batch(
+                "
+                ALTER TABLE knowledge RENAME TO knowledge_old;
+                CREATE TABLE knowledge (
+                    uuid TEXT PRIMARY KEY, title TEXT, knowledge_type TEXT, description TEXT,
+                    confidence REAL, observations INTEGER, tags TEXT,
+                    scope TEXT DEFAULT '', status TEXT DEFAULT 'active', source TEXT DEFAULT '',
+                    last_validated_at INTEGER DEFAULT 0, applies_when TEXT DEFAULT '',
+                    supersedes TEXT DEFAULT '', superseded_by TEXT DEFAULT '',
+                    evidence TEXT DEFAULT '', created_at INTEGER DEFAULT 0,
+                    updated_at INTEGER DEFAULT 0, author TEXT DEFAULT '', trigger TEXT DEFAULT ''
+                );
+                INSERT INTO knowledge SELECT
+                    uuid, title, knowledge_type, description, confidence, observations, tags,
+                    scope, status, source, last_validated_at, applies_when, supersedes,
+                    superseded_by, evidence, created_at, updated_at, author, trigger
+                FROM knowledge_old;
+                DROP TABLE knowledge_old;
+                ",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 0_i64).unwrap();
+            let v: i64 = conn
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .unwrap();
+            assert_eq!(v, 0, "synthetic rollback failed");
+        }
+        // Second open should re-apply v0→v1.
+        let _ = open_db(&db).expect("re-open after rollback");
+        let conn = Connection::open(&db).unwrap();
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION, "user_version should be bumped to current");
+        let cols: std::collections::HashSet<String> = {
+            let mut stmt = conn.prepare("PRAGMA table_info(knowledge)").unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(cols.contains("fetch_count"), "fetch_count must be re-added");
+        assert!(cols.contains("last_fetched"), "last_fetched must be re-added");
+        // Idempotency: a third open must not error or duplicate columns.
+        let _ = open_db(&db).expect("idempotent re-open");
     }
 
     #[test]

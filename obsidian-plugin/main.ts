@@ -1,8 +1,12 @@
 import { App, Modal, Notice, Plugin, PluginSettingTab, Setting, SuggestModal, TFile } from 'obsidian';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+// `execFile` (vs `exec`) takes the binary path and an args array separately,
+// so the OS spawns kodex directly without going through a shell. That means
+// node labels containing spaces, quotes, $, semicolons, backticks, etc. are
+// passed verbatim — no shell metacharacter parsing, no injection surface.
+const execFileAsync = promisify(execFile);
 
 interface KodexSettings {
     kodexPath: string;
@@ -66,13 +70,16 @@ export default class KodexPlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
-    async runKodex(args: string): Promise<string> {
-        const cmd = `${this.settings.kodexPath} ${args}`;
+    async runKodex(args: string[]): Promise<string> {
         try {
-            const { stdout, stderr } = await execAsync(cmd, {
-                cwd: this.getVaultPath(),
-                timeout: 30000,
-            });
+            const { stdout, stderr } = await execFileAsync(
+                this.settings.kodexPath,
+                args,
+                {
+                    cwd: this.getVaultPath(),
+                    timeout: 30000,
+                }
+            );
             if (stderr) console.warn('kodex stderr:', stderr);
             return stdout.trim();
         } catch (e: any) {
@@ -97,9 +104,12 @@ export default class KodexPlugin extends Plugin {
         }
         const name = file.basename;
         try {
-            const result = await this.runKodex(
-                `explain "${name}" --graph "${this.getGraphPath()}"`
-            );
+            const result = await this.runKodex([
+                'explain',
+                name,
+                '--graph',
+                this.getGraphPath(),
+            ]);
             new ResultModal(this.app, `Explain: ${name}`, result).open();
         } catch {
             // Error already shown via Notice
@@ -108,9 +118,12 @@ export default class KodexPlugin extends Plugin {
 
     async showGodNodes() {
         try {
-            const result = await this.runKodex(
-                `query "god nodes" --graph "${this.getGraphPath()}"`
-            );
+            const result = await this.runKodex([
+                'query',
+                'god nodes',
+                '--graph',
+                this.getGraphPath(),
+            ]);
             new ResultModal(this.app, 'God Nodes', result).open();
         } catch {
             // Error already shown
@@ -120,7 +133,7 @@ export default class KodexPlugin extends Plugin {
     async rebuild() {
         new Notice('Rebuilding graph...');
         try {
-            await this.runKodex(`update "${this.getVaultPath()}"`);
+            await this.runKodex(['update', this.getVaultPath()]);
             new Notice('Graph rebuilt successfully');
         } catch {
             // Error already shown
@@ -162,9 +175,12 @@ class QueryModal extends Modal {
                 if (!question) return;
                 resultDiv.setText('Searching...');
                 try {
-                    const result = await this.plugin.runKodex(
-                        `query "${question}" --graph "${this.plugin.getGraphPath()}"`
-                    );
+                    const result = await this.plugin.runKodex([
+                        'query',
+                        question,
+                        '--graph',
+                        this.plugin.getGraphPath(),
+                    ]);
                     resultDiv.setText(result || 'No results found');
                 } catch {
                     resultDiv.setText('Query failed');
@@ -221,9 +237,13 @@ class PathModal extends Modal {
                 if (!src || !tgt) return;
                 resultDiv.setText('Searching...');
                 try {
-                    const result = await this.plugin.runKodex(
-                        `path "${src}" "${tgt}" --graph "${this.plugin.getGraphPath()}"`
-                    );
+                    const result = await this.plugin.runKodex([
+                        'path',
+                        src,
+                        tgt,
+                        '--graph',
+                        this.plugin.getGraphPath(),
+                    ]);
                     resultDiv.setText(result || 'No path found');
                 } catch {
                     resultDiv.setText('Path finding failed');
