@@ -12,10 +12,19 @@ use std::path::Path;
 use kodex::analyze::helpers::{is_concept_node, is_file_node};
 use kodex::embedding::{vec_to_bytes, Embedder};
 use kodex::serve::load_graph_smart;
+use kodex::source_lookup;
 use kodex::storage;
 
-const MODEL_NAME: &str = "BGE-small-en-v1.5";
+/// Model identifier with schema version. `v1` was label-only; `v2` includes
+/// the signature line plus 2 lines above (typically the doc comment). Bump
+/// the suffix whenever the embedded text format changes — older rows will
+/// be detected and re-embedded automatically.
+const MODEL_ID: &str = "BGE-small-en-v1.5/v2";
 const BATCH_SIZE: usize = 64;
+/// Lines of source pulled above the signature — captures `///` /
+/// `/* ... */` doc comments without dragging in unrelated context.
+const SIG_LINES_ABOVE: usize = 2;
+const SIG_LINES_BELOW: usize = 0;
 
 /// Embed all eligible nodes in the global db. Returns the number of new
 /// embeddings written.
@@ -26,9 +35,13 @@ pub fn embed_nodes(
 ) -> kodex::error::Result<usize> {
     let graph = load_graph_smart(db_path)?;
 
+    // Skip rows that were embedded with the *current* MODEL_ID. Older rows
+    // (different model or schema version) get re-embedded transparently — the
+    // INSERT...ON CONFLICT path overwrites them.
     let existing: std::collections::HashSet<String> = if skip_existing {
         storage::load_all_embeddings(db_path)?
             .into_iter()
+            .filter(|e| e.model == MODEL_ID)
             .map(|e| e.node_id)
             .collect()
     } else {
@@ -56,18 +69,30 @@ pub fn embed_nodes(
                 continue;
             }
         }
-        // The text we embed is the label augmented with the file's basename
-        // — this gives the model a tiny bit of context (e.g. `close()` in
-        // `connection.cpp` should embed differently from `close()` in
-        // `file_io.rs`).
+        // The embedded text is `label (basename)` plus a few lines around
+        // the source_location. The snippet captures the function signature
+        // (parameter names + types) and the preceding doc comment, both of
+        // which carry far more semantic signal than the bare identifier.
+        // Falls back to label-only when the file isn't on disk (e.g. when
+        // the project root has moved since ingestion).
         let basename = std::path::Path::new(&node.source_file)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        let text = if basename.is_empty() {
+        let header = if basename.is_empty() {
             node.label.clone()
         } else {
             format!("{}  ({basename})", node.label)
+        };
+        let snippet = source_lookup::snippet_for(
+            &node.source_file,
+            node.source_location.as_deref(),
+            SIG_LINES_ABOVE,
+            SIG_LINES_BELOW,
+        );
+        let text = match snippet {
+            Some(s) if !s.trim().is_empty() => format!("{header}\n{s}"),
+            _ => header,
         };
         work.push((id.clone(), text));
     }
@@ -89,7 +114,7 @@ pub fn embed_nodes(
             .zip(vecs.iter())
             .map(|((id, _), v)| storage::StoredEmbedding {
                 node_id: id.clone(),
-                model: MODEL_NAME.to_string(),
+                model: MODEL_ID.to_string(),
                 dim,
                 vec: vec_to_bytes(v),
             })

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.1 (2026-04-28)
+
+Embedding quality boost: `kodex embed` now feeds the function signature + preceding doc comment to the embedding model instead of just the label. The same v0.6.2 `source_lookup` infrastructure used by `compare_graphs --with-signature` is reused, so no new disk-read code paths.
+
+- The embedded text becomes `<label> (<basename>)\n<2 lines above source_location>\n<line at source_location>`. Param names, types, and preceding `///` / `/* */` doc comments all contribute to the vector.
+- `MODEL_ID` bumped to `BGE-small-en-v1.5/v2` (suffix encodes the embedded-text schema). On the next `kodex embed` run, rows tagged with the older `BGE-small-en-v1.5` (v1, label-only) are auto-detected and re-embedded — no manual migration needed.
+- Falls back to label-only when the source file isn't on disk (e.g. the project root has moved since ingestion).
+
 ## v0.8.0 (2026-04-28)
 
 Embedding-based semantic similarity for cross-language API parity. Catches the cases the v0.7.0 token-Jaccard pass misses (e.g. C++ `Value::copyIn(const void*, StoreType)` ↔ Rust `Value::set<T>(...)` — different identifiers, same purpose).
