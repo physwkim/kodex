@@ -1690,12 +1690,14 @@ fn run() {
         );
 
         let edges = extract_call_edges(tmp.path());
+        // `process` is scoped under Util → util_util_process. `run` is a
+        // top-level function → caller_run (unchanged ID).
         let has_run_to_process = edges
             .iter()
-            .any(|(s, t)| s == "caller_run" && t == "util_process");
+            .any(|(s, t)| s == "caller_run" && t == "util_util_process");
         assert!(
             has_run_to_process,
-            "expected caller_run → util_process; got {edges:?}"
+            "expected caller_run → util_util_process; got {edges:?}"
         );
     }
 
@@ -1728,19 +1730,19 @@ impl HttpClient {
         );
 
         let edges = extract_call_edges(tmp.path());
-        // `Database::run` calls `self.query()` — the in-file label_to_nid pass
-        // already resolves this within database.rs, but the assertion is the
-        // same regardless of which path resolved it.
+        // Methods are scoped: `Database.run` → `database_database_run`,
+        // `Database.query` → `database_database_query`,
+        // `HttpClient.query` → `http_httpclient_query`.
         assert!(
             edges
                 .iter()
-                .any(|(s, t)| s == "database_run" && t == "database_query"),
+                .any(|(s, t)| s == "database_database_run" && t == "database_database_query"),
             "self.query() should resolve to Database.query; got {edges:?}"
         );
         assert!(
             !edges
                 .iter()
-                .any(|(s, t)| s == "database_run" && t == "http_query"),
+                .any(|(s, t)| s == "database_database_run" && t == "http_httpclient_query"),
             "self.query() must NOT cross-route to HttpClient.query; got {edges:?}"
         );
     }
@@ -1784,17 +1786,21 @@ fn run() {
         );
 
         let edges = extract_call_edges(tmp.path());
+        // `main_run` is a top-level fn (unchanged). Method targets are
+        // class-scoped now: `database_database_query`, `http_httpclient_query`.
         assert!(
             edges
                 .iter()
-                .any(|(s, t)| s == "main_run" && t == "database_query"),
-            "Database::query path should resolve to database_query; got {edges:?}"
+                .any(|(s, t)| s == "main_run" && t == "database_database_query"),
+            "Database::query path should resolve to database_database_query; \
+             got {edges:?}"
         );
         assert!(
             edges
                 .iter()
-                .any(|(s, t)| s == "main_run" && t == "http_query"),
-            "HttpClient::query path should resolve to http_query; got {edges:?}"
+                .any(|(s, t)| s == "main_run" && t == "http_httpclient_query"),
+            "HttpClient::query path should resolve to http_httpclient_query; \
+             got {edges:?}"
         );
     }
 
@@ -1850,18 +1856,236 @@ impl OtherClass {
 
         let edges = extract_call_edges(tmp.path());
 
-        // Caller `a_run` calls `self.query()`. b_query has class label
-        // "database" (matches caller); c_query has class label "otherclass"
-        // (doesn't match). Resolver must pick b_query.
+        // With class-scoped method IDs:
+        // a.rs `Database.run` → `a_database_run`
+        // b.rs `Database.query` → `b_database_query`  (target)
+        // c.rs `OtherClass.query` → `c_otherclass_query`  (distractor)
+        //
+        // Both candidates have class labels: b's = "database" (matches caller),
+        // c's = "otherclass" (doesn't match). Resolver must pick b.
         assert!(
-            edges.iter().any(|(s, t)| s == "a_run" && t == "b_query"),
-            "self.query() should cross-resolve to b_query (same class \
-             label); got {edges:?}"
+            edges
+                .iter()
+                .any(|(s, t)| s == "a_database_run" && t == "b_database_query"),
+            "self.query() should cross-resolve to b_database_query (same \
+             class label); got {edges:?}"
         );
         assert!(
-            !edges.iter().any(|(s, t)| s == "a_run" && t == "c_query"),
-            "self.query() must NOT route to c_query (different class \
-             label); got {edges:?}"
+            !edges
+                .iter()
+                .any(|(s, t)| s == "a_database_run" && t == "c_otherclass_query"),
+            "self.query() must NOT route to c_otherclass_query (different \
+             class label); got {edges:?}"
+        );
+    }
+
+    /// Inheritance traversal: `self.method()` on a subclass that doesn't
+    /// define the method directly resolves to the inherited version on the
+    /// base class. With a distractor class providing a same-name method,
+    /// the resolver must walk the `extends` chain rather than picking
+    /// arbitrarily.
+    ///
+    /// Python is the easiest language to express this in fixtures.
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn test_resolution_self_walks_inheritance() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "base.py",
+            r#"
+class Base:
+    def shared(self):
+        return "base"
+"#,
+        );
+        write(
+            tmp.path(),
+            "sub.py",
+            r#"
+from base import Base
+
+class Sub(Base):
+    def run(self):
+        return self.shared()
+"#,
+        );
+        write(
+            tmp.path(),
+            "other.py",
+            r#"
+class Other:
+    def shared(self):
+        return "other"
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+
+        // Methods scoped: `Sub.run` → `sub_sub_run`, `Base.shared` →
+        // `base_base_shared`, `Other.shared` → `other_other_shared`.
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "sub_sub_run" && t == "base_base_shared"),
+            "self.shared() on Sub(Base) should walk inheritance to \
+             base_base_shared; got {edges:?}"
+        );
+        assert!(
+            !edges
+                .iter()
+                .any(|(s, t)| s == "sub_sub_run" && t == "other_other_shared"),
+            "self.shared() on Sub must NOT route to Other.shared (no \
+             inheritance link); got {edges:?}"
+        );
+    }
+
+    /// `super.method()` skips caller's own class and matches a parent
+    /// class's method. With a distractor providing a same-name method on
+    /// an unrelated class, resolution must walk only Sub's ancestors.
+    #[cfg(feature = "lang-python")]
+    #[test]
+    fn test_resolution_super_skips_own_class() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "base.py",
+            r#"
+class Base:
+    def step(self):
+        return "base"
+"#,
+        );
+        write(
+            tmp.path(),
+            "sub.py",
+            r#"
+from base import Base
+
+class Sub(Base):
+    def step(self):
+        return "sub"
+    def run(self):
+        return super().step()
+"#,
+        );
+        write(
+            tmp.path(),
+            "other.py",
+            r#"
+class Other:
+    def step(self):
+        return "other"
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+
+        // tree-sitter-python parses `super().step()` as a call where the
+        // receiver is the call expression `super()`. Our `extract_call_target`
+        // reads the first non-method named child, which gives "super()" text.
+        // `is_super_ref` strips parens via trim/match — adjust if needed.
+        // With class scoping: caller is `sub_sub_run`. Forbidden targets
+        // are own-class `sub_sub_step` and unrelated `other_other_step`.
+        assert!(
+            !edges
+                .iter()
+                .any(|(s, t)| s == "sub_sub_run" && t == "sub_sub_step"),
+            "super().step() must skip Sub's own step; got {edges:?}"
+        );
+        assert!(
+            !edges
+                .iter()
+                .any(|(s, t)| s == "sub_sub_run" && t == "other_other_step"),
+            "super().step() must not route to Other.step; got {edges:?}"
+        );
+    }
+
+    /// Two classes with same-name method **in the same file**. Previously
+    /// these collided on `make_id([stem, name])`; now method IDs are
+    /// scoped (`make_id([stem, class_label, name])`) so both nodes exist,
+    /// and `walk_calls`'s in-file multi-map disambiguates by receiver.
+    #[test]
+    fn test_resolution_in_file_same_name_methods_kept_distinct() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "both.rs",
+            r#"
+pub struct Database;
+impl Database {
+    pub fn query(&self, sql: &str) -> String { sql.to_string() }
+    pub fn run_db(&self) { let _ = self.query("SELECT"); }
+}
+
+pub struct HttpClient;
+impl HttpClient {
+    pub fn query(&self, url: &str) -> String { url.to_string() }
+    pub fn run_http(&self) { let _ = self.query("/api"); }
+}
+"#,
+        );
+
+        let extraction = {
+            let detection = kodex::detect::detect(tmp.path(), false);
+            let code_paths: Vec<PathBuf> =
+                detection.files.code.iter().map(PathBuf::from).collect();
+            kodex::extract::extract(&code_paths, Some(tmp.path()))
+        };
+
+        // Both `query` methods must exist as distinct nodes.
+        let database_query_exists = extraction
+            .nodes
+            .iter()
+            .any(|n| n.id == "both_database_query");
+        let http_query_exists = extraction
+            .nodes
+            .iter()
+            .any(|n| n.id == "both_httpclient_query");
+        assert!(
+            database_query_exists && http_query_exists,
+            "both Database.query and HttpClient.query nodes must exist; got \
+             nodes: {:?}",
+            extraction
+                .nodes
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        // Each `self.query()` call must route to the matching class's query.
+        let edges: Vec<(String, String)> = extraction
+            .edges
+            .into_iter()
+            .filter(|e| e.relation == "calls")
+            .map(|e| (e.source, e.target))
+            .collect();
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "both_database_run_db" && t == "both_database_query"),
+            "Database.run_db's self.query() must route to Database.query; \
+             got {edges:?}"
+        );
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "both_httpclient_run_http" && t == "both_httpclient_query"),
+            "HttpClient.run_http's self.query() must route to HttpClient.query; \
+             got {edges:?}"
+        );
+        // Cross-routing forbidden.
+        assert!(
+            !edges
+                .iter()
+                .any(|(s, t)| s == "both_database_run_db" && t == "both_httpclient_query"),
+            "Database.run_db must NOT route to HttpClient.query; got {edges:?}"
+        );
+        assert!(
+            !edges
+                .iter()
+                .any(|(s, t)| s == "both_httpclient_run_http" && t == "both_database_query"),
+            "HttpClient.run_http must NOT route to Database.query; got {edges:?}"
         );
     }
 

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 /// `kodex run` re-extracts cleanly. Bump this when adding/renaming fields on
 /// `RawCall`, `Node`, `Edge`, or changing resolution semantics in a way that
 /// alters the produced graph.
-const CACHE_SCHEMA_VERSION: u32 = 2;
+const CACHE_SCHEMA_VERSION: u32 = 3;
 
 /// Strip YAML frontmatter from Markdown content, returning only the body.
 fn body_content(content: &[u8]) -> &[u8] {

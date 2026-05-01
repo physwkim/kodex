@@ -177,6 +177,7 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
         stem,
         &file_nid,
         &file_nid,
+        None,
         &str_path,
         &mut nodes,
         &mut edges,
@@ -184,14 +185,29 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
         &mut function_body_ranges,
     );
 
-    // Call-graph pass: find body nodes by byte range in the tree
-    let label_to_nid: HashMap<String, String> = nodes
+    // Call-graph pass: build per-file lookup tables.
+    // `label_to_nids` is a multi-map so two methods sharing a label (e.g.
+    // `Database.query` and `HttpClient.query` in the same file) keep
+    // distinct entries — receiver disambiguation picks the right one.
+    let mut label_to_nids: HashMap<String, Vec<String>> = HashMap::new();
+    for n in &nodes {
+        let label = n.label.trim_end_matches("()").to_lowercase();
+        if !label.is_empty() {
+            label_to_nids.entry(label).or_default().push(n.id.clone());
+        }
+    }
+    let nid_to_label_local: HashMap<String, String> = nodes
         .iter()
-        .map(|n| {
-            let label = n.label.trim_end_matches("()").to_lowercase();
-            (label, n.id.clone())
-        })
+        .map(|n| (n.id.clone(), n.label.trim_end_matches("()").to_lowercase()))
         .collect();
+    let mut method_to_class_local: HashMap<String, String> = HashMap::new();
+    for edge in &edges {
+        if edge.relation == "method" {
+            if let Some(class_label) = nid_to_label_local.get(&edge.source) {
+                method_to_class_local.insert(edge.target.clone(), class_label.clone());
+            }
+        }
+    }
 
     let mut seen_call_pairs: HashSet<(String, String)> = HashSet::new();
 
@@ -203,7 +219,8 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
                 &source,
                 config,
                 caller_nid,
-                &label_to_nid,
+                &label_to_nids,
+                &method_to_class_local,
                 &mut edges,
                 &mut raw_calls,
                 &mut seen_call_pairs,
@@ -275,6 +292,11 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
 /// Recursively walk AST to extract classes, functions, and imports.
 #[cfg(feature = "extract")]
 #[allow(clippy::too_many_arguments)]
+// `container_label` is the label of the enclosing class (for scoping method
+// node IDs): `None` at file scope; `Some(class_name)` inside an `impl` /
+// `class` body. Two methods sharing a name in the same file but in different
+// classes get distinct IDs because of the class-name segment.
+#[allow(clippy::too_many_arguments)]
 fn walk(
     node: &Node,
     source: &[u8],
@@ -282,6 +304,7 @@ fn walk(
     stem: &str,
     file_nid: &str,
     container_nid: &str,
+    container_label: Option<&str>,
     str_path: &str,
     nodes: &mut Vec<crate::types::Node>,
     edges: &mut Vec<Edge>,
@@ -388,6 +411,7 @@ fn walk(
                     stem,
                     file_nid,
                     &class_nid,
+                    Some(&class_name),
                     str_path,
                     nodes,
                     edges,
@@ -402,7 +426,13 @@ fn walk(
     // --- Functions ---
     if config.function_types.contains(&node_type) {
         if let Some(func_name) = resolve_name(node, source, config) {
-            let func_nid = make_id(&[stem, &func_name]);
+            // Methods get class-scoped IDs so two same-name methods in the
+            // same file don't collide on `make_id([stem, name])`. Top-level
+            // functions keep the bare `[stem, name]` form (unchanged ID).
+            let func_nid = match container_label {
+                Some(cls) => make_id(&[stem, cls, &func_name]),
+                None => make_id(&[stem, &func_name]),
+            };
             let line = node.start_position().row + 1;
             let label = if config.function_label_parens {
                 format!("{func_name}()")
@@ -467,6 +497,7 @@ fn walk(
             stem,
             file_nid,
             container_nid,
+            container_label,
             str_path,
             nodes,
             edges,
@@ -514,7 +545,11 @@ fn extract_inheritance(
                             confidence_score: Some(1.0),
                             weight: 1.0,
                             original_src: None,
-                            original_tgt: None,
+                            // Store the literal base name so cross-file
+                            // inheritance can resolve when the target nid
+                            // (built from caller's stem) doesn't point at a
+                            // real node — the base class is in another file.
+                            original_tgt: Some(base_name.to_string()),
                         });
                     }
                 }
@@ -523,7 +558,12 @@ fn extract_inheritance(
     }
 }
 
-/// Walk function bodies to extract call edges.
+/// Walk function bodies to extract call edges. Handles in-file resolution
+/// with the same receiver-aware disambiguation as the cross-file resolver:
+/// when a callee name has multiple in-file candidates, `self.method()` picks
+/// the caller's class and `Type::method()` picks the matching class.
+/// Anything else (variable receiver, `super`, no candidates) falls through
+/// to `raw_calls` for the cross-file pass.
 #[cfg(feature = "extract")]
 #[allow(clippy::too_many_arguments)]
 fn walk_calls(
@@ -531,7 +571,8 @@ fn walk_calls(
     source: &[u8],
     config: &LanguageConfig,
     caller_nid: &str,
-    label_to_nid: &HashMap<String, String>,
+    label_to_nids: &HashMap<String, Vec<String>>,
+    method_to_class_local: &HashMap<String, String>,
     edges: &mut Vec<Edge>,
     raw_calls: &mut Vec<RawCall>,
     seen_call_pairs: &mut HashSet<(String, String)>,
@@ -545,7 +586,44 @@ fn walk_calls(
     if config.call_types.contains(&node.kind()) {
         if let Some(target) = extract_call_target(node, source, config) {
             let name_lower = target.callee.to_lowercase();
-            if let Some(tgt_nid) = label_to_nid.get(&name_lower) {
+            let is_super = target
+                .receiver
+                .as_deref()
+                .map(crate::extract::is_super_ref)
+                .unwrap_or(false);
+
+            // Pick an in-file target if we can do so unambiguously.
+            // `super.method()` always falls through to raw_calls (cross-file
+            // resolver walks the inheritance chain).
+            let in_file_hit: Option<&String> = if is_super {
+                None
+            } else if let Some(candidates) = label_to_nids.get(&name_lower) {
+                if candidates.len() == 1 {
+                    Some(&candidates[0])
+                } else if target.receiver_is_self {
+                    method_to_class_local
+                        .get(caller_nid)
+                        .and_then(|caller_class| {
+                            candidates.iter().find(|nid| {
+                                method_to_class_local.get(*nid) == Some(caller_class)
+                            })
+                        })
+                } else if let Some(recv) = target.receiver.as_deref() {
+                    let recv_lower = recv.to_lowercase();
+                    candidates.iter().find(|nid| {
+                        method_to_class_local
+                            .get(*nid)
+                            .map(|c| c == &recv_lower)
+                            .unwrap_or(false)
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(tgt_nid) = in_file_hit {
                 if tgt_nid != caller_nid {
                     let pair = (caller_nid.to_string(), tgt_nid.clone());
                     if seen_call_pairs.insert(pair) {
@@ -565,7 +643,9 @@ fn walk_calls(
                     }
                 }
             } else {
-                // Save for cross-file resolution
+                // Save for cross-file resolution (or super fallthrough, or
+                // an in-file ambiguity that the cross-file pass might solve
+                // via inheritance traversal across the project).
                 raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
                     callee: target.callee,
@@ -586,7 +666,8 @@ fn walk_calls(
             source,
             config,
             caller_nid,
-            label_to_nid,
+            label_to_nids,
+            method_to_class_local,
             edges,
             raw_calls,
             seen_call_pairs,
@@ -673,14 +754,20 @@ fn extract_call_target(node: &Node, source: &[u8], config: &LanguageConfig) -> O
 
 /// Return the first named child of `parent` that isn't `skip` — used to read
 /// the receiver text from a member/selector expression.
+///
+/// Uses `Node::id()` for the skip comparison; tree-sitter guarantees this is
+/// unique within a tree, so it's robust even when the method name shares its
+/// span with a wrapping node (rare, but possible with grammars that emit
+/// extras).
 #[cfg(feature = "extract")]
 fn first_other_named_child(parent: &Node, skip: &Node, source: &[u8]) -> Option<String> {
+    let skip_id = skip.id();
     let cursor = &mut parent.walk();
     for child in parent.children(cursor) {
         if !child.is_named() {
             continue;
         }
-        if child.start_byte() == skip.start_byte() && child.end_byte() == skip.end_byte() {
+        if child.id() == skip_id {
             continue;
         }
         return Some(read_text(&child, source).to_string());

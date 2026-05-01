@@ -2,22 +2,34 @@
 
 ## Unreleased
 
-### Receiver-aware call disambiguation (cross-file)
+### Receiver-aware call disambiguation
 
-**Cross-file** `calls` resolution now uses the call site's receiver expression to pick the right target when multiple nodes share a method name (e.g. `Database.query` and `HttpClient.query`). The same-file walk in `walk_calls` still uses a single-target `label_to_nid` HashMap and is unaffected — same-file collisions are tracked separately.
+`calls` resolution now uses the call site's receiver expression to pick the right target when multiple nodes share a method name (e.g. `Database.query` and `HttpClient.query`). Both the same-file (`walk_calls`) and cross-file (`mod.rs`) paths apply the same disambiguation logic.
+
+#### Method node IDs are now class-scoped
+
+Methods defined inside a class now get IDs of the form `make_id([stem, class_label, name])` instead of `make_id([stem, name])`. Top-level functions are unchanged. This fixes the pre-existing collision where two classes in the same file with same-name methods collapsed into one node:
+
+```
+Before: Database.query and HttpClient.query in mod.rs → both "mod_query"
+After:  → "mod_database_query" and "mod_httpclient_query"
+```
 
 - `RawCall` carries `receiver: Option<String>` and `receiver_is_self: bool` extracted from the AST: accessor child (Rust `field_expression.value`, Go `selector_expression.operand`, JS `member_expression.object`, …), the call node's own object field for languages where call IS accessor (Java `method_invocation.object`, Ruby `call.receiver`, PHP `member_call_expression.object`), and `Type::method` text-split for Rust/Ruby path-style calls.
-- Resolution: `label → Vec<nid>` multi-map + `method → containing class label` (built from `method` edges).
-  - `self.method()` → method whose containing class matches the caller's class.
-  - `Type::method()` / `Type.method()` → method whose containing class matches the receiver text.
+- Resolution: `label → Vec<nid>` multi-map + `method → containing class label` (built from `method` edges) + `class → Set<base_class>` (built from `extends` edges, with cross-file fallback via `original_tgt`).
+  - `self.method()` / `this.method()` → method whose containing class matches the caller's class. Falls back to walking the inheritance chain (BFS over `extends` edges) when no direct match.
+  - `super.method()` → walks the inheritance chain from the caller's class, **skipping** the caller's own class. Routed to the cross-file resolver from `walk_calls` so a same-name override on the caller's own class can't incorrectly win.
+  - `Type::method()` / `Type.method()` → method whose containing class matches the receiver text; also walks `Type`'s inheritance chain.
   - Variable-receiver bare calls with multiple candidates are **dropped** rather than mis-routed (a wrong `calls` edge silently misleads navigation; missing one is honest).
-- **Inheritance is not traversed** — `Sub.self_call()` to an inherited `Base.method` drops here. Future work.
-- **Cache schema bump** (`CACHE_SCHEMA_VERSION = 2`): `kodex-out/cache/` entries from older versions become unreachable, so `kodex update` / `kodex run` re-extracts cleanly. Without this bump, a stale cache hit would yield a `RawCall` with `receiver: None` and the new resolver would silently drop edges that the old resolver had emitted via last-write-wins. With the bump, you get a fresh extract that reflects the new policy.
+- **Cache schema bump** (`CACHE_SCHEMA_VERSION = 3`): old `kodex-out/cache/` entries become unreachable so `kodex update` / `kodex run` re-extracts cleanly with the new IDs and resolver.
 - Languages: `call_object_field` added to all 14 language configs.
 
-#### Behavior change on upgrade
+#### Behavior changes on upgrade
 
-A call site like `db.query()` where multiple `query` methods exist used to produce *some* `calls` edge (whichever lost the HashMap last-write race). It now produces no edge unless the receiver is a self-reference or a class-name path. Re-extraction is automatic via the cache bump; if you were relying on those edges, switch to `Type::method()` form or wait for inheritance/local-type-tracking work.
+1. **Method node IDs change** for any method defined inside a class (top-level functions unchanged). Existing UUIDs / fingerprints survive, so attached knowledge stays linked. External tools that hardcoded the old ID format need to re-extract.
+2. **Variable-receiver ambiguous calls now drop** instead of last-write-wins routing. Switch to `Type::method()` form or rely on local self-references for reliable resolution.
+3. **`super.method()` now resolves** to the parent class's method via inheritance traversal (was previously dropped or routed wrong).
+4. **Same-file same-name methods now produce two nodes** instead of one (Database.query and HttpClient.query in the same file become distinct).
 
 ### Auto-update on commit (registry-gated global git hook)
 

@@ -137,6 +137,28 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
         }
     }
 
+    // Build inheritance: class_label_lower → Set<base_class_label_lower>.
+    // Cross-file inheritance: extract_inheritance writes the target nid using
+    // the caller's stem (e.g. `sub_base` when Sub is in sub.py), so a Base
+    // class in base.py won't match. Fall back to `original_tgt`, which the
+    // extractor populates with the literal base name.
+    let mut class_inheritance: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for edge in &all_edges {
+        if edge.relation == "extends" {
+            let class_label = match nid_to_label_lower.get(&edge.source) {
+                Some(c) => c.clone(),
+                None => continue,
+            };
+            let base_label = nid_to_label_lower
+                .get(&edge.target)
+                .cloned()
+                .or_else(|| edge.original_tgt.as_ref().map(|s| s.to_lowercase()));
+            if let Some(b) = base_label {
+                class_inheritance.entry(class_label).or_default().insert(b);
+            }
+        }
+    }
+
     for rc in &all_raw_calls {
         let callee_lower = rc.callee.to_lowercase();
         let candidates = match label_to_nids.get(&callee_lower) {
@@ -144,28 +166,48 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
             _ => continue,
         };
 
-        // Inheritance edges (extends/implements) are NOT traversed below — a
-        // `self.method()` call on `Sub` where the method lives on `Base` only
-        // will not match and will be dropped. Recovering it requires walking
-        // the inheritance chain; deferred to follow-up work.
         let target_nid: Option<&String> = if candidates.len() == 1 {
             Some(&candidates[0])
         } else if rc.receiver_is_self {
             // self.method() → method whose containing class matches caller's
-            method_to_class_label.get(&rc.caller_nid).and_then(|caller_class| {
-                candidates
-                    .iter()
-                    .find(|nid| method_to_class_label.get(*nid) == Some(caller_class))
-            })
+            // class, walking inheritance if a direct match misses.
+            method_to_class_label
+                .get(&rc.caller_nid)
+                .and_then(|caller_class| {
+                    find_in_class_chain(
+                        candidates,
+                        caller_class,
+                        &method_to_class_label,
+                        &class_inheritance,
+                        true, // include caller's own class
+                    )
+                })
+        } else if rc.receiver.as_deref().map(is_super_ref).unwrap_or(false) {
+            // super.method() → walk inheritance chain from caller's class,
+            // skipping the caller's own class.
+            method_to_class_label
+                .get(&rc.caller_nid)
+                .and_then(|caller_class| {
+                    find_in_class_chain(
+                        candidates,
+                        caller_class,
+                        &method_to_class_label,
+                        &class_inheritance,
+                        false, // skip caller's own class
+                    )
+                })
         } else if let Some(recv) = rc.receiver.as_deref() {
-            // Type::method() or Type.method() — match receiver to class label.
+            // Type::method() or Type.method() — match receiver to class label,
+            // walking the receiver's inheritance chain if a direct match misses
+            // (e.g., `Sub::inherited_method()` resolves to `Base::method`).
             let recv_lower = recv.to_lowercase();
-            candidates.iter().find(|nid| {
-                method_to_class_label
-                    .get(*nid)
-                    .map(|c| c == &recv_lower)
-                    .unwrap_or(false)
-            })
+            find_in_class_chain(
+                candidates,
+                &recv_lower,
+                &method_to_class_label,
+                &class_inheritance,
+                true,
+            )
         } else {
             // Bare call with multiple candidates and no receiver hint:
             // ambiguous, skip rather than guess.
@@ -224,6 +266,62 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
         raw_calls: Vec::new(),
         error: None,
     }
+}
+
+/// `super` keyword in Java/Python/JS/Scala/Kotlin — refers to the parent
+/// class. Distinct from `self`/`this`/`Self` because it intentionally skips
+/// the caller's own class. Accepts `super` and `super()` (Python's
+/// `super().method()` form, where the receiver expression is the call
+/// `super()`).
+#[cfg(feature = "extract")]
+pub(crate) fn is_super_ref(s: &str) -> bool {
+    let t = s.trim().trim_end_matches("()").trim();
+    t == "super"
+}
+
+/// BFS over the inheritance chain rooted at `start_class`, returning the
+/// first candidate whose containing class label appears in the chain.
+///
+/// `include_root` is true for `self.method()` (caller's own class is a valid
+/// match) and false for `super.method()` (skip own class, only ancestors).
+#[cfg(feature = "extract")]
+fn find_in_class_chain<'a>(
+    candidates: &'a [String],
+    start_class: &str,
+    method_to_class_label: &HashMap<String, String>,
+    class_inheritance: &HashMap<String, std::collections::HashSet<String>>,
+    include_root: bool,
+) -> Option<&'a String> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    if include_root {
+        queue.push_back(start_class.to_string());
+    } else if let Some(parents) = class_inheritance.get(start_class) {
+        for p in parents {
+            queue.push_back(p.clone());
+        }
+    }
+
+    while let Some(class_label) = queue.pop_front() {
+        if !visited.insert(class_label.clone()) {
+            continue;
+        }
+        if let Some(found) = candidates
+            .iter()
+            .find(|nid| method_to_class_label.get(*nid) == Some(&class_label))
+        {
+            return Some(found);
+        }
+        if let Some(parents) = class_inheritance.get(&class_label) {
+            for p in parents {
+                queue.push_back(p.clone());
+            }
+        }
+    }
+    None
 }
 
 /// Two-pass cross-file import resolution for Python.
