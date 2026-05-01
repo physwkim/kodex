@@ -230,6 +230,43 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             ],
         ),
         tool_def(
+            "find_callers",
+            "Reverse call graph — who calls this function? Traverses incoming `calls` edges from the matched node. `depth=1` returns direct callers only; `depth=N` includes transitive callers up to N hops away (default 3). `top_n` controls how many fuzzy-matched candidates to use as seeds (default 1 — use a higher value only when the label is ambiguous across files). `source_pattern` limits results to one file/module path substring. Each result includes `label`, `source_file`, `call_location` (the line where the call appears), and `depth`.",
+            &[
+                ("label", "string", true),
+                ("depth", "number", false),
+                ("top_n", "number", false),
+                ("source_pattern", "string", false),
+            ],
+        ),
+        tool_def(
+            "find_callees",
+            "Forward call graph — what does this function call? Traverses outgoing `calls` edges from the matched node. `depth=1` returns direct callees only; `depth=N` includes transitive callees up to N hops away (default 3). `top_n` controls how many fuzzy-matched candidates to use as seeds (default 1 — use a higher value only when the label is ambiguous across files). `source_pattern` limits results to one file/module path substring. Each result includes `label`, `source_file`, `call_location` (the line where the call is made), and `depth`.",
+            &[
+                ("label", "string", true),
+                ("depth", "number", false),
+                ("top_n", "number", false),
+                ("source_pattern", "string", false),
+            ],
+        ),
+        tool_def(
+            "trace_call_path",
+            "Find a call path between two functions. BFS forward from `from` through `calls` edges until `to` is reached. Uses a global visited set (prevents cycles), so returns one path per destination node — in graphs with multiple routes, the first BFS-discovered path is returned. Returns up to 20 paths as `from() → middle() → to()` chains, shortest first. Each path includes per-step `source_file` and `source_location`. `max_depth` bounds the search (default 8).",
+            &[
+                ("from", "string", true),
+                ("to", "string", true),
+                ("max_depth", "number", false),
+            ],
+        ),
+        tool_def(
+            "detect_cycles",
+            "Find circular dependencies using Tarjan's SCC algorithm. Detects groups of functions/modules that call each other in a cycle. `relations` defaults to `[\"calls\", \"imports\"]` — pass a single-element array to restrict to just one relation type. `source_pattern` scopes the search to one file/module path substring. Each cycle is returned with a `summary` (A ↔ B ↔ C) and per-node `source_file`.",
+            &[
+                ("source_pattern", "string", false),
+                ("relations", "array", false),
+            ],
+        ),
+        tool_def(
             "god_nodes",
             "Most-connected entities. Filter to a domain with `pattern` (label substring), `source_pattern` (file path substring), or `min_degree` to skip generic hubs like ok()/len().",
             &[

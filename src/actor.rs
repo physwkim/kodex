@@ -81,6 +81,14 @@ pub fn run_actor() {
         .set_nonblocking(true)
         .expect("failed to set non-blocking");
 
+    // Record the binary's modification time at startup so we can detect
+    // when `cargo install` replaces the executable while we are running.
+    let exe_path = std::env::current_exe().ok();
+    let start_mtime = exe_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok());
+
     let last_activity = std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
     let active_connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -100,6 +108,16 @@ pub fn run_actor() {
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Exit if the binary on disk was replaced (cargo install).
+                // The next ensure_running() call will spawn a fresh actor.
+                if let (Some(path), Some(mtime)) = (exe_path.as_ref(), start_mtime) {
+                    let current = std::fs::metadata(path)
+                        .ok()
+                        .and_then(|m| m.modified().ok());
+                    if current != Some(mtime) {
+                        break;
+                    }
+                }
                 let idle = last_activity.lock().unwrap().elapsed().as_secs();
                 let conns = active_connections.load(std::sync::atomic::Ordering::Relaxed);
                 if conns == 0 && idle > IDLE_TIMEOUT_SECS {
@@ -428,6 +446,157 @@ fn process_request(input: &str) -> String {
                 }
                 response
             }
+        }
+        "find_callers" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let top_n = params.get("top_n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            call_direction_handler(&graph, &params, top_n, crate::serve::find_callers, "callers")
+        }
+        "find_callees" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let top_n = params.get("top_n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            call_direction_handler(&graph, &params, top_n, crate::serve::find_callees, "callees")
+        }
+        "trace_call_path" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let from_label = params.get("from").and_then(|v| v.as_str()).unwrap_or("");
+            let to_label = params.get("to").and_then(|v| v.as_str()).unwrap_or("");
+            let max_depth =
+                params.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+
+            let from_ids = resolve_call_seeds(&graph, from_label, 3);
+            let to_ids = resolve_call_seeds(&graph, to_label, 3);
+
+            if from_ids.is_empty() {
+                return error_response(
+                    &id,
+                    &format!("no match for from label: {from_label}"),
+                );
+            }
+            if to_ids.is_empty() {
+                return error_response(
+                    &id,
+                    &format!("no match for to label: {to_label}"),
+                );
+            }
+
+            let raw_paths =
+                crate::serve::trace_call_path(&graph, &from_ids, &to_ids, max_depth);
+
+            let paths: Vec<serde_json::Value> = raw_paths
+                .iter()
+                .take(20)
+                .map(|path| {
+                    let steps: Vec<serde_json::Value> = path
+                        .iter()
+                        .map(|nid| {
+                            if let Some(node) = graph.get_node(nid) {
+                                serde_json::json!({
+                                    "label": node.label,
+                                    "source_file": node.source_file,
+                                    "source_location": node.source_location,
+                                })
+                            } else {
+                                serde_json::json!({"id": nid})
+                            }
+                        })
+                        .collect();
+                    let chain: Vec<&str> = path
+                        .iter()
+                        .map(|nid| {
+                            graph
+                                .get_node(nid)
+                                .map(|n| n.label.as_str())
+                                .unwrap_or(nid.as_str())
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "chain": chain.join(" → "),
+                        "length": path.len() - 1,
+                        "steps": steps,
+                    })
+                })
+                .collect();
+
+            serde_json::json!({
+                "from": from_label,
+                "to": to_label,
+                "paths_found": paths.len(),
+                "paths": paths,
+            })
+        }
+        "detect_cycles" => {
+            let graph = match crate::serve::load_graph_smart(&db_path) {
+                Ok(g) => g,
+                Err(e) => return error_response(&id, &e.to_string()),
+            };
+            let source_pattern = params
+                .get("source_pattern")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
+            let default_relations = vec!["calls".to_string(), "imports".to_string()];
+            let mut relations: Vec<String> = params
+                .get("relations")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if relations.is_empty() {
+                relations = default_relations;
+            }
+            let relation_strs: Vec<&str> = relations.iter().map(String::as_str).collect();
+
+            let cycles =
+                crate::serve::detect_cycles_in_graph(&graph, &relation_strs, source_pattern);
+            let cycle_objs: Vec<serde_json::Value> = cycles
+                .iter()
+                .map(|group| {
+                    let nodes: Vec<serde_json::Value> = group
+                        .iter()
+                        .map(|nid| {
+                            if let Some(node) = graph.get_node(nid) {
+                                serde_json::json!({
+                                    "label": node.label,
+                                    "source_file": node.source_file,
+                                })
+                            } else {
+                                serde_json::json!({"id": nid})
+                            }
+                        })
+                        .collect();
+                    let labels: Vec<&str> = group
+                        .iter()
+                        .map(|nid| {
+                            graph
+                                .get_node(nid)
+                                .map(|n| n.label.as_str())
+                                .unwrap_or(nid.as_str())
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "size": group.len(),
+                        "summary": labels.join(" ↔ "),
+                        "nodes": nodes,
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "cycles_found": cycle_objs.len(),
+                "relations": relations,
+                "cycles": cycle_objs,
+            })
         }
         "god_nodes" => {
             let graph = match crate::serve::load_graph_smart(&db_path) {
@@ -1927,6 +2096,77 @@ fn highlight_label(label: &str, indices: &[u32]) -> String {
         out.push(']');
     }
     out
+}
+
+/// Fuzzy-match `label` against the graph and return the top-N node IDs.
+fn resolve_call_seeds(
+    graph: &crate::graph::KodexGraph,
+    label: &str,
+    top_n: usize,
+) -> Vec<String> {
+    crate::serve::score_nodes_filtered(
+        graph,
+        &[label.to_lowercase()],
+        &Default::default(),
+    )
+    .into_iter()
+    .take(top_n)
+    .map(|(_, id)| id)
+    .collect()
+}
+
+/// Shared handler body for find_callers / find_callees.
+///
+/// `traverse` is either `crate::serve::find_callers` or `crate::serve::find_callees`.
+/// `result_key` is `"callers"` or `"callees"`.
+fn call_direction_handler(
+    graph: &crate::graph::KodexGraph,
+    params: &serde_json::Value,
+    top_n: usize,
+    traverse: fn(
+        &crate::graph::KodexGraph,
+        &[String],
+        usize,
+        Option<&str>,
+    ) -> Vec<crate::serve::CallHit>,
+    result_key: &str,
+) -> serde_json::Value {
+    let label = params.get("label").and_then(|v| v.as_str()).unwrap_or("");
+    let depth = params.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+    let source_pattern = params
+        .get("source_pattern")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    let seed_ids = resolve_call_seeds(graph, label, top_n);
+    if seed_ids.is_empty() {
+        return serde_json::json!({"error": "no matching node found", "label": label});
+    }
+
+    let seed_labels: Vec<String> = seed_ids
+        .iter()
+        .filter_map(|id| graph.get_node(id).map(|n| n.label.clone()))
+        .collect();
+    let hits = traverse(graph, &seed_ids, depth, source_pattern);
+    let items: Vec<serde_json::Value> = hits
+        .iter()
+        .map(|h| {
+            serde_json::json!({
+                "label": h.label,
+                "source_file": h.source_file,
+                "call_location": h.call_location,
+                "depth": h.depth,
+            })
+        })
+        .collect();
+
+    let mut resp = serde_json::json!({
+        "target": seed_labels,
+        "count": items.len(),
+        "depth": depth,
+    });
+    resp[result_key] = serde_json::json!(items);
+    resp
 }
 
 fn error_response(id: &serde_json::Value, msg: &str) -> String {

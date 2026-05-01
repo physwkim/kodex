@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::visit::EdgeRef;
 
 use crate::types::{Edge, Hyperedge, Node};
 
@@ -117,6 +118,32 @@ impl KodexGraph {
             let edge = &self.inner[e];
             Some((self.inner[s].id.as_str(), self.inner[t].id.as_str(), edge))
         })
+    }
+
+    /// Outgoing edges filtered by relation. Returns (target_id, &Edge) pairs.
+    pub fn outgoing_by_relation<'a>(&'a self, id: &str, relation: &str) -> Vec<(String, &'a Edge)> {
+        let idx = match self.node_index.get(id) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
+        self.inner
+            .edges_directed(idx, petgraph::Direction::Outgoing)
+            .filter(|e| e.weight().relation == relation)
+            .map(|e| (self.inner[e.target()].id.clone(), e.weight()))
+            .collect()
+    }
+
+    /// Incoming edges filtered by relation. Returns (source_id, &Edge) pairs.
+    pub fn incoming_by_relation<'a>(&'a self, id: &str, relation: &str) -> Vec<(String, &'a Edge)> {
+        let idx = match self.node_index.get(id) {
+            Some(&i) => i,
+            None => return Vec::new(),
+        };
+        self.inner
+            .edges_directed(idx, petgraph::Direction::Incoming)
+            .filter(|e| e.weight().relation == relation)
+            .map(|e| (self.inner[e.source()].id.clone(), e.weight()))
+            .collect()
     }
 }
 

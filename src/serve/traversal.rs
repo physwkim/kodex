@@ -384,6 +384,229 @@ pub fn subgraph_to_json(
     })
 }
 
+/// One result entry from a caller/callee search.
+#[derive(Debug, Clone)]
+pub struct CallHit {
+    pub id: String,
+    pub label: String,
+    pub source_file: String,
+    /// Line where the call appears in the caller (find_callers) or callee (find_callees).
+    pub call_location: Option<String>,
+    pub depth: usize,
+}
+
+/// DFS in reverse ("calls" edges incoming) — who calls the seed nodes?
+///
+/// Uses a stack (LIFO) internally; output is sorted by depth ascending
+/// (direct callers first) before returning.
+pub fn find_callers(
+    graph: &KodexGraph,
+    seed_ids: &[String],
+    max_depth: usize,
+    source_pattern: Option<&str>,
+) -> Vec<CallHit> {
+    let mut visited: HashSet<String> = seed_ids.iter().cloned().collect();
+    let mut frontier: Vec<(String, usize)> =
+        seed_ids.iter().map(|id| (id.clone(), 0usize)).collect();
+    let mut result = Vec::new();
+
+    while let Some((current_id, depth)) = frontier.pop() {
+        if depth >= max_depth {
+            continue;
+        }
+        for (caller_id, edge) in graph.incoming_by_relation(&current_id, "calls") {
+            if visited.contains(&caller_id) {
+                continue;
+            }
+            if let Some(sp) = source_pattern {
+                let pass = graph
+                    .get_node(&caller_id)
+                    .map(|n| n.source_file.to_lowercase().contains(&sp.to_lowercase()))
+                    .unwrap_or(false);
+                if !pass {
+                    continue;
+                }
+            }
+            visited.insert(caller_id.clone());
+            if let Some(node) = graph.get_node(&caller_id) {
+                result.push(CallHit {
+                    id: caller_id.clone(),
+                    label: node.label.clone(),
+                    source_file: node.source_file.clone(),
+                    call_location: edge.source_location.clone(),
+                    depth: depth + 1,
+                });
+            }
+            frontier.push((caller_id, depth + 1));
+        }
+    }
+
+    result.sort_by_key(|h| h.depth);
+    result
+}
+
+/// DFS forward ("calls" edges outgoing) — what do the seed nodes call?
+///
+/// Uses a stack (LIFO) internally; output is sorted by depth ascending
+/// (direct callees first) before returning.
+pub fn find_callees(
+    graph: &KodexGraph,
+    seed_ids: &[String],
+    max_depth: usize,
+    source_pattern: Option<&str>,
+) -> Vec<CallHit> {
+    let mut visited: HashSet<String> = seed_ids.iter().cloned().collect();
+    let mut frontier: Vec<(String, usize)> =
+        seed_ids.iter().map(|id| (id.clone(), 0usize)).collect();
+    let mut result = Vec::new();
+
+    while let Some((current_id, depth)) = frontier.pop() {
+        if depth >= max_depth {
+            continue;
+        }
+        for (callee_id, edge) in graph.outgoing_by_relation(&current_id, "calls") {
+            if visited.contains(&callee_id) {
+                continue;
+            }
+            if let Some(sp) = source_pattern {
+                let pass = graph
+                    .get_node(&callee_id)
+                    .map(|n| n.source_file.to_lowercase().contains(&sp.to_lowercase()))
+                    .unwrap_or(false);
+                if !pass {
+                    continue;
+                }
+            }
+            visited.insert(callee_id.clone());
+            if let Some(node) = graph.get_node(&callee_id) {
+                result.push(CallHit {
+                    id: callee_id.clone(),
+                    label: node.label.clone(),
+                    source_file: node.source_file.clone(),
+                    call_location: edge.source_location.clone(),
+                    depth: depth + 1,
+                });
+            }
+            frontier.push((callee_id, depth + 1));
+        }
+    }
+
+    result.sort_by_key(|h| h.depth);
+    result
+}
+
+/// BFS path finding following outgoing "calls" edges from `from_ids` toward `to_ids`.
+///
+/// Returns paths as ordered node-ID lists, shortest first. Uses a global
+/// visited set to prevent cycles: each node is enqueued at most once, so
+/// in a graph with multiple routes to the same destination only one path
+/// per destination node is returned. `max_depth` bounds the search.
+pub fn trace_call_path(
+    graph: &KodexGraph,
+    from_ids: &[String],
+    to_ids: &[String],
+    max_depth: usize,
+) -> Vec<Vec<String>> {
+    use std::collections::VecDeque;
+
+    let to_set: HashSet<String> = to_ids.iter().cloned().collect();
+    // Each queue entry is the path so far (includes the starting node).
+    let mut queue: VecDeque<Vec<String>> = VecDeque::new();
+    // Track visited to avoid exponential blowup; this may miss some paths in
+    // heavily cyclic graphs but keeps runtime bounded.
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut paths: Vec<Vec<String>> = Vec::new();
+
+    for id in from_ids {
+        if !visited.contains(id) {
+            visited.insert(id.clone());
+            queue.push_back(vec![id.clone()]);
+        }
+    }
+
+    while let Some(path) = queue.pop_front() {
+        let current = path.last().unwrap();
+        if to_set.contains(current.as_str()) && path.len() > 1 {
+            paths.push(path);
+            continue;
+        }
+        if path.len() > max_depth {
+            continue;
+        }
+        for (callee_id, _edge) in graph.outgoing_by_relation(current, "calls") {
+            if !visited.contains(&callee_id) {
+                visited.insert(callee_id.clone());
+                let mut new_path = path.clone();
+                new_path.push(callee_id);
+                queue.push_back(new_path);
+            }
+        }
+    }
+
+    // Shortest paths first.
+    paths.sort_by_key(|p| p.len());
+    paths
+}
+
+/// Detect cycles in the directed graph restricted to `relations` (e.g. `["calls", "imports"]`).
+///
+/// Uses Tarjan's strongly-connected-components algorithm via petgraph. Returns
+/// groups of node IDs that form cycles (SCCs with ≥2 members). Each group is
+/// internally sorted by label for stable output. `source_pattern` scopes the
+/// search to nodes whose source_file contains the given substring.
+pub fn detect_cycles_in_graph(
+    graph: &KodexGraph,
+    relations: &[&str],
+    source_pattern: Option<&str>,
+) -> Vec<Vec<String>> {
+    use petgraph::algo::tarjan_scc;
+    use petgraph::graph::DiGraph;
+    use std::collections::HashMap;
+
+    let mut sub: DiGraph<String, ()> = DiGraph::new();
+    let mut id_to_idx: HashMap<String, petgraph::graph::NodeIndex> = HashMap::new();
+
+    // Add qualifying nodes.
+    for id in graph.node_ids() {
+        if let Some(sp) = source_pattern {
+            let pass = graph
+                .get_node(id)
+                .map(|n| n.source_file.to_lowercase().contains(&sp.to_lowercase()))
+                .unwrap_or(false);
+            if !pass {
+                continue;
+            }
+        }
+        let idx = sub.add_node(id.clone());
+        id_to_idx.insert(id.clone(), idx);
+    }
+
+    // Add qualifying edges.
+    for (src, tgt, edge) in graph.edges() {
+        if !relations.contains(&edge.relation.as_str()) {
+            continue;
+        }
+        if let (Some(&si), Some(&ti)) = (id_to_idx.get(src), id_to_idx.get(tgt)) {
+            sub.add_edge(si, ti, ());
+        }
+    }
+
+    tarjan_scc(&sub)
+        .into_iter()
+        .filter(|scc| scc.len() > 1)
+        .map(|scc| {
+            let mut ids: Vec<String> = scc.iter().map(|&idx| sub[idx].clone()).collect();
+            // Sort by label for stable output.
+            ids.sort_by(|a, b| {
+                let la = graph.get_node(a).map(|n| n.label.as_str()).unwrap_or(a);
+                let lb = graph.get_node(b).map(|n| n.label.as_str()).unwrap_or(b);
+                la.cmp(lb)
+            });
+            ids
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod traversal_tests {
     use super::*;
@@ -407,6 +630,274 @@ mod traversal_tests {
             logical_key: None,
             body_hash: None,
         }
+    }
+
+    // ── Static call graph tests ────────────────────────────────────────────
+
+    fn make_call_graph() -> KodexGraph {
+        // a() calls b(), b() calls c(), d() calls b() — forms a diamond.
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_simple_node("a", "a()", "mod.rs"),
+                mk_simple_node("b", "b()", "mod.rs"),
+                mk_simple_node("c", "c()", "mod.rs"),
+                mk_simple_node("d", "d()", "mod.rs"),
+            ],
+            edges: vec![
+                Edge { source: "a".into(), target: "b".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "mod.rs".into(),
+                    source_location: Some("L10".into()), confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "b".into(), target: "c".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "mod.rs".into(),
+                    source_location: Some("L20".into()), confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "d".into(), target: "b".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "mod.rs".into(),
+                    source_location: Some("L30".into()), confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+            ],
+            ..Default::default()
+        };
+        build_from_extraction(&extraction)
+    }
+
+    fn make_cycle_graph() -> KodexGraph {
+        // x() calls y(), y() calls x() — a cycle.
+        // p() calls q(), q() has no cycle.
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_simple_node("x", "x()", "cycle.rs"),
+                mk_simple_node("y", "y()", "cycle.rs"),
+                mk_simple_node("p", "p()", "other.rs"),
+                mk_simple_node("q", "q()", "other.rs"),
+            ],
+            edges: vec![
+                Edge { source: "x".into(), target: "y".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "cycle.rs".into(),
+                    source_location: Some("L5".into()), confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "y".into(), target: "x".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "cycle.rs".into(),
+                    source_location: Some("L15".into()), confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "p".into(), target: "q".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "other.rs".into(),
+                    source_location: Some("L1".into()), confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+            ],
+            ..Default::default()
+        };
+        build_from_extraction(&extraction)
+    }
+
+    #[test]
+    fn find_callers_returns_direct_callers() {
+        let g = make_call_graph();
+        // b() is called by a() and d()
+        let hits = super::find_callers(&g, &["b".to_string()], 1, None);
+        let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("a()"), "a() should be a direct caller: {labels:?}");
+        assert!(labels.contains("d()"), "d() should be a direct caller: {labels:?}");
+        assert!(!labels.contains("c()"), "c() is NOT a caller: {labels:?}");
+    }
+
+    #[test]
+    fn find_callers_depth_2_returns_transitive() {
+        let g = make_call_graph();
+        // c() is called by b(), b() is called by a() and d()
+        // At depth=2 from c, we should find b (depth 1), a and d (depth 2)
+        let hits = super::find_callers(&g, &["c".to_string()], 2, None);
+        let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("b()"), "b() must be at depth 1: {labels:?}");
+        assert!(labels.contains("a()"), "a() must be at depth 2: {labels:?}");
+        assert!(labels.contains("d()"), "d() must be at depth 2: {labels:?}");
+    }
+
+    #[test]
+    fn find_callers_depth_1_stops_at_direct() {
+        let g = make_call_graph();
+        // At depth=1 from c, we should ONLY see b, not a or d
+        let hits = super::find_callers(&g, &["c".to_string()], 1, None);
+        let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("b()"), "b() is direct caller: {labels:?}");
+        assert!(!labels.contains("a()"), "a() is 2 hops away, should not appear: {labels:?}");
+    }
+
+    #[test]
+    fn find_callees_returns_direct_callees() {
+        let g = make_call_graph();
+        // a() calls b() which calls c()
+        let hits = super::find_callees(&g, &["a".to_string()], 1, None);
+        let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("b()"), "b() is direct callee: {labels:?}");
+        assert!(!labels.contains("c()"), "c() is indirect, should not appear at depth=1: {labels:?}");
+    }
+
+    #[test]
+    fn find_callees_depth_2_reaches_transitive() {
+        let g = make_call_graph();
+        let hits = super::find_callees(&g, &["a".to_string()], 2, None);
+        let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("b()"), "b() at depth 1: {labels:?}");
+        assert!(labels.contains("c()"), "c() at depth 2: {labels:?}");
+    }
+
+    #[test]
+    fn trace_call_path_finds_direct_path() {
+        let g = make_call_graph();
+        let paths = super::trace_call_path(&g, &["a".to_string()], &["c".to_string()], 5);
+        assert!(!paths.is_empty(), "should find a path from a to c");
+        // Shortest path: a → b → c
+        let shortest = &paths[0];
+        assert_eq!(shortest.len(), 3, "path should be [a, b, c]: {shortest:?}");
+        assert_eq!(shortest[0], "a");
+        assert_eq!(shortest[1], "b");
+        assert_eq!(shortest[2], "c");
+    }
+
+    #[test]
+    fn trace_call_path_returns_empty_when_unreachable() {
+        let g = make_call_graph();
+        // c() does not call anything so there's no path from c to a
+        let paths = super::trace_call_path(&g, &["c".to_string()], &["a".to_string()], 5);
+        assert!(paths.is_empty(), "no path from c to a: {paths:?}");
+    }
+
+    #[test]
+    fn detect_cycles_finds_mutual_call() {
+        let g = make_cycle_graph();
+        let cycles = super::detect_cycles_in_graph(&g, &["calls"], None);
+        assert!(!cycles.is_empty(), "should find the x↔y cycle");
+        let cycle_labels: Vec<HashSet<String>> = cycles
+            .iter()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| g.get_node(id).map(|n| n.label.clone()))
+                    .collect()
+            })
+            .collect();
+        let has_xy = cycle_labels
+            .iter()
+            .any(|s| s.contains("x()") && s.contains("y()"));
+        assert!(has_xy, "x↔y cycle must appear: {cycle_labels:?}");
+    }
+
+    #[test]
+    fn detect_cycles_source_pattern_scopes_result() {
+        let g = make_cycle_graph();
+        // Restrict to other.rs: p→q but no cycle there
+        let cycles = super::detect_cycles_in_graph(&g, &["calls"], Some("other.rs"));
+        assert!(cycles.is_empty(), "no cycle in other.rs: {cycles:?}");
+        // Restrict to cycle.rs: x↔y cycle
+        let cycles = super::detect_cycles_in_graph(&g, &["calls"], Some("cycle.rs"));
+        assert!(!cycles.is_empty(), "cycle in cycle.rs must be detected");
+    }
+
+    #[test]
+    fn detect_cycles_no_false_positives_for_acyclic_graph() {
+        let g = make_call_graph(); // a→b→c, d→b — no cycle
+        let cycles = super::detect_cycles_in_graph(&g, &["calls"], None);
+        assert!(cycles.is_empty(), "acyclic graph must have no cycles: {cycles:?}");
+    }
+
+    #[test]
+    fn detect_cycles_empty_relations_returns_no_cycles() {
+        // Empty relations → no edges match → no cycles found.
+        let g = make_cycle_graph();
+        let cycles = super::detect_cycles_in_graph(&g, &[], None);
+        assert!(
+            cycles.is_empty(),
+            "empty relations must yield no cycles (no edges match): {cycles:?}"
+        );
+    }
+
+    #[test]
+    fn detect_cycles_mixed_relations_respects_filter() {
+        // Build graph: x -calls-> y -calls-> x (cycle), p -imports-> q (no cycle).
+        // With ["calls"] only x↔y detected; with ["imports"] no cycle.
+        let g = make_cycle_graph();
+        let with_calls = super::detect_cycles_in_graph(&g, &["calls"], None);
+        assert!(!with_calls.is_empty(), "calls cycle must be detected");
+        let with_imports = super::detect_cycles_in_graph(&g, &["imports"], None);
+        assert!(with_imports.is_empty(), "no imports edges in test graph");
+    }
+
+    #[test]
+    fn find_callers_source_pattern_filters_to_matching_file() {
+        // a() is in mod.rs, d() is in mod.rs — both call b().
+        // With source_pattern="mod" both appear; with "other" neither appears.
+        let g = make_call_graph();
+        let all = super::find_callers(&g, &["b".to_string()], 1, Some("mod"));
+        let labels: HashSet<String> = all.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("a()"), "a() is in mod.rs: {labels:?}");
+        assert!(labels.contains("d()"), "d() is in mod.rs: {labels:?}");
+
+        let filtered = super::find_callers(&g, &["b".to_string()], 1, Some("other.rs"));
+        assert!(
+            filtered.is_empty(),
+            "no callers in other.rs: {filtered:?}"
+        );
+    }
+
+    #[test]
+    fn find_callees_source_pattern_filters_to_matching_file() {
+        // a() calls b() which calls c(); all in mod.rs.
+        let g = make_call_graph();
+        let all = super::find_callees(&g, &["a".to_string()], 2, Some("mod"));
+        let labels: HashSet<String> = all.iter().map(|h| h.label.clone()).collect();
+        assert!(labels.contains("b()"), "b() in mod.rs: {labels:?}");
+        assert!(labels.contains("c()"), "c() in mod.rs: {labels:?}");
+
+        let filtered = super::find_callees(&g, &["a".to_string()], 2, Some("other.rs"));
+        assert!(
+            filtered.is_empty(),
+            "no callees in other.rs: {filtered:?}"
+        );
+    }
+
+    #[test]
+    fn trace_call_path_single_path_per_destination() {
+        // A→B→D and A→C→D: two routes exist, but global visited means only
+        // one path reaches D. This test documents the known limitation.
+        let extraction = ExtractionResult {
+            nodes: vec![
+                mk_simple_node("a", "a()", "m.rs"),
+                mk_simple_node("b", "b()", "m.rs"),
+                mk_simple_node("c", "c()", "m.rs"),
+                mk_simple_node("d", "d()", "m.rs"),
+            ],
+            edges: vec![
+                Edge { source: "a".into(), target: "b".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
+                    source_location: None, confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "a".into(), target: "c".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
+                    source_location: None, confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "b".into(), target: "d".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
+                    source_location: None, confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge { source: "c".into(), target: "d".into(), relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
+                    source_location: None, confidence_score: Some(1.0),
+                    weight: 1.0, original_src: None, original_tgt: None },
+            ],
+            ..Default::default()
+        };
+        let g = build_from_extraction(&extraction);
+        let paths = super::trace_call_path(&g, &["a".to_string()], &["d".to_string()], 5);
+        // At least one path must be found.
+        assert!(!paths.is_empty(), "must find a→…→d path");
+        // All returned paths must start at a and end at d.
+        for p in &paths {
+            assert_eq!(p.first().unwrap(), "a");
+            assert_eq!(p.last().unwrap(), "d");
+        }
+        // Document: with global visited, only one of the two routes is returned.
+        assert_eq!(paths.len(), 1, "global visited yields one path per destination");
     }
 
     #[test]
