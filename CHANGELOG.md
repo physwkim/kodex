@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.11.0 (2026-05-01)
+
+Chunk-level semantic retrieval — natural-language → top-K matching code chunks via cosine over BGE-small embeddings, with `attached_knowledge` joined in from the kodex knowledge graph. The kodex differentiator over plain vector retrieval is that each hit can carry the bug_patterns / decisions / conventions you've already accumulated for that node.
+
+### `semantic_search` MCP tool
+
+```jsonc
+{
+  "query": "where do we throttle outgoing requests",
+  "top_k": 10,                    // clamped to [1, 500]
+  "path_substring": "src/net/",   // plain substring, NOT a glob
+  "language": "rust",
+  "link_knowledge": true          // default; false skips the knowledge join
+}
+```
+
+Returns:
+
+```jsonc
+{
+  "query": "...",
+  "count": N,
+  "hits": [
+    {
+      "score": 0.842,
+      "file_path": "myproj/src/net/throttle.rs",
+      "start_line": 46,
+      "end_line": 95,
+      "content": "...50-line window of source...",
+      "language": "rust",
+      "node_id": "...",                           // when chunk maps to a graph node
+      "attached_knowledge": [                     // active links only; obsolete filtered
+        {"uuid": "...", "title": "...", "type": "bug_pattern", "confidence": 0.7, "relation": "warns_about"}
+      ]
+    }
+  ]
+}
+```
+
+Requires kodex built with `--features embeddings` AND `kodex embed` after `kodex run`. When `top_k` is requested above 500, the response includes `"truncated": true` and `"requested_top_k": N`.
+
+### Schema v2: `chunks` + `chunk_embeddings`
+
+Two new tables; new tables only, no ALTER. `CREATE TABLE IF NOT EXISTS` in `create_tables()` covers fresh DBs and v1 upgrades alike, so the v2 migration arm is a no-op user_version bump.
+
+```sql
+chunks (id PK, node_id NULL, file_path, start_line, end_line, language, content, content_hash, updated_at)
+chunk_embeddings (chunk_id PK, model, dim, vec BLOB, updated_at)
+```
+
+`id` is `sha256(file_path | start-end | content_hash)` — stable so unchanged content reuses embeddings across re-ingests. `node_id` is best-effort: pick the first node whose `source_location` start line falls inside the chunk's line range. Deterministic per-run.
+
+### Chunker (`src/extract/chunker.rs`)
+
+50-line / 5-line-overlap windows over both code and prose (`.md`/`.txt`/`.rst`/`.html`). Pure line-based — no second tree-sitter pass. Windows shorter than 32 non-whitespace bytes are dropped (note: this can leave the very tail of a long file unsearchable when its last 5–6 lines are short, e.g. trailing close-braces only).
+
+### `kodex run` + `kodex embed` integration
+
+- `kodex run` now chunks code + document files post-extraction and persists them, with per-project GC. Reports `chunked N segments (M pruned)` alongside the existing graph stats.
+- `kodex embed` now also embeds chunks under model id `BGE-small-en-v1.5/chunk-v1` (versioned independently from the node-embedding `/v2` because chunks embed raw 50-line content while nodes embed `label + signature + 2 lines above`).
+
+### Performance & correctness shape
+
+- **Two-stage load** in the search handler: `load_chunk_metadata` (no content) for the cosine pass, then `load_chunks_by_ids` for the top-K survivors only. Avoids materializing hundreds of MB of content per query on large repos.
+- **Narrow id↔uuid bridge** via `storage::load_node_uuids_for_ids` — `attach_knowledge_for_nodes` no longer loads the full graph just to translate `node.id` to `node.uuid` for the link join.
+- **Per-project GC scoped in Rust**: `prune_chunks_for_project` filters with `file_path.starts_with("{name}/")` instead of SQL `LIKE`, so project names containing `_` or `%` (single-char and any-char wildcards in `LIKE`) don't accidentally cross-delete other projects' chunks. Wrapped in a single transaction.
+- **`top_k` cap raised** 100 → 500 with a `truncated` flag when the requested value exceeds it.
+
+### Tests
+
+- `cargo test`: 136 unit + 23 integration pass.
+- `cargo test --features embeddings`: 147 unit + 23 integration pass.
+- New: chunker (5), storage (chunks roundtrip, v1→v2 migration, project-name LIKE-collision regression, node-uuid lookup, metadata-strips-content, knowledge join with obsolete filter), actor (rank_chunks: order/truncate/path filter/language filter/missing-metadata race/dim-mismatch).
+- The handler glue itself (Embedder construction + JSON shaping) is not covered by an end-to-end test because that requires a real BGE-small download. The pure cores (`rank_chunks`, `knowledge_for_node_ids`) are tested directly with synthetic vectors.
+
 ## v0.10.0 (2026-04-28)
 
 Three correctness fixes from a code review — Obsidian/CLI contract drift, ad-hoc schema migration, and a shell-injection surface in the plugin.

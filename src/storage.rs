@@ -656,6 +656,544 @@ pub fn count_embeddings(db_path: &Path) -> crate::error::Result<usize> {
 }
 
 // ---------------------------------------------------------------------------
+// Chunks (sub-node units for chunk-level semantic retrieval)
+// ---------------------------------------------------------------------------
+
+/// One stored chunk row. A chunk is a 50-line / 5-line-overlap window of
+/// source text. `node_id` is best-effort — set when a graph node's start
+/// line falls inside the chunk's line range, NULL otherwise (e.g. chunks
+/// of markdown / configs / regions outside any extracted node).
+#[derive(Debug, Clone)]
+pub struct StoredChunk {
+    pub id: String,
+    pub node_id: Option<String>,
+    pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub language: Option<String>,
+    pub content: String,
+    pub content_hash: String,
+}
+
+/// Bulk upsert chunks. Wraps in a single transaction.
+pub fn store_chunks_bulk(
+    db_path: &Path,
+    rows: &[StoredChunk],
+) -> crate::error::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_db(db_path)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let tx = conn
+        .transaction()
+        .map_err(|e| crate::error::KodexError::Other(format!("tx: {e}")))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO chunks (id, node_id, file_path, start_line, end_line, language, content, content_hash, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT(id) DO UPDATE SET
+                    node_id=excluded.node_id,
+                    file_path=excluded.file_path,
+                    start_line=excluded.start_line,
+                    end_line=excluded.end_line,
+                    language=excluded.language,
+                    content=excluded.content,
+                    content_hash=excluded.content_hash,
+                    updated_at=excluded.updated_at",
+            )
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.id,
+                r.node_id,
+                r.file_path,
+                r.start_line,
+                r.end_line,
+                r.language,
+                r.content,
+                r.content_hash,
+                ts,
+            ])
+            .map_err(|e| crate::error::KodexError::Other(format!("exec: {e}")))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| crate::error::KodexError::Other(format!("commit: {e}")))?;
+    Ok(())
+}
+
+/// Lightweight chunk record without `content` / `content_hash` — used by
+/// `semantic_search` for the cosine scoring pass so a multi-hundred-MB
+/// content blob doesn't get materialized just to filter / rank.
+#[derive(Debug, Clone)]
+pub struct ChunkMetadata {
+    pub id: String,
+    pub node_id: Option<String>,
+    pub file_path: String,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub language: Option<String>,
+}
+
+/// Load all chunk metadata (no content) — paired with
+/// `load_chunks_by_ids` for the top-K result enrichment.
+pub fn load_chunk_metadata(db_path: &Path) -> crate::error::Result<Vec<ChunkMetadata>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, node_id, file_path, start_line, end_line, language FROM chunks",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ChunkMetadata {
+                id: row.get(0)?,
+                node_id: row.get(1)?,
+                file_path: row.get(2)?,
+                start_line: row.get(3)?,
+                end_line: row.get(4)?,
+                language: row.get(5)?,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?);
+    }
+    Ok(out)
+}
+
+/// Load full `StoredChunk` rows for a specific list of chunk ids. Used by
+/// `semantic_search` to fetch content for only the top-K survivors of the
+/// cosine pass. Empty `ids` returns an empty vec.
+pub fn load_chunks_by_ids(
+    db_path: &Path,
+    ids: &[String],
+) -> crate::error::Result<Vec<StoredChunk>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = open_db(db_path)?;
+    // SQLite max parameter count is 999 by default; chunk in case top_k
+    // is raised in the future.
+    let mut out = Vec::with_capacity(ids.len());
+    for batch in ids.chunks(900) {
+        let placeholders: String = std::iter::repeat_n("?", batch.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, node_id, file_path, start_line, end_line, language, content, content_hash \
+             FROM chunks WHERE id IN ({placeholders})",
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        let params_iter = batch.iter().map(|s| s as &dyn rusqlite::ToSql);
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params_iter), |row| {
+                Ok(StoredChunk {
+                    id: row.get(0)?,
+                    node_id: row.get(1)?,
+                    file_path: row.get(2)?,
+                    start_line: row.get(3)?,
+                    end_line: row.get(4)?,
+                    language: row.get(5)?,
+                    content: row.get(6)?,
+                    content_hash: row.get(7)?,
+                })
+            })
+            .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+        for r in rows {
+            out.push(r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?);
+        }
+    }
+    Ok(out)
+}
+
+/// Load all chunks (full content + metadata). Used by the embed step and by
+/// `semantic_search` to enrich top-K hits before returning them.
+pub fn load_all_chunks(db_path: &Path) -> crate::error::Result<Vec<StoredChunk>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, node_id, file_path, start_line, end_line, language, content, content_hash FROM chunks",
+        )
+        .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(StoredChunk {
+                id: row.get(0)?,
+                node_id: row.get(1)?,
+                file_path: row.get(2)?,
+                start_line: row.get(3)?,
+                end_line: row.get(4)?,
+                language: row.get(5)?,
+                content: row.get(6)?,
+                content_hash: row.get(7)?,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?);
+    }
+    Ok(out)
+}
+
+/// Load `(chunk_id, content_hash)` for fast skip-existing checks during
+/// `kodex embed` — avoids materializing full chunk content.
+pub fn load_chunk_hashes(
+    db_path: &Path,
+) -> crate::error::Result<std::collections::HashMap<String, String>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare("SELECT id, content_hash FROM chunks")
+        .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let h: String = row.get(1)?;
+            Ok((id, h))
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+    let mut out = std::collections::HashMap::new();
+    for r in rows {
+        let (id, h) = r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?;
+        out.insert(id, h);
+    }
+    Ok(out)
+}
+
+/// One knowledge entry attached to a graph node, in the shape callers want
+/// for response payloads. Subset of `KnowledgeEntry` — drops fields like
+/// `description`, `evidence`, `tags` that are too verbose for inline use.
+#[derive(Debug, Clone)]
+pub struct KnowledgeAttachment {
+    pub uuid: String,
+    pub title: String,
+    pub knowledge_type: String,
+    pub confidence: f64,
+    pub relation: String,
+}
+
+/// For each node id in `node_ids`, return the list of knowledge entries
+/// linked to that node (id-keyed map). Bridges `node.id` (chunk's foreign
+/// key) → `node.uuid` (link table's foreign key) via a narrow SQL lookup,
+/// then in-memory joins links + knowledge for the wanted set. Obsolete
+/// knowledge is filtered out.
+///
+/// This is the data-only sibling of `actor::attach_knowledge_for_nodes`,
+/// which adds JSON shaping and is gated to the `embeddings` feature. Pull
+/// this directly when writing tests or non-MCP callers.
+pub fn knowledge_for_node_ids(
+    db_path: &Path,
+    node_ids: &[String],
+) -> crate::error::Result<std::collections::HashMap<String, Vec<KnowledgeAttachment>>> {
+    use std::collections::HashMap;
+
+    let id_to_uuid = load_node_uuids_for_ids(db_path, node_ids)?;
+    if id_to_uuid.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let uuid_to_id: HashMap<String, String> = id_to_uuid
+        .iter()
+        .map(|(id, u)| (u.clone(), id.clone()))
+        .collect();
+
+    let kdata = load_knowledge_only(db_path)?;
+    let kmap: HashMap<&str, &KnowledgeEntry> = kdata
+        .knowledge
+        .iter()
+        .map(|k| (k.uuid.as_str(), k))
+        .collect();
+
+    let mut out: HashMap<String, Vec<KnowledgeAttachment>> = HashMap::new();
+    for link in &kdata.links {
+        let Some(node_id) = uuid_to_id.get(link.node_uuid.as_str()) else {
+            continue;
+        };
+        let Some(k) = kmap.get(link.knowledge_uuid.as_str()) else {
+            continue;
+        };
+        if k.status.eq_ignore_ascii_case("obsolete") {
+            continue;
+        }
+        out.entry(node_id.clone()).or_default().push(KnowledgeAttachment {
+            uuid: k.uuid.clone(),
+            title: k.title.clone(),
+            knowledge_type: k.knowledge_type.clone(),
+            confidence: k.confidence,
+            relation: link.relation.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// Look up `(node.id, node.uuid)` pairs for a specific list of node ids.
+/// Cheaper alternative to `load_graph_smart` when callers only need the
+/// id↔uuid bridge (e.g. `attach_knowledge_for_nodes` in the actor).
+/// Returns a map omitting any node whose uuid is empty or missing.
+pub fn load_node_uuids_for_ids(
+    db_path: &Path,
+    ids: &[String],
+) -> crate::error::Result<std::collections::HashMap<String, String>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let conn = open_db(db_path)?;
+    let mut out = std::collections::HashMap::new();
+    for batch in ids.chunks(900) {
+        let placeholders: String = std::iter::repeat_n("?", batch.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT id, uuid FROM nodes WHERE id IN ({placeholders})");
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        let params_iter = batch.iter().map(|s| s as &dyn rusqlite::ToSql);
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params_iter), |row| {
+                let id: String = row.get(0)?;
+                let uuid: String = row.get(1)?;
+                Ok((id, uuid))
+            })
+            .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+        for r in rows {
+            let (id, uuid) =
+                r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?;
+            if !uuid.is_empty() {
+                out.insert(id, uuid);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Per-project GC: delete chunks belonging to `project_name` whose `id` is
+/// not in `keep`. Project membership is tested by `file_path.starts_with(
+/// "{project_name}/")` in Rust to avoid SQL LIKE wildcard collisions —
+/// names like `foo_bar` would otherwise match `fooXbar` because `_` is a
+/// single-char wildcard in `LIKE`. Wrapped in a single transaction so a
+/// large prune is one fsync, not N.
+pub fn prune_chunks_for_project(
+    db_path: &Path,
+    project_name: &str,
+    keep: &std::collections::HashSet<String>,
+) -> crate::error::Result<usize> {
+    let prefix = format!("{project_name}/");
+    let mut conn = open_db(db_path)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| crate::error::KodexError::Other(format!("tx: {e}")))?;
+    let mut deleted = 0usize;
+    {
+        let mut stmt = tx
+            .prepare("SELECT id, file_path FROM chunks")
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let fp: String = row.get(1)?;
+                Ok((id, fp))
+            })
+            .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut del_chunk = tx
+            .prepare("DELETE FROM chunks WHERE id = ?1")
+            .map_err(|e| crate::error::KodexError::Other(format!("prep del: {e}")))?;
+        let mut del_emb = tx
+            .prepare("DELETE FROM chunk_embeddings WHERE chunk_id = ?1")
+            .map_err(|e| crate::error::KodexError::Other(format!("prep del_emb: {e}")))?;
+        for (id, file_path) in rows {
+            if !file_path.starts_with(&prefix) {
+                continue;
+            }
+            if keep.contains(&id) {
+                continue;
+            }
+            del_chunk
+                .execute(rusqlite::params![id])
+                .map_err(|e| crate::error::KodexError::Other(format!("del: {e}")))?;
+            del_emb
+                .execute(rusqlite::params![id])
+                .map_err(|e| crate::error::KodexError::Other(format!("del_emb: {e}")))?;
+            deleted += 1;
+        }
+    }
+    tx.commit()
+        .map_err(|e| crate::error::KodexError::Other(format!("commit: {e}")))?;
+    Ok(deleted)
+}
+
+/// Delete chunk rows whose `id` is not in `keep`. Used to garbage-collect
+/// stale chunks after a re-ingest where a file shrank or was removed.
+pub fn prune_chunks_not_in(
+    db_path: &Path,
+    keep: &std::collections::HashSet<String>,
+) -> crate::error::Result<usize> {
+    let mut conn = open_db(db_path)?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| crate::error::KodexError::Other(format!("tx: {e}")))?;
+    let mut deleted = 0usize;
+    {
+        // Pull all IDs first to avoid mutating-while-iterating; SQLite would
+        // tolerate it but rusqlite's borrow rules wouldn't.
+        let mut stmt = tx
+            .prepare("SELECT id FROM chunks")
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        let ids: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut del_chunk = tx
+            .prepare("DELETE FROM chunks WHERE id = ?1")
+            .map_err(|e| crate::error::KodexError::Other(format!("prep del: {e}")))?;
+        let mut del_emb = tx
+            .prepare("DELETE FROM chunk_embeddings WHERE chunk_id = ?1")
+            .map_err(|e| crate::error::KodexError::Other(format!("prep del_emb: {e}")))?;
+        for id in ids {
+            if !keep.contains(&id) {
+                del_chunk
+                    .execute(rusqlite::params![id])
+                    .map_err(|e| crate::error::KodexError::Other(format!("del: {e}")))?;
+                del_emb
+                    .execute(rusqlite::params![id])
+                    .map_err(|e| crate::error::KodexError::Other(format!("del_emb: {e}")))?;
+                deleted += 1;
+            }
+        }
+    }
+    tx.commit()
+        .map_err(|e| crate::error::KodexError::Other(format!("commit: {e}")))?;
+    Ok(deleted)
+}
+
+/// One stored chunk-embedding row.
+#[derive(Debug, Clone)]
+pub struct StoredChunkEmbedding {
+    pub chunk_id: String,
+    pub model: String,
+    pub dim: usize,
+    pub vec: Vec<u8>,
+}
+
+/// Bulk upsert chunk embeddings. Same shape as `store_embeddings_bulk` but
+/// targets `chunk_embeddings` keyed by `chunk_id`.
+pub fn store_chunk_embeddings_bulk(
+    db_path: &Path,
+    rows: &[StoredChunkEmbedding],
+) -> crate::error::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_db(db_path)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let tx = conn
+        .transaction()
+        .map_err(|e| crate::error::KodexError::Other(format!("tx: {e}")))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO chunk_embeddings (chunk_id, model, dim, vec, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(chunk_id) DO UPDATE SET
+                    model=excluded.model, dim=excluded.dim, vec=excluded.vec, updated_at=excluded.updated_at",
+            )
+            .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                r.chunk_id,
+                r.model,
+                r.dim as i64,
+                &r.vec,
+                ts,
+            ])
+            .map_err(|e| crate::error::KodexError::Other(format!("exec: {e}")))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| crate::error::KodexError::Other(format!("commit: {e}")))?;
+    Ok(())
+}
+
+/// Load all chunk embeddings.
+pub fn load_all_chunk_embeddings(
+    db_path: &Path,
+) -> crate::error::Result<Vec<StoredChunkEmbedding>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare("SELECT chunk_id, model, dim, vec FROM chunk_embeddings")
+        .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(StoredChunkEmbedding {
+                chunk_id: row.get(0)?,
+                model: row.get(1)?,
+                dim: row.get::<_, i64>(2)? as usize,
+                vec: row.get(3)?,
+            })
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?);
+    }
+    Ok(out)
+}
+
+/// Load only `(chunk_id, model)` for the embed step's skip-existing path.
+pub fn load_chunk_embedding_models(
+    db_path: &Path,
+) -> crate::error::Result<std::collections::HashMap<String, String>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare("SELECT chunk_id, model FROM chunk_embeddings")
+        .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let m: String = row.get(1)?;
+            Ok((id, m))
+        })
+        .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
+    let mut out = std::collections::HashMap::new();
+    for r in rows {
+        let (id, m) = r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?;
+        out.insert(id, m);
+    }
+    Ok(out)
+}
+
+/// Count chunks (status indicator).
+pub fn count_chunks(db_path: &Path) -> crate::error::Result<usize> {
+    let conn = open_db(db_path)?;
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+        .map_err(|e| crate::error::KodexError::Other(format!("count: {e}")))?;
+    Ok(n as usize)
+}
+
+/// Count chunk embeddings.
+pub fn count_chunk_embeddings(db_path: &Path) -> crate::error::Result<usize> {
+    let conn = open_db(db_path)?;
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM chunk_embeddings", [], |r| r.get(0))
+        .map_err(|e| crate::error::KodexError::Other(format!("count: {e}")))?;
+    Ok(n as usize)
+}
+
+// ---------------------------------------------------------------------------
 // SQLite internals
 // ---------------------------------------------------------------------------
 
@@ -714,10 +1252,30 @@ fn create_tables(conn: &Connection) -> crate::error::Result<()> {
             vec BLOB NOT NULL,
             updated_at INTEGER DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS chunks (
+            id TEXT PRIMARY KEY,
+            node_id TEXT,
+            file_path TEXT NOT NULL,
+            start_line INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            language TEXT,
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            updated_at INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS chunk_embeddings (
+            chunk_id TEXT PRIMARY KEY,
+            model TEXT NOT NULL,
+            dim INTEGER NOT NULL,
+            vec BLOB NOT NULL,
+            updated_at INTEGER DEFAULT 0
+        );
         CREATE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
         CREATE INDEX IF NOT EXISTS idx_knowledge_title ON knowledge(title);
         CREATE INDEX IF NOT EXISTS idx_links_kuuid ON links(knowledge_uuid);
         CREATE INDEX IF NOT EXISTS idx_links_nuuid ON links(node_uuid);
+        CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_path);
+        CREATE INDEX IF NOT EXISTS idx_chunks_node ON chunks(node_id);
         ",
     )
     .map_err(|e| crate::error::KodexError::Other(format!("SQLite tables: {e}")))?;
@@ -735,7 +1293,11 @@ fn create_tables(conn: &Connection) -> crate::error::Result<()> {
 ///   knowledge.{fetch_count,last_fetched} columns.
 /// - v1: knowledge.fetch_count + knowledge.last_fetched (added 2026-04 to
 ///   support recall ranking by usage).
-const SCHEMA_VERSION: i64 = 1;
+/// - v2: chunks + chunk_embeddings tables (added 2026-05 for chunk-level
+///   semantic retrieval). New tables only — `CREATE TABLE IF NOT EXISTS` in
+///   `create_tables` covers fresh DBs and existing v1 DBs alike, so the
+///   migration arm just bumps `user_version`.
+const SCHEMA_VERSION: i64 = 2;
 
 /// Apply any pending migrations from `current` up to `SCHEMA_VERSION`.
 /// Idempotent — running twice on the same DB is a no-op.
@@ -747,6 +1309,7 @@ fn run_migrations(conn: &Connection) -> crate::error::Result<()> {
     for next in (current + 1)..=SCHEMA_VERSION {
         match next {
             1 => migrate_v0_to_v1(conn)?,
+            2 => { /* tables created in create_tables(); no ALTER needed */ }
             other => {
                 return Err(crate::error::KodexError::Other(format!(
                     "no migration registered for schema v{other}"
@@ -1604,5 +2167,391 @@ mod tests {
         let loaded = load(&db).unwrap();
         assert_eq!(loaded.links.len(), 1);
         assert_eq!(loaded.links[0].node_uuid, "n-2");
+    }
+
+    #[test]
+    fn test_chunks_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("chunks.db");
+        let row = StoredChunk {
+            id: "c-1".into(),
+            node_id: Some("n-1".into()),
+            file_path: "p/foo.rs".into(),
+            start_line: 1,
+            end_line: 50,
+            language: Some("rust".into()),
+            content: "fn foo() {}".into(),
+            content_hash: "deadbeef".into(),
+        };
+        store_chunks_bulk(&db, &[row.clone()]).unwrap();
+        let loaded = load_all_chunks(&db).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "c-1");
+        assert_eq!(loaded[0].node_id.as_deref(), Some("n-1"));
+        assert_eq!(loaded[0].file_path, "p/foo.rs");
+        assert_eq!(loaded[0].start_line, 1);
+        assert_eq!(loaded[0].end_line, 50);
+        assert_eq!(loaded[0].content, "fn foo() {}");
+
+        // Upsert with same id but new content — must overwrite.
+        let updated = StoredChunk {
+            content: "fn foo() { bar() }".into(),
+            content_hash: "feed".into(),
+            ..row
+        };
+        store_chunks_bulk(&db, &[updated]).unwrap();
+        let reloaded = load_all_chunks(&db).unwrap();
+        assert_eq!(reloaded.len(), 1, "upsert must not duplicate");
+        assert!(reloaded[0].content.contains("bar"));
+
+        // Embedding side: roundtrip + dim preserved.
+        let emb = StoredChunkEmbedding {
+            chunk_id: "c-1".into(),
+            model: "BGE-small-en-v1.5/chunk-v1".into(),
+            dim: 384,
+            vec: vec![0u8; 4 * 384],
+        };
+        store_chunk_embeddings_bulk(&db, &[emb]).unwrap();
+        let embs = load_all_chunk_embeddings(&db).unwrap();
+        assert_eq!(embs.len(), 1);
+        assert_eq!(embs[0].dim, 384);
+        assert_eq!(embs[0].vec.len(), 4 * 384);
+
+        // Prune: keep the chunk in keep-set → no deletion. Drop from keep
+        // set → chunk + its embedding are removed.
+        let mut keep: std::collections::HashSet<String> = std::collections::HashSet::new();
+        keep.insert("c-1".to_string());
+        let pruned = prune_chunks_not_in(&db, &keep).unwrap();
+        assert_eq!(pruned, 0);
+        keep.clear();
+        let pruned = prune_chunks_not_in(&db, &keep).unwrap();
+        assert_eq!(pruned, 1);
+        assert!(load_all_chunks(&db).unwrap().is_empty());
+        assert!(load_all_chunk_embeddings(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_prune_chunks_does_not_cross_delete_similar_project_names() {
+        // Regression: an earlier draft used `LIKE 'foo_bar/%'`, which
+        // matches `fooXbar/...` because `_` is a single-char wildcard in
+        // SQLite's LIKE. The Rust-side `starts_with` filter now in
+        // `prune_chunks_for_project` must keep both projects' chunks
+        // independent.
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("multi.db");
+
+        let chunk = |id: &str, file_path: &str| StoredChunk {
+            id: id.into(),
+            node_id: None,
+            file_path: file_path.into(),
+            start_line: 1,
+            end_line: 10,
+            language: Some("rust".into()),
+            content: "x".into(),
+            content_hash: id.into(),
+        };
+        store_chunks_bulk(
+            &db,
+            &[
+                chunk("c-foo-1", "foo/src/a.rs"),
+                chunk("c-fooXbar-1", "fooXbar/src/a.rs"),
+                chunk("c-foo_bar-1", "foo_bar/src/a.rs"),
+            ],
+        )
+        .unwrap();
+
+        // Re-ingest of project `foo` keeps c-foo-1, drops nothing else.
+        let mut keep = std::collections::HashSet::new();
+        keep.insert("c-foo-1".to_string());
+        let pruned = prune_chunks_for_project(&db, "foo", &keep).unwrap();
+        assert_eq!(pruned, 0, "no foo-prefixed chunk should be deleted");
+
+        let after = load_all_chunks(&db).unwrap();
+        let ids: std::collections::HashSet<&str> =
+            after.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains("c-foo-1"));
+        assert!(
+            ids.contains("c-fooXbar-1"),
+            "fooXbar must NOT be pruned by `foo` (would happen with raw LIKE)"
+        );
+        assert!(
+            ids.contains("c-foo_bar-1"),
+            "foo_bar must NOT be pruned by `foo` — different project"
+        );
+
+        // Now actually GC project `foo_bar` with empty keep — only its
+        // chunk goes; the other two stay.
+        let pruned = prune_chunks_for_project(
+            &db,
+            "foo_bar",
+            &std::collections::HashSet::new(),
+        )
+        .unwrap();
+        assert_eq!(pruned, 1);
+        let after = load_all_chunks(&db).unwrap();
+        let ids: std::collections::HashSet<&str> =
+            after.iter().map(|c| c.id.as_str()).collect();
+        assert!(!ids.contains("c-foo_bar-1"));
+        assert!(ids.contains("c-foo-1"));
+        assert!(ids.contains("c-fooXbar-1"));
+    }
+
+    #[test]
+    fn test_load_node_uuids_for_ids_skips_empty_uuids() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("uuids.db");
+        // Use the public save() path so node columns are populated correctly.
+        let mut data = KodexData {
+            extraction: ExtractionResult::default(),
+            knowledge: vec![],
+            links: vec![],
+            review_queue: vec![],
+        };
+        data.extraction.nodes.push(crate::types::Node {
+            id: "id-a".into(),
+            label: "A".into(),
+            file_type: crate::types::FileType::Code,
+            source_file: "p/a.rs".into(),
+            source_location: Some("L1".into()),
+            confidence: Some(crate::types::Confidence::EXTRACTED),
+            confidence_score: None,
+            community: None,
+            norm_label: None,
+            degree: None,
+            uuid: Some("uuid-a".into()),
+            fingerprint: None,
+            logical_key: None,
+            body_hash: None,
+        });
+        data.extraction.nodes.push(crate::types::Node {
+            id: "id-b".into(),
+            label: "B".into(),
+            file_type: crate::types::FileType::Code,
+            source_file: "p/b.rs".into(),
+            source_location: Some("L1".into()),
+            confidence: Some(crate::types::Confidence::EXTRACTED),
+            confidence_score: None,
+            community: None,
+            norm_label: None,
+            degree: None,
+            uuid: Some(String::new()), // empty uuid — must be filtered out
+            fingerprint: None,
+            logical_key: None,
+            body_hash: None,
+        });
+        save(&db, &data).unwrap();
+
+        let map = load_node_uuids_for_ids(
+            &db,
+            &["id-a".to_string(), "id-b".to_string(), "id-missing".to_string()],
+        )
+        .unwrap();
+        assert_eq!(map.len(), 1, "only id-a has a non-empty uuid");
+        assert_eq!(map.get("id-a"), Some(&"uuid-a".to_string()));
+        assert!(map.get("id-b").is_none(), "empty uuid must be filtered");
+        assert!(map.get("id-missing").is_none(), "absent id must be absent");
+    }
+
+    #[test]
+    fn test_knowledge_for_node_ids_joins_and_filters_obsolete() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("kfnids.db");
+
+        // Two nodes (id-a / uuid-a, id-b / uuid-b), three knowledge entries
+        // (k-active, k-other, k-obsolete), and four links exercising:
+        //  - normal active link node-a → k-active
+        //  - duplicate-relation link node-a → k-other (different relation)
+        //  - obsolete link must be filtered out
+        //  - link to a node not in the wanted set must be ignored
+        let mut data = KodexData {
+            extraction: ExtractionResult::default(),
+            knowledge: vec![
+                KnowledgeEntry {
+                    uuid: "k-active".into(),
+                    title: "Active".into(),
+                    knowledge_type: "bug_pattern".into(),
+                    confidence: 0.7,
+                    status: "active".into(),
+                    ..Default::default()
+                },
+                KnowledgeEntry {
+                    uuid: "k-other".into(),
+                    title: "Other".into(),
+                    knowledge_type: "decision".into(),
+                    confidence: 0.5,
+                    status: "active".into(),
+                    ..Default::default()
+                },
+                KnowledgeEntry {
+                    uuid: "k-obsolete".into(),
+                    title: "Old".into(),
+                    knowledge_type: "lesson".into(),
+                    confidence: 0.4,
+                    status: "obsolete".into(),
+                    ..Default::default()
+                },
+            ],
+            links: vec![
+                KnowledgeLink {
+                    knowledge_uuid: "k-active".into(),
+                    node_uuid: "uuid-a".into(),
+                    relation: "warns_about".into(),
+                    ..Default::default()
+                },
+                KnowledgeLink {
+                    knowledge_uuid: "k-other".into(),
+                    node_uuid: "uuid-a".into(),
+                    relation: "documents".into(),
+                    ..Default::default()
+                },
+                KnowledgeLink {
+                    knowledge_uuid: "k-obsolete".into(),
+                    node_uuid: "uuid-a".into(),
+                    relation: "warns_about".into(),
+                    ..Default::default()
+                },
+                // Link to a node outside the wanted set — must not surface.
+                KnowledgeLink {
+                    knowledge_uuid: "k-active".into(),
+                    node_uuid: "uuid-c-elsewhere".into(),
+                    relation: "warns_about".into(),
+                    ..Default::default()
+                },
+            ],
+            review_queue: vec![],
+        };
+        data.extraction.nodes.push(crate::types::Node {
+            id: "id-a".into(),
+            label: "A".into(),
+            file_type: crate::types::FileType::Code,
+            source_file: "p/a.rs".into(),
+            source_location: Some("L1".into()),
+            confidence: Some(crate::types::Confidence::EXTRACTED),
+            confidence_score: None,
+            community: None,
+            norm_label: None,
+            degree: None,
+            uuid: Some("uuid-a".into()),
+            fingerprint: None,
+            logical_key: None,
+            body_hash: None,
+        });
+        data.extraction.nodes.push(crate::types::Node {
+            id: "id-b".into(),
+            label: "B".into(),
+            file_type: crate::types::FileType::Code,
+            source_file: "p/b.rs".into(),
+            source_location: Some("L1".into()),
+            confidence: Some(crate::types::Confidence::EXTRACTED),
+            confidence_score: None,
+            community: None,
+            norm_label: None,
+            degree: None,
+            uuid: Some("uuid-b".into()),
+            fingerprint: None,
+            logical_key: None,
+            body_hash: None,
+        });
+        save(&db, &data).unwrap();
+
+        let map = knowledge_for_node_ids(
+            &db,
+            &["id-a".to_string(), "id-b".to_string(), "id-missing".to_string()],
+        )
+        .unwrap();
+
+        // id-a: 2 active links (k-active warns_about, k-other documents);
+        // k-obsolete dropped; cross-node link ignored.
+        let a = map.get("id-a").expect("id-a should have attachments");
+        assert_eq!(a.len(), 2, "obsolete link must be filtered");
+        let titles: std::collections::HashSet<&str> =
+            a.iter().map(|x| x.title.as_str()).collect();
+        assert!(titles.contains("Active"));
+        assert!(titles.contains("Other"));
+        assert!(!titles.contains("Old"), "obsolete must not surface");
+
+        // id-b: no links → not present in the map (rather than empty Vec).
+        assert!(map.get("id-b").is_none());
+
+        // id-missing: not in the nodes table → not present.
+        assert!(map.get("id-missing").is_none());
+
+        // Empty input → empty output.
+        let empty = knowledge_for_node_ids(&db, &[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_load_chunk_metadata_strips_content() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("meta.db");
+        store_chunks_bulk(
+            &db,
+            &[StoredChunk {
+                id: "c-1".into(),
+                node_id: Some("n-1".into()),
+                file_path: "p/x.rs".into(),
+                start_line: 1,
+                end_line: 50,
+                language: Some("rust".into()),
+                content: "huge body".repeat(1000),
+                content_hash: "h".into(),
+            }],
+        )
+        .unwrap();
+        let meta = load_chunk_metadata(&db).unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].id, "c-1");
+        assert_eq!(meta[0].node_id.as_deref(), Some("n-1"));
+        assert_eq!(meta[0].start_line, 1);
+        assert_eq!(meta[0].end_line, 50);
+        assert_eq!(meta[0].language.as_deref(), Some("rust"));
+
+        let by_id = load_chunks_by_ids(&db, &["c-1".to_string()]).unwrap();
+        assert_eq!(by_id.len(), 1);
+        assert!(by_id[0].content.contains("huge body"));
+
+        let empty = load_chunks_by_ids(&db, &[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_migration_v1_to_v2_creates_chunk_tables() {
+        let dir = TempDir::new().unwrap();
+        let db = dir.path().join("v1_legacy.db");
+        // Fresh open creates everything at SCHEMA_VERSION (currently 2).
+        {
+            let _ = open_db(&db).unwrap();
+        }
+        // Synthetic rollback to v1: drop the chunk tables and stamp
+        // user_version=1. Mirrors how a real v1 DB would look on disk
+        // before the v2 migration runs.
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS chunk_embeddings;",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 1_i64).unwrap();
+        }
+        // Re-open: create_tables should restore the tables (idempotent), and
+        // run_migrations should bump user_version to 2.
+        let _ = open_db(&db).unwrap();
+        let conn = Connection::open(&db).unwrap();
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        let tables: std::collections::HashSet<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert!(tables.contains("chunks"));
+        assert!(tables.contains("chunk_embeddings"));
     }
 }

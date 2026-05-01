@@ -1,5 +1,4 @@
 use std::path::Path;
-#[cfg(feature = "extract")]
 use std::path::PathBuf;
 
 pub fn run_pipeline(path: &Path) {
@@ -104,6 +103,30 @@ pub fn run_pipeline(path: &Path) {
         Err(e) => eprintln!("  SQLite error: {e}"),
     }
 
+    // Chunk files for chunk-level semantic retrieval. Both code and prose
+    // (markdown / txt / rst / html) are chunked — code chunks gain a
+    // best-effort `node_id` when an extracted node starts inside the chunk's
+    // line range; prose chunks always carry `node_id=NULL`. Embeddings are
+    // computed lazily by `kodex embed` (skipped when the `embeddings`
+    // feature isn't built).
+    {
+        let chunk_targets: Vec<PathBuf> = detection
+            .files
+            .code
+            .iter()
+            .chain(detection.files.document.iter())
+            .map(PathBuf::from)
+            .collect();
+        if !chunk_targets.is_empty() {
+            match build_and_persist_chunks(&db_path, path, project_name, &chunk_targets, &extraction) {
+                Ok((written, pruned)) => {
+                    println!("  chunked {written} segments ({pruned} pruned)");
+                }
+                Err(e) => eprintln!("  chunk: {e}"),
+            }
+        }
+    }
+
     // Ingest external knowledge (git commits, README)
     match kodex::ingest_knowledge::ingest_project(&db_path, path, 50) {
         Ok(0) => {}
@@ -167,4 +190,73 @@ pub fn run_pipeline(path: &Path) {
         db_path.display(),
         out_dir.display()
     );
+}
+
+/// Run the chunker over every code/document file and persist chunks to the
+/// global db. Returns `(written, pruned)` — number of chunks upserted and
+/// number of stale chunks GC'd. Paths are normalized to the same
+/// `{project_name}/{relative}` convention used by `extract` so chunk
+/// `node_id` mappings line up with the persisted nodes.
+fn build_and_persist_chunks(
+    db_path: &Path,
+    project_root: &Path,
+    project_name: &str,
+    targets: &[PathBuf],
+    extraction: &kodex::types::ExtractionResult,
+) -> kodex::error::Result<(usize, usize)> {
+    use std::collections::{HashMap, HashSet};
+
+    // Group nodes by source_file once for O(1) per-file lookup.
+    let mut nodes_by_file: HashMap<&str, Vec<&kodex::types::Node>> = HashMap::new();
+    for n in &extraction.nodes {
+        nodes_by_file.entry(n.source_file.as_str()).or_default().push(n);
+    }
+
+    let mut all_chunks: Vec<kodex::storage::StoredChunk> = Vec::new();
+    let mut keep_ids: HashSet<String> = HashSet::new();
+
+    for disk_path in targets {
+        // Build the registry-prefixed source_file the same way `run_pipeline`
+        // does for extraction nodes: strip the project root, prepend the
+        // project name. Falls back to the raw on-disk string if the strip
+        // fails (matches how nodes whose path didn't match got left alone).
+        let rel = disk_path
+            .strip_prefix(project_root)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or_else(|| disk_path.to_str().unwrap_or(""));
+        let source_file = if rel.is_empty() {
+            continue;
+        } else {
+            format!("{project_name}/{}", rel.trim_start_matches('/'))
+        };
+        let language = kodex::extract::chunker::language_for_path(disk_path);
+        let nodes_in_file: Vec<&kodex::types::Node> = nodes_by_file
+            .get(source_file.as_str())
+            .cloned()
+            .unwrap_or_default();
+        let chunks = kodex::extract::chunker::chunk_file(
+            &source_file,
+            disk_path,
+            language,
+            &nodes_in_file,
+        );
+        for c in &chunks {
+            keep_ids.insert(c.id.clone());
+        }
+        all_chunks.extend(chunks);
+    }
+
+    // Upsert in modest batches so a transaction-per-batch keeps memory low
+    // on huge repos while still amortizing fsync cost.
+    const BATCH: usize = 500;
+    for batch in all_chunks.chunks(BATCH) {
+        kodex::storage::store_chunks_bulk(db_path, batch)?;
+    }
+    // GC: only prune chunks belonging to *this project* — other projects'
+    // chunks share the global db and must not be touched. Storage helper
+    // does the project-prefix filtering in Rust (not SQL LIKE) to avoid
+    // wildcard collisions on names containing `_` or `%`.
+    let pruned = kodex::storage::prune_chunks_for_project(db_path, project_name, &keep_ids)?;
+    Ok((all_chunks.len(), pruned))
 }

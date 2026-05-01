@@ -133,3 +133,69 @@ pub fn embed_nodes(
     }
     Ok(total_written)
 }
+
+/// Model identifier for chunk embeddings. Versioned independently from
+/// `MODEL_ID` (node embeddings) because the embedded text is different —
+/// chunks embed the raw 50-line window, nodes embed `label + signature`.
+const CHUNK_MODEL_ID: &str = "BGE-small-en-v1.5/chunk-v1";
+
+/// Embed all chunks in the global db whose stored embedding is missing or
+/// stale (different model id / dim). Returns the number of new embeddings
+/// written. Pre-filter: chunks are loaded together with their content_hash
+/// + existing embedding model so unchanged chunks are skipped without
+/// re-reading the BLOB.
+pub fn embed_chunks(db_path: &Path, skip_existing: bool) -> kodex::error::Result<usize> {
+    let chunks = storage::load_all_chunks(db_path)?;
+    if chunks.is_empty() {
+        println!("No chunks in db — run `kodex run` first.");
+        return Ok(0);
+    }
+
+    let existing_models: std::collections::HashMap<String, String> = if skip_existing {
+        storage::load_chunk_embedding_models(db_path)?
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // Skip rows whose embedding already matches CHUNK_MODEL_ID. Chunks
+    // missing from the map (or with a different model id) get re-embedded.
+    let work: Vec<&storage::StoredChunk> = chunks
+        .iter()
+        .filter(|c| {
+            existing_models
+                .get(&c.id)
+                .map(|m| m.as_str() != CHUNK_MODEL_ID)
+                .unwrap_or(true)
+        })
+        .collect();
+
+    if work.is_empty() {
+        println!("No new chunks to embed.");
+        return Ok(0);
+    }
+    println!("Embedding {} chunks...", work.len());
+
+    let embedder = Embedder::new()?;
+    let dim = embedder.dim;
+    let mut total_written = 0usize;
+    for batch in work.chunks(BATCH_SIZE) {
+        let texts: Vec<&str> = batch.iter().map(|c| c.content.as_str()).collect();
+        let vecs = embedder.embed(texts)?;
+        let rows: Vec<storage::StoredChunkEmbedding> = batch
+            .iter()
+            .zip(vecs.iter())
+            .map(|(c, v)| storage::StoredChunkEmbedding {
+                chunk_id: c.id.clone(),
+                model: CHUNK_MODEL_ID.to_string(),
+                dim,
+                vec: vec_to_bytes(v),
+            })
+            .collect();
+        storage::store_chunk_embeddings_bulk(db_path, &rows)?;
+        total_written += rows.len();
+        if total_written.is_multiple_of(256) || total_written == work.len() {
+            println!("  embedded {total_written}/{}", work.len());
+        }
+    }
+    Ok(total_written)
+}

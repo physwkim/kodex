@@ -1,4 +1,5 @@
 pub mod call_graph;
+pub mod chunker;
 pub mod config;
 pub mod generic;
 pub mod languages;

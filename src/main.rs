@@ -293,6 +293,14 @@ fn main() {
                     Ok(n) => println!("Embedded {n} nodes."),
                     Err(e) => eprintln!("Embed error: {e}"),
                 }
+                // Also embed chunks (chunk-level semantic retrieval). Both passes
+                // share the BGE-small model load — the second `Embedder::new()`
+                // call inside `embed_chunks` is cheap because the ONNX session
+                // cache is process-local and the model is already on disk.
+                match commands::embed::embed_chunks(&db, skip_existing) {
+                    Ok(n) => println!("Embedded {n} chunks."),
+                    Err(e) => eprintln!("Embed chunks error: {e}"),
+                }
             }
             #[cfg(not(feature = "embeddings"))]
             {

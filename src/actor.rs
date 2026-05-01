@@ -658,6 +658,23 @@ fn process_request(input: &str) -> String {
             }
             response
         }
+        "semantic_search" => {
+            #[cfg(not(feature = "embeddings"))]
+            {
+                let _ = params;
+                return error_response(
+                    &id,
+                    "semantic_search requires kodex built with --features embeddings (and `kodex embed` to have been run)",
+                );
+            }
+            #[cfg(feature = "embeddings")]
+            {
+                match semantic_search_handler(&params, &db_path) {
+                    Ok(v) => v,
+                    Err(e) => return error_response(&id, &e),
+                }
+            }
+        }
         "analyze_change" => {
             // Orchestrator: combines recall_for_diff (knowledge memories) +
             // co_changes (architectural blast radius) into one call. Saves
@@ -1525,6 +1542,230 @@ struct Candidate {
 /// stored embeddings whose source_file matches `right_pattern`, and merge
 /// top-K matches above the threshold into the gap's `candidate_matches`
 /// array (de-duplicated by label). Returns the modified array.
+/// `semantic_search`: NL → top-K code chunks via cosine over chunk
+/// embeddings. Optional file/language filters. When `link_knowledge=true`
+/// (default), each hit whose chunk maps to a graph node is enriched with
+/// the knowledge entries linked to that node — the kodex-only differentiator
+/// over plain vector retrieval.
+#[cfg(feature = "embeddings")]
+fn semantic_search_handler(
+    params: &serde_json::Value,
+    db_path: &std::path::Path,
+) -> Result<serde_json::Value, String> {
+    use crate::embedding::Embedder;
+    use std::collections::HashMap;
+
+    let query = params
+        .get("query")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if query.is_empty() {
+        return Err("semantic_search requires a non-empty `query`".into());
+    }
+    let requested_top_k = params
+        .get("top_k")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10);
+    let top_k = requested_top_k.clamp(1, 500) as usize;
+    let truncated = requested_top_k > 500;
+    // Accept both `path_substring` (preferred — accurate name) and the
+    // legacy `file_glob` for back-compat with any caller built against the
+    // initial draft of this tool. Either is a plain substring match against
+    // `chunk.file_path`, NOT a glob.
+    let path_substring = params
+        .get("path_substring")
+        .or_else(|| params.get("file_glob"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let language = params
+        .get("language")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let link_knowledge = params
+        .get("link_knowledge")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    // Two-stage load: (1) lightweight metadata for the cosine pass — no
+    // chunk content materialized — and (2) `load_chunks_by_ids` for the
+    // top-K survivors. Avoids hundreds of MB of content allocation per
+    // query on large repos.
+    let metadata =
+        crate::storage::load_chunk_metadata(db_path).map_err(|e| e.to_string())?;
+    if metadata.is_empty() {
+        return Err("no chunks in db — run `kodex run` to populate them first".into());
+    }
+    let embeddings =
+        crate::storage::load_all_chunk_embeddings(db_path).map_err(|e| e.to_string())?;
+    if embeddings.is_empty() {
+        return Err(
+            "no chunk embeddings — run `kodex embed` (with --features embeddings) first".into(),
+        );
+    }
+
+    let meta_map: HashMap<&str, &crate::storage::ChunkMetadata> =
+        metadata.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    let embedder = Embedder::new().map_err(|e| e.to_string())?;
+    let q = embedder.embed_one(query).map_err(|e| e.to_string())?;
+
+    let scored = rank_chunks(
+        &q,
+        &embeddings,
+        &meta_map,
+        path_substring.as_deref(),
+        language.as_deref(),
+        top_k,
+    );
+
+    // Fetch content for the top-K only.
+    let top_ids: Vec<String> = scored.iter().map(|(_, m)| m.id.clone()).collect();
+    let top_content =
+        crate::storage::load_chunks_by_ids(db_path, &top_ids).map_err(|e| e.to_string())?;
+    let content_map: HashMap<&str, &crate::storage::StoredChunk> =
+        top_content.iter().map(|c| (c.id.as_str(), c)).collect();
+
+    // Resolve attached knowledge for code chunks that mapped to a node. The
+    // chunks store `node.id` (label-derived stable id), but `links` keys on
+    // `node.uuid` — `attach_knowledge_for_nodes` does the bridge via a
+    // narrow SQL lookup (no full graph load).
+    let knowledge_by_node: HashMap<String, Vec<serde_json::Value>> = if link_knowledge {
+        attach_knowledge_for_nodes(
+            db_path,
+            scored.iter().filter_map(|(_, m)| m.node_id.as_deref()),
+        )
+        .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    let hits: Vec<serde_json::Value> = scored
+        .into_iter()
+        .map(|(score, m)| {
+            // Content lookup may miss only if a row was deleted between the
+            // metadata pass and the by-ids pass — rare race in concurrent
+            // re-ingest. Fall back to empty content rather than dropping
+            // the hit so the file_path / line range stay actionable.
+            let content = content_map
+                .get(m.id.as_str())
+                .map(|c| c.content.as_str())
+                .unwrap_or("");
+            let mut hit = serde_json::json!({
+                "score": score,
+                "file_path": m.file_path,
+                "start_line": m.start_line,
+                "end_line": m.end_line,
+                "content": content,
+            });
+            if let Some(lang) = &m.language {
+                hit["language"] = serde_json::json!(lang);
+            }
+            if let Some(nid) = &m.node_id {
+                hit["node_id"] = serde_json::json!(nid);
+                if let Some(k) = knowledge_by_node.get(nid) {
+                    hit["attached_knowledge"] = serde_json::json!(k);
+                }
+            }
+            hit
+        })
+        .collect();
+
+    let count = hits.len();
+    let mut response = serde_json::json!({
+        "query": query,
+        "hits": hits,
+        "count": count,
+    });
+    if truncated {
+        response["truncated"] = serde_json::json!(true);
+        response["requested_top_k"] = serde_json::json!(requested_top_k);
+    }
+    Ok(response)
+}
+
+/// Pure cosine ranking + filter pass, extracted from `semantic_search_handler`
+/// so it's testable without a model. Filters by `path_substring` (substring
+/// match against `file_path`) and `language` (exact match), then computes
+/// cosine vs `query_vec` for each surviving embedding, sorts desc, truncates
+/// to `top_k`. The `metadata` map is keyed by chunk id; embeddings whose
+/// chunk id has no metadata entry are dropped (typically a race between
+/// metadata read and an in-flight re-ingest).
+#[cfg(feature = "embeddings")]
+pub(crate) fn rank_chunks<'a>(
+    query_vec: &[f32],
+    embeddings: &'a [crate::storage::StoredChunkEmbedding],
+    metadata: &'a std::collections::HashMap<&str, &'a crate::storage::ChunkMetadata>,
+    path_substring: Option<&str>,
+    language: Option<&str>,
+    top_k: usize,
+) -> Vec<(f32, &'a crate::storage::ChunkMetadata)> {
+    use crate::embedding::{bytes_to_vec, cosine};
+    let mut scored: Vec<(f32, &crate::storage::ChunkMetadata)> = embeddings
+        .iter()
+        .filter_map(|e| {
+            let meta = metadata.get(e.chunk_id.as_str())?;
+            if let Some(p) = path_substring {
+                if !meta.file_path.contains(p) {
+                    return None;
+                }
+            }
+            if let Some(l) = language {
+                if meta.language.as_deref() != Some(l) {
+                    return None;
+                }
+            }
+            let v = bytes_to_vec(&e.vec);
+            if v.is_empty() {
+                return None;
+            }
+            Some((cosine(query_vec, &v), *meta))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(top_k);
+    scored
+}
+
+/// Thin wrapper over `storage::knowledge_for_node_ids` that JSON-shapes the
+/// result for embedding into the `semantic_search` response. The data-only
+/// path is in storage so non-MCP callers (and tests) can exercise it
+/// without the `embeddings` feature.
+#[cfg(feature = "embeddings")]
+fn attach_knowledge_for_nodes<'a>(
+    db_path: &std::path::Path,
+    node_ids: impl Iterator<Item = &'a str>,
+) -> crate::error::Result<std::collections::HashMap<String, Vec<serde_json::Value>>> {
+    use std::collections::HashSet;
+
+    let wanted: Vec<String> = node_ids
+        .map(|s| s.to_string())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let raw = crate::storage::knowledge_for_node_ids(db_path, &wanted)?;
+    Ok(raw
+        .into_iter()
+        .map(|(node_id, attachments)| {
+            let json_list: Vec<serde_json::Value> = attachments
+                .into_iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "uuid": a.uuid,
+                        "title": a.title,
+                        "type": a.knowledge_type,
+                        "confidence": a.confidence,
+                        "relation": a.relation,
+                    })
+                })
+                .collect();
+            (node_id, json_list)
+        })
+        .collect())
+}
+
 #[cfg(feature = "embeddings")]
 fn semantic_embedding_pass(
     graph: &crate::graph::KodexGraph,
@@ -1735,5 +1976,152 @@ fn parse_knowledge_type(s: &str) -> crate::learn::KnowledgeType {
         "context" => crate::learn::KnowledgeType::Context,
         "lesson" => crate::learn::KnowledgeType::Lesson,
         other => crate::learn::KnowledgeType::Custom(other.to_string()),
+    }
+}
+
+#[cfg(all(test, feature = "embeddings"))]
+mod tests {
+    use super::*;
+    use crate::embedding::vec_to_bytes;
+    use crate::storage::{ChunkMetadata, StoredChunkEmbedding};
+    use std::collections::HashMap;
+
+    /// Build a 384-dim unit vector pointing along axis `i` (zeros elsewhere).
+    /// Cosine between two such vectors is `delta(i, j)` (1.0 if same axis,
+    /// 0.0 otherwise) — perfect for asserting rank order without a real
+    /// embedding model.
+    fn axis_vec(i: usize) -> Vec<f32> {
+        let mut v = vec![0.0_f32; 384];
+        v[i] = 1.0;
+        v
+    }
+
+    fn meta(id: &str, file_path: &str, language: Option<&str>) -> ChunkMetadata {
+        ChunkMetadata {
+            id: id.to_string(),
+            node_id: None,
+            file_path: file_path.to_string(),
+            start_line: 1,
+            end_line: 50,
+            language: language.map(str::to_string),
+        }
+    }
+
+    fn emb(chunk_id: &str, axis: usize) -> StoredChunkEmbedding {
+        StoredChunkEmbedding {
+            chunk_id: chunk_id.to_string(),
+            model: "test".to_string(),
+            dim: 384,
+            vec: vec_to_bytes(&axis_vec(axis)),
+        }
+    }
+
+    #[test]
+    fn rank_chunks_orders_by_cosine_descending() {
+        let m = vec![
+            meta("c-a", "src/a.rs", Some("rust")),
+            meta("c-b", "src/b.rs", Some("rust")),
+            meta("c-c", "src/c.rs", Some("rust")),
+        ];
+        let map: HashMap<&str, &ChunkMetadata> =
+            m.iter().map(|x| (x.id.as_str(), x)).collect();
+
+        // c-a aligned with axis 0; c-b axis 1; c-c axis 2.
+        let embeddings = vec![emb("c-a", 0), emb("c-b", 1), emb("c-c", 2)];
+        // Query along axis 0 → c-a wins with cos=1.0; others get 0.0.
+        let q = axis_vec(0);
+
+        let ranked = rank_chunks(&q, &embeddings, &map, None, None, 10);
+        assert_eq!(ranked.len(), 3);
+        assert_eq!(ranked[0].1.id, "c-a");
+        assert!((ranked[0].0 - 1.0).abs() < 1e-5);
+        assert!(ranked[1].0.abs() < 1e-5);
+        assert!(ranked[2].0.abs() < 1e-5);
+    }
+
+    #[test]
+    fn rank_chunks_top_k_truncates() {
+        let m: Vec<ChunkMetadata> = (0..5)
+            .map(|i| meta(&format!("c-{i}"), &format!("src/{i}.rs"), Some("rust")))
+            .collect();
+        let map: HashMap<&str, &ChunkMetadata> =
+            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let embeddings: Vec<StoredChunkEmbedding> =
+            (0..5).map(|i| emb(&format!("c-{i}"), i)).collect();
+        let q = axis_vec(0);
+
+        let ranked = rank_chunks(&q, &embeddings, &map, None, None, 2);
+        assert_eq!(ranked.len(), 2, "must truncate to top_k");
+        assert_eq!(ranked[0].1.id, "c-0");
+    }
+
+    #[test]
+    fn rank_chunks_path_substring_filters() {
+        let m = vec![
+            meta("c-rs", "src/foo/bar.rs", Some("rust")),
+            meta("c-py", "src/foo/baz.py", Some("python")),
+            meta("c-other", "tests/bar.rs", Some("rust")),
+        ];
+        let map: HashMap<&str, &ChunkMetadata> =
+            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let embeddings = vec![emb("c-rs", 0), emb("c-py", 0), emb("c-other", 0)];
+        let q = axis_vec(0);
+
+        let ranked = rank_chunks(&q, &embeddings, &map, Some("src/foo/"), None, 10);
+        let ids: std::collections::HashSet<&str> =
+            ranked.iter().map(|(_, m)| m.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("c-rs"));
+        assert!(ids.contains("c-py"));
+        assert!(!ids.contains("c-other"), "tests/ must be excluded");
+    }
+
+    #[test]
+    fn rank_chunks_language_filters() {
+        let m = vec![
+            meta("c-rs", "x.rs", Some("rust")),
+            meta("c-py", "x.py", Some("python")),
+            meta("c-none", "x.txt", None),
+        ];
+        let map: HashMap<&str, &ChunkMetadata> =
+            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let embeddings = vec![emb("c-rs", 0), emb("c-py", 0), emb("c-none", 0)];
+        let q = axis_vec(0);
+
+        let ranked = rank_chunks(&q, &embeddings, &map, None, Some("rust"), 10);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].1.id, "c-rs");
+    }
+
+    #[test]
+    fn rank_chunks_drops_embeddings_with_no_matching_metadata() {
+        // Race: an embedding row references a chunk that was just deleted —
+        // metadata lookup fails, the embedding is skipped without panic.
+        let m = vec![meta("c-keep", "x.rs", Some("rust"))];
+        let map: HashMap<&str, &ChunkMetadata> =
+            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let embeddings = vec![emb("c-keep", 0), emb("c-stale", 0)];
+        let q = axis_vec(0);
+
+        let ranked = rank_chunks(&q, &embeddings, &map, None, None, 10);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].1.id, "c-keep");
+    }
+
+    #[test]
+    fn rank_chunks_drops_dim_mismatched_vectors() {
+        // Mixed-dim DB (e.g. mid-migration to a different model). The
+        // mismatched embedding must be skipped, not poison the response.
+        let m = vec![meta("c-good", "x.rs", Some("rust"))];
+        let map: HashMap<&str, &ChunkMetadata> =
+            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let mut bad = emb("c-good", 0);
+        bad.vec.truncate(7); // 7 bytes — not a multiple of 4 → bytes_to_vec
+                             // returns empty.
+        let embeddings = vec![bad];
+        let q = axis_vec(0);
+
+        let ranked = rank_chunks(&q, &embeddings, &map, None, None, 10);
+        assert!(ranked.is_empty());
     }
 }

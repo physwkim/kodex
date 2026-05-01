@@ -267,6 +267,17 @@ fn mcp_tool_definitions() -> Vec<serde_json::Value> {
             ],
         ),
         tool_def(
+            "semantic_search",
+            "Natural-language → top-K matching code chunks via cosine over BGE-small embeddings (model id `BGE-small-en-v1.5/chunk-v1`, written by `kodex embed`). Use when grep / `query_graph` falls short — e.g. \"where do we throttle outgoing requests\" or \"the place that re-indexes on file change\". Each hit returns `file_path`, `start_line`, `end_line`, full `content`, optional `language`, optional `node_id` (when the chunk maps to a graph node), and `attached_knowledge` (linked bug_pattern / decision / convention entries). Filter with `path_substring` (plain substring match against the chunk's file_path, NOT a glob) or `language` (e.g. `rust`, `python`). `top_k` is clamped to [1, 500]; the response includes `truncated: true` when the requested value was capped. Requires kodex built with `--features embeddings` AND `kodex embed` to have been run after `kodex run`. Set `link_knowledge=false` to skip the knowledge join when only raw retrieval is wanted.",
+            &[
+                ("query", "string", true),
+                ("top_k", "number", false),
+                ("path_substring", "string", false),
+                ("language", "string", false),
+                ("link_knowledge", "boolean", false),
+            ],
+        ),
+        tool_def(
             "analyze_change",
             "Diff-aware change-impact briefing. One call combines `recall_for_diff` (relevant knowledge memories), per-file `co_changes` (architectural blast radius from git history), and the diff summary. Use after editing a file or before reviewing a PR — surfaces \"what should I also look at\" without N+1 round-trips. `auto=true` runs `git diff <base_ref>` (default HEAD) in the project working tree; otherwise pass `diff` directly. Tunable: `co_change_max_files` (per-file cap, default 5), `co_change_top_n` (top files per group, default 8), `co_change_commit_limit` (history depth, default 200), `max_items` (knowledge cap, default 10).",
             &[
