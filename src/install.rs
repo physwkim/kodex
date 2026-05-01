@@ -61,6 +61,182 @@ When you discover a pattern, fix a bug, or make a design decision, automatically
 - `kodex export` — export kodex knowledge to Claude Code memories
 "#;
 
+const ARCHAEOLOGY_SKILL_CONTENT: &str = r#"---
+description: Git archaeology — iterate every commit, extract bug patterns and decisions, store in Kodex knowledge graph
+argument-hint: '[--repo <path>] [--range <git-range>] [--crate <name>] [--waves N]'
+allowed-tools: Bash, Agent, Read, Write, Glob, Grep
+---
+
+# Git Archaeology Pipeline
+
+Iterate through a git repository's commit history, extract bug patterns and design decisions, and store them in Kodex via `learn`. Each sub-agent analyzes a batch of commits end-to-end: pre-filters obvious noise, fetches diffs for the rest, and stores findings directly.
+
+## Architecture
+
+```
+git log (all commits)
+    ↓ split into batches of 20
+    ↓ spawn --waves agents concurrently per wave
+    each agent:
+        pre-filter obvious docs/meta (no diff fetch)
+        git show → full diff for the rest
+        analyze → store via mcp__kodex__learn
+        write extracted/<sha>.json or extracted/<sha>.skip
+    ↓ summary
+```
+
+---
+
+## Step 0: Parse Arguments and Setup
+
+Parse `$ARGUMENTS`:
+- `--repo <path>` → repo to analyze (default: `pwd`)
+- `--range <git-range>` → revision range (default: all reachable commits)
+- `--crate <name>` → Rust crate name for applicability context (default: read from `Cargo.toml`)
+- `--waves N` → max parallel agents per wave (default: `6`, max: `10`)
+
+```bash
+REPO=<resolved absolute path>
+WORKDIR="$REPO/.kodex-archaeology"
+mkdir -p "$WORKDIR/extracted"
+grep -qxF '.kodex-archaeology/' "$REPO/.gitignore" 2>/dev/null \
+  || echo '.kodex-archaeology/' >> "$REPO/.gitignore"
+```
+
+Read crate name: `grep '^name' "$REPO/Cargo.toml" | head -1 | cut -d'"' -f2` (fallback: "unknown").
+
+Extract all commit metadata (no diffs):
+
+```bash
+git -C "$REPO" log <range> --no-merges \
+  --format="COMMIT %H|%ad|%an|%s" --date=short \
+  --name-only --diff-filter=ACDMRT
+```
+
+Parse into records: `sha|date|author|subject|file1,file2,...`
+
+**Resume filter:** remove any SHA that already has `$WORKDIR/extracted/<sha>.json` or `$WORKDIR/extracted/<sha>.skip`.
+
+Report: total commits, already processed, remaining.
+
+---
+
+## Step 1: Process in Waves
+
+Split remaining commits into **batches of 20**. Spawn `--waves` agents concurrently. Wait for each wave to complete before starting the next.
+
+**Sub-agent prompt (substitute REPO_PATH, WORKDIR_PATH, CRATE_NAME, BATCH at runtime):**
+
+---
+```
+You are analyzing a batch of git commits for a knowledge archaeology pipeline.
+Repo: REPO_PATH
+Working dir (absolute): WORKDIR_PATH
+Rust crate context: CRATE_NAME
+
+For each commit, follow this two-step process:
+
+━━━ STEP 1: PRE-FILTER (no diff needed) ━━━
+
+Given only the subject and changed file list, decide: SKIP or ANALYZE.
+
+SKIP immediately if the commit is purely:
+- docs, typo, whitespace, fmt, clippy, rustfmt, README, CHANGELOG
+- version bump, dep update, CI, build script
+- test-only, bench-only, example-only
+AND the changed files are exclusively in:
+  tests/, docs/, benches/, examples/, .github/, *.md,
+  Cargo.toml, Cargo.lock, build.rs, Makefile
+
+For SKIP: write an empty file WORKDIR_PATH/extracted/<sha>.skip and move to the next commit.
+
+When uncertain → ANALYZE.
+
+━━━ STEP 2: ANALYZE (fetch full diff) ━━━
+
+For each commit that survived pre-filter, run:
+
+  git -C REPO_PATH show --no-color --unified=3 <sha> 2>/dev/null | head -500
+
+Analyze the diff and determine:
+- Is there a real bug fix, design decision, or non-obvious pattern here?
+- If yes: extract structured knowledge and store it.
+- If no (pure refactor, cosmetic, false alarm): write WORKDIR_PATH/extracted/<sha>.skip and continue.
+
+━━━ STEP 3: STORE findings ━━━
+
+For commits with actionable knowledge, call mcp__kodex__learn with:
+
+  type:
+    "bug_pattern"  — race, leak, bounds, crash, timeout, wire-protocol issues
+    "decision"     — design choices, protocol decisions, API trade-offs
+    "lesson"       — process or architectural lessons
+    "architecture" — structural/system design findings
+
+  title: ≤80 chars describing the bug CLASS or decision (not the specific fix)
+
+  description:
+    **Category:** <race|leak|wire-protocol|bounds|timeout|lifecycle|flow-control|type-system|network-routing|performance|design|other>
+    **Severity:** <high|medium|low>  |  **Verdict:** <applies|partial|eliminated|uncertain>
+    **Repo:** REPO_PATH  |  **SHA:** <short_sha> (<date>)
+    **Subject:** <original subject>
+
+    ### Root Cause
+    <2-4 sentences: what was fundamentally wrong or decided>
+
+    ### Rust Applicability
+    <2-4 sentences: can this pattern exist in Rust? what triggers it?>
+
+    ### Audit Targets
+    - CRATE_NAME/<file>::<function>  (or "unknown" if unclear)
+
+  tags: [<3-6 keywords>, <category>, <rust_verdict>, "CRATE_NAME", "archaeology"]
+
+rust_verdict meanings:
+  "applies"    — same bug/pattern can exist in Rust as written
+  "partial"    — Rust eliminates some aspects but core risk remains
+  "eliminated" — Rust type system structurally prevents this bug class (do NOT store — not actionable)
+  "uncertain"  — need to inspect actual Rust source
+
+After storing, write WORKDIR_PATH/extracted/<sha>.json:
+  {"sha":"<full>","short_sha":"<7>","title":"<title>","verdict":"<rust_verdict>","uuid":"<returned_uuid>"}
+
+━━━ COMMITS TO PROCESS ━━━
+
+Format: sha|date|author|subject|files_csv
+
+BATCH
+```
+---
+
+## Step 2: Summary
+
+After all waves complete:
+
+```bash
+stored=$(ls "$WORKDIR/extracted/"*.json 2>/dev/null | wc -l)
+skipped=$(ls "$WORKDIR/extracted/"*.skip 2>/dev/null | wc -l)
+```
+
+Report to user:
+- Total commits processed, stored in Kodex, skipped
+- List titles from all `*.json` files (the stored items)
+
+---
+
+## Error Handling
+
+- If `git -C <repo>` fails: stop and report
+- If a sub-agent fails to write output files: log missing SHAs and continue
+- If `mcp__kodex__learn` fails: write the SHA to `$WORKDIR/failed.jsonl` and continue
+- All `.json`/`.skip` files are idempotent — re-running skips already-processed SHAs
+"#;
+
+/// Claude Code commands installed alongside the main skill.
+const CLAUDE_EXTRA_COMMANDS: &[(&str, &str)] = &[
+    (".claude/commands/archaeology.md", ARCHAEOLOGY_SKILL_CONTENT),
+];
+
 /// Install kodex: skill file + MCP server registration.
 pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     let platform = platform.unwrap_or("claude");
@@ -128,7 +304,33 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
         }
     }
 
-    // 3. Register MCP server (platform-specific)
+    // 3. Install extra Claude Code commands (e.g. /archaeology)
+    if platform == "claude" {
+        for (rel_path, content) in CLAUDE_EXTRA_COMMANDS {
+            let cmd_path = target_dir.join(rel_path);
+            if let Some(parent) = cmd_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let needs_write = if cmd_path.exists() {
+                // Overwrite if content has changed (e.g. after kodex upgrade)
+                std::fs::read_to_string(&cmd_path)
+                    .map(|existing| existing != *content)
+                    .unwrap_or(true)
+            } else {
+                true
+            };
+            if needs_write {
+                match std::fs::write(&cmd_path, content) {
+                    Ok(()) => results.push(format!("Command: installed {}", cmd_path.display())),
+                    Err(e) => results.push(format!("Command: failed {}: {e}", cmd_path.display())),
+                }
+            } else {
+                results.push(format!("Command: up to date {}", cmd_path.display()));
+            }
+        }
+    }
+
+    // 4. Register MCP server (platform-specific)
     let mcp_result = match platform {
         "claude" => install_mcp_claude(target_dir),
         "cursor" => install_mcp_cursor(target_dir),
@@ -159,6 +361,19 @@ pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
         }
     } else {
         results.push("Skill: not installed".to_string());
+    }
+
+    // Remove extra Claude Code commands
+    if platform == "claude" {
+        for (rel_path, _) in CLAUDE_EXTRA_COMMANDS {
+            let cmd_path = target_dir.join(rel_path);
+            if cmd_path.exists() {
+                match std::fs::remove_file(&cmd_path) {
+                    Ok(()) => results.push(format!("Command: removed {}", cmd_path.display())),
+                    Err(e) => results.push(format!("Command: failed {}: {e}", cmd_path.display())),
+                }
+            }
+        }
     }
 
     // Remove MCP registration
@@ -497,5 +712,41 @@ mod tests {
             second.contains("already registered"),
             "second install should be a no-op for hooks: {second}"
         );
+    }
+
+    #[test]
+    fn test_install_extra_commands() {
+        let dir = TempDir::new().unwrap();
+        let result = install(Some("claude"), dir.path());
+
+        // archaeology.md should be installed
+        let arch = dir.path().join(".claude/commands/archaeology.md");
+        assert!(arch.exists(), "archaeology.md should be installed");
+        let content = std::fs::read_to_string(&arch).unwrap();
+        assert!(
+            content.contains("Git Archaeology Pipeline"),
+            "archaeology.md should contain pipeline content"
+        );
+        assert!(
+            result.contains("Command: installed"),
+            "install report should mention Command: installed: {result}"
+        );
+
+        // Second install with identical content → up to date (no overwrite)
+        let result2 = install(Some("claude"), dir.path());
+        assert!(
+            result2.contains("Command: up to date"),
+            "second install should report up to date: {result2}"
+        );
+
+        // Simulate stale file (content differs) → should overwrite
+        std::fs::write(&arch, "stale content").unwrap();
+        let result3 = install(Some("claude"), dir.path());
+        assert!(
+            result3.contains("Command: installed"),
+            "install with stale file should overwrite: {result3}"
+        );
+        let updated = std::fs::read_to_string(&arch).unwrap();
+        assert_ne!(updated, "stale content", "stale file should have been overwritten");
     }
 }
