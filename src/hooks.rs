@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 const HOOK_MARKER: &str = "# >>> kodex >>>";
 const HOOK_MARKER_END: &str = "# <<< kodex <<<";
 
+/// Subdirectory under `~/.kodex/` for global git hooks.
+const GLOBAL_HOOKS_SUBDIR: &str = "git-hooks";
+
 const HOOK_SCRIPT: &str = r#"
-# Auto-rebuild graph and ingest commit knowledge
+# Auto-rebuild kodex graph if this project is registered (no-op otherwise).
 if command -v kodex >/dev/null 2>&1; then
-    kodex update . &
-    kodex ingest . --max-commits 5 &
+    kodex auto-update &
 fi
 "#;
 
@@ -138,6 +140,199 @@ fn install_hook(dir: &Path, name: &str) -> String {
     }
 
     "installed".to_string()
+}
+
+// --- Global hooks (single shared dir + git config core.hooksPath) ---
+
+/// Path to the global hooks directory under `~/.kodex/`.
+fn global_hooks_dir() -> PathBuf {
+    crate::registry::kodex_home().join(GLOBAL_HOOKS_SUBDIR)
+}
+
+/// Read `git config --global <key>`. Returns `None` if unset or git unavailable.
+fn git_config_global_get(key: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--global", key])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let v = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if v.is_empty() { None } else { Some(v) }
+}
+
+/// Set `git config --global <key> <value>`.
+fn git_config_global_set(key: &str, value: &str) -> Result<(), String> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--global", key, value])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+/// Unset `git config --global <key>`.
+fn git_config_global_unset(key: &str) -> Result<(), String> {
+    let output = std::process::Command::new("git")
+        .args(["config", "--global", "--unset", key])
+        .output()
+        .map_err(|e| e.to_string())?;
+    // exit code 5 = key not set; treat as success
+    if !output.status.success() && output.status.code() != Some(5) {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(())
+}
+
+/// Expand a leading `~/` to the user's home directory.
+fn expand_tilde(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(p)
+}
+
+/// Install kodex hooks globally: writes scripts under `~/.kodex/git-hooks/` and
+/// points `git config --global core.hooksPath` there. Refuses if a non-kodex
+/// `core.hooksPath` is already configured (e.g. husky).
+pub fn install_global() -> String {
+    let kodex_dir = global_hooks_dir();
+    let kodex_dir_str = kodex_dir.to_string_lossy().to_string();
+
+    // Conflict check: refuse to overwrite a non-kodex core.hooksPath.
+    if let Some(existing) = git_config_global_get("core.hooksPath") {
+        let existing_path = expand_tilde(&existing);
+        let kodex_canon = kodex_dir.canonicalize().unwrap_or_else(|_| kodex_dir.clone());
+        let existing_canon = existing_path
+            .canonicalize()
+            .unwrap_or_else(|_| existing_path.clone());
+        if existing_canon != kodex_canon {
+            return format!(
+                "Refused: git core.hooksPath is already set to '{existing}'.\n\
+                 To use kodex global hooks, first run:\n  \
+                   git config --global --unset core.hooksPath\n\
+                 Or install per-project: `kodex hook install` inside each repo."
+            );
+        }
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&kodex_dir) {
+        return format!("Failed to create {}: {e}", kodex_dir.display());
+    }
+
+    let mut results = Vec::new();
+    let script = format!(
+        "#!/bin/sh\n{HOOK_MARKER}{HOOK_SCRIPT}{HOOK_MARKER_END}\n"
+    );
+
+    for hook_name in &["post-commit", "post-checkout"] {
+        let hook_path = kodex_dir.join(hook_name);
+        match std::fs::write(&hook_path, &script) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        &hook_path,
+                        std::fs::Permissions::from_mode(0o755),
+                    );
+                }
+                results.push(format!("{hook_name}: written"));
+            }
+            Err(e) => results.push(format!("{hook_name}: failed: {e}")),
+        }
+    }
+
+    match git_config_global_set("core.hooksPath", &kodex_dir_str) {
+        Ok(()) => results.push(format!("core.hooksPath: {kodex_dir_str}")),
+        Err(e) => results.push(format!("core.hooksPath: failed to set: {e}")),
+    }
+
+    results.join("\n")
+}
+
+/// Uninstall global kodex hooks: removes hook files and unsets
+/// `core.hooksPath` if it points to the kodex dir.
+pub fn uninstall_global() -> String {
+    let kodex_dir = global_hooks_dir();
+    let mut results = Vec::new();
+
+    for hook_name in &["post-commit", "post-checkout"] {
+        let hook_path = kodex_dir.join(hook_name);
+        if hook_path.exists() {
+            match std::fs::remove_file(&hook_path) {
+                Ok(()) => results.push(format!("{hook_name}: removed")),
+                Err(e) => results.push(format!("{hook_name}: failed: {e}")),
+            }
+        } else {
+            results.push(format!("{hook_name}: not installed"));
+        }
+    }
+
+    if let Some(existing) = git_config_global_get("core.hooksPath") {
+        let existing_path = expand_tilde(&existing);
+        let kodex_canon = kodex_dir.canonicalize().unwrap_or_else(|_| kodex_dir.clone());
+        let existing_canon = existing_path
+            .canonicalize()
+            .unwrap_or_else(|_| existing_path.clone());
+        if existing_canon == kodex_canon {
+            match git_config_global_unset("core.hooksPath") {
+                Ok(()) => results.push("core.hooksPath: unset".to_string()),
+                Err(e) => results.push(format!("core.hooksPath: failed to unset: {e}")),
+            }
+        } else {
+            results.push(format!(
+                "core.hooksPath: left unchanged (points elsewhere: {existing})"
+            ));
+        }
+    }
+
+    results.join("\n")
+}
+
+/// Check global hook installation status.
+pub fn status_global() -> String {
+    let kodex_dir = global_hooks_dir();
+    let mut results = Vec::new();
+
+    for hook_name in &["post-commit", "post-checkout"] {
+        let hook_path = kodex_dir.join(hook_name);
+        let installed = hook_path.is_file()
+            && std::fs::read_to_string(&hook_path)
+                .unwrap_or_default()
+                .contains(HOOK_MARKER);
+        let status = if installed {
+            "installed"
+        } else {
+            "not installed"
+        };
+        results.push(format!("{hook_name}: {status}"));
+    }
+
+    let core_hooks_path = git_config_global_get("core.hooksPath");
+    let kodex_canon = kodex_dir.canonicalize().unwrap_or_else(|_| kodex_dir.clone());
+    let active = core_hooks_path
+        .as_deref()
+        .map(|p| {
+            let existing = expand_tilde(p);
+            let existing_canon = existing.canonicalize().unwrap_or_else(|_| existing.clone());
+            existing_canon == kodex_canon
+        })
+        .unwrap_or(false);
+
+    let core_status = match core_hooks_path {
+        Some(p) if active => format!("core.hooksPath: {p} (kodex active)"),
+        Some(p) => format!("core.hooksPath: {p} (NOT kodex)"),
+        None => "core.hooksPath: not set".to_string(),
+    };
+    results.push(core_status);
+
+    results.join("\n")
 }
 
 fn uninstall_hook(dir: &Path, name: &str) -> String {

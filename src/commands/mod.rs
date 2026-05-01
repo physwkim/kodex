@@ -175,6 +175,35 @@ pub fn update(path: &Path) {
     println!("  extract feature not enabled");
 }
 
+/// Re-extract + ingest if cwd is a registered kodex project.
+///
+/// Designed for git hook context: silently no-ops when the current repo isn't
+/// registered, so a global `core.hooksPath` can be set without affecting
+/// unrelated repos. Opt-in is implicit — `kodex run <path>` registers the
+/// project, after which commits there auto-update the graph.
+pub fn auto_update() {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    let Some(entry) = kodex::registry::entry_for_dir(&cwd) else {
+        return;
+    };
+
+    let project_path = entry.path;
+    update(&project_path);
+
+    let db = kodex::registry::global_db();
+    if db.exists() {
+        match kodex::ingest_knowledge::ingest_project(&db, &project_path, 5) {
+            Ok(0) => {}
+            Ok(n) => println!("  ingested {n} knowledge entries"),
+            Err(e) => eprintln!("  ingest error: {e}"),
+        }
+    }
+}
+
 pub fn cluster_only(_path: &Path) {
     let db = kodex::registry::global_db();
     let graph = match load_graph(&db) {

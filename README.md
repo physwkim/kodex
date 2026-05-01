@@ -14,12 +14,14 @@ kodex install claude        # register MCP server in Claude Code
 ## Quick Start
 
 ```bash
-kodex run .                             # analyze codebase → ~/.kodex/kodex.db
+kodex run .                             # analyze codebase → ~/.kodex/kodex.db (registers project)
 kodex query "how does auth work"        # search
 kodex explain "AuthService"             # node details
 kodex list                              # registered projects
 kodex forget --below 0.3                # clean low-confidence knowledge
 ```
+
+After `kodex run`, the project is registered and a global git hook (installed by `kodex install claude`) auto-updates the graph + ingests new knowledge on every commit. Unregistered repos see no effect. See [Auto-Ingestion](#auto-ingestion).
 
 ## Architecture
 
@@ -162,7 +164,9 @@ Old databases just work. No manual steps.
 | `kodex export` | Export kodex knowledge to Claude Code memories |
 | `kodex ingest <path>` | Ingest git commits + README as knowledge |
 | `kodex benchmark` | Token reduction ratio |
-| `kodex watch <path>` | Auto-rebuild on changes |
+| `kodex watch <path>` | Auto-rebuild on changes (foreground watcher) |
+| `kodex auto-update` | Re-extract + ingest if cwd is registered (used by git hooks) |
+| `kodex hook [--global] {install,uninstall,status}` | Manage git hooks (global = `core.hooksPath`) |
 
 ## AI Knowledge System
 
@@ -189,19 +193,33 @@ Wrong?
 kodex install claude
 ```
 
-Auto-adds MCP server to `~/.claude.json` and hook to `~/.claude/settings.json`:
-```json
-// ~/.claude.json
-{ "mcpServers": { "kodex": { "type": "stdio", "command": "kodex", "args": ["serve"] } } }
+This is a one-time setup that does three things:
 
-// ~/.claude/settings.json
+**1. MCP server** registered in `~/.claude.json`:
+```json
+{ "mcpServers": { "kodex": { "type": "stdio", "command": "kodex", "args": ["serve"] } } }
+```
+
+**2. Claude Code hooks** in `~/.claude/settings.json` (memory sync + session-start context):
+```json
 { "hooks": { "PostToolUse": [{ "matcher": "Write", "hooks": [{ "type": "command",
   "command": "if echo \"$TOOL_INPUT\" | grep -q '.claude/memory'; then kodex import 2>/dev/null; fi" }] }] } }
 ```
+Every time Claude saves a memory file, kodex imports it.
 
-The hook auto-syncs Claude memory writes into kodex — every time Claude saves a memory file, kodex imports it.
+**3. Global git hook** in `~/.kodex/git-hooks/` via `git config --global core.hooksPath`. On every commit, the hook runs `kodex auto-update`, which:
+- Re-extracts the graph + ingests new knowledge **if the cwd is a registered kodex project** (added via `kodex run <path>`).
+- Silent no-op otherwise — unregistered repos are unaffected.
 
-Also: `kodex install cursor`, `kodex install vscode`, `kodex install codex`, `kodex install kiro`
+If `core.hooksPath` is already set to a non-kodex location (e.g. husky), kodex refuses to overwrite it and prints a per-project install path instead. Manage manually:
+
+```bash
+kodex hook --global status        # check installation
+kodex hook --global uninstall     # remove + unset core.hooksPath
+kodex hook install                # per-project install (no global config change)
+```
+
+Also: `kodex install cursor`, `kodex install vscode`, `kodex install codex`, `kodex install kiro` (these don't install the git hook — run `kodex hook --global install` separately if you want it).
 
 ### Knowledge Types
 
@@ -543,7 +561,14 @@ Supported markers: Cargo.toml, pyproject.toml, setup.py, package.json, go.mod, p
 
 ```bash
 kodex ingest <path> --max-commits 100    # manual ingestion
-kodex run .                               # auto-ingests after merge
+kodex run .                               # auto-ingests after merge (also registers project)
+```
+
+**Auto-update on commit.** `kodex install claude` installs a global git hook (`~/.kodex/git-hooks/` via `core.hooksPath`) that runs `kodex auto-update` on every commit. This re-extracts the graph and ingests the 5 most recent commits as knowledge — but only for repos registered via `kodex run`. Unregistered repos see a silent no-op, so it's safe to leave the global hook on.
+
+```bash
+# Per-project alternative if you don't want the global hook:
+kodex hook install                        # writes to .git/hooks/post-commit + post-checkout
 ```
 
 ## Performance

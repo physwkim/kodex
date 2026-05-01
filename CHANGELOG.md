@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Auto-update on commit (registry-gated global git hook)
+
+`kodex install claude` now installs a global git hook (`~/.kodex/git-hooks/`) via `git config --global core.hooksPath`. The hook checks the kodex registry on each commit:
+- **Registered project** (`kodex run <path>` was called) → re-extract graph + ingest recent commits
+- **Unregistered repo** → silent no-op
+
+This solves stale graphs without requiring a per-project `kodex hook install`.
+
+- New `kodex auto-update` subcommand: registry-gated update + ingest (used by hooks).
+- New `kodex hook --global {install,uninstall,status}`: manage global hooks. Refuses to overwrite a non-kodex `core.hooksPath` (e.g. husky); points to per-project install in that case.
+- `HOOK_SCRIPT` simplified to `kodex auto-update &` — same script works per-project or global.
+
 ## v0.11.0 (2026-05-01)
 
 Chunk-level semantic retrieval — natural-language → top-K matching code chunks via cosine over BGE-small embeddings, with `attached_knowledge` joined in from the kodex knowledge graph. The kodex differentiator over plain vector retrieval is that each hit can carry the bug_patterns / decisions / conventions you've already accumulated for that node.

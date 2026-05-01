@@ -69,7 +69,14 @@ enum Commands {
     Hook {
         #[arg(default_value = "status")]
         action: String,
+        /// Operate on global hooks (`~/.kodex/git-hooks` via `core.hooksPath`)
+        /// instead of the current repo's `.git/hooks`.
+        #[arg(long)]
+        global: bool,
     },
+    /// Re-extract + ingest if cwd is a registered kodex project
+    /// (no-op otherwise). Used by git hooks.
+    AutoUpdate,
     /// Re-extract code files only (AST, no LLM)
     Update { path: PathBuf },
     /// Rerun clustering on existing graph
@@ -185,15 +192,24 @@ fn main() {
             }
         }
         Some(Commands::Benchmark { graph }) => commands::benchmark(&resolve_db(&graph)),
-        Some(Commands::Hook { action }) => {
-            let path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let result = match action.as_str() {
-                "install" => kodex::hooks::install(&path),
-                "uninstall" => kodex::hooks::uninstall(&path),
-                _ => kodex::hooks::status(&path),
+        Some(Commands::Hook { action, global }) => {
+            let result = if global {
+                match action.as_str() {
+                    "install" => kodex::hooks::install_global(),
+                    "uninstall" => kodex::hooks::uninstall_global(),
+                    _ => kodex::hooks::status_global(),
+                }
+            } else {
+                let path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                match action.as_str() {
+                    "install" => kodex::hooks::install(&path),
+                    "uninstall" => kodex::hooks::uninstall(&path),
+                    _ => kodex::hooks::status(&path),
+                }
             };
             println!("{result}");
         }
+        Some(Commands::AutoUpdate) => commands::auto_update(),
         Some(Commands::Update { path }) => commands::update(&path),
         Some(Commands::ClusterOnly { path }) => commands::cluster_only(&path),
         Some(Commands::Add {
@@ -208,6 +224,10 @@ fn main() {
             let home = dirs::home_dir()
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             println!("{}", kodex::install::install(Some(&platform), &home));
+            println!(
+                "Git hook: {}",
+                kodex::hooks::install_global().replace('\n', "; ")
+            );
         }
         Some(Commands::Workspace { action, vault }) => {
             commands::workspace::workspace(&action, vault.as_deref());
