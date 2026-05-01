@@ -2,16 +2,22 @@
 
 ## Unreleased
 
-### Receiver-aware call disambiguation
+### Receiver-aware call disambiguation (cross-file)
 
-Cross-file `calls` resolution now uses the call site's receiver expression to pick the right target when multiple nodes share a method name (e.g. `Database.query` and `HttpClient.query`).
+**Cross-file** `calls` resolution now uses the call site's receiver expression to pick the right target when multiple nodes share a method name (e.g. `Database.query` and `HttpClient.query`). The same-file walk in `walk_calls` still uses a single-target `label_to_nid` HashMap and is unaffected — same-file collisions are tracked separately.
 
 - `RawCall` carries `receiver: Option<String>` and `receiver_is_self: bool` extracted from the AST: accessor child (Rust `field_expression.value`, Go `selector_expression.operand`, JS `member_expression.object`, …), the call node's own object field for languages where call IS accessor (Java `method_invocation.object`, Ruby `call.receiver`, PHP `member_call_expression.object`), and `Type::method` text-split for Rust/Ruby path-style calls.
 - Resolution: `label → Vec<nid>` multi-map + `method → containing class label` (built from `method` edges).
   - `self.method()` → method whose containing class matches the caller's class.
   - `Type::method()` / `Type.method()` → method whose containing class matches the receiver text.
   - Variable-receiver bare calls with multiple candidates are **dropped** rather than mis-routed (a wrong `calls` edge silently misleads navigation; missing one is honest).
-- Languages: receiver field added to all 14 language configs. Cache files invalidated automatically — old `RawCall`s deserialize with `receiver: None` (no regression for unresolved cases).
+- **Inheritance is not traversed** — `Sub.self_call()` to an inherited `Base.method` drops here. Future work.
+- **Cache schema bump** (`CACHE_SCHEMA_VERSION = 2`): `kodex-out/cache/` entries from older versions become unreachable, so `kodex update` / `kodex run` re-extracts cleanly. Without this bump, a stale cache hit would yield a `RawCall` with `receiver: None` and the new resolver would silently drop edges that the old resolver had emitted via last-write-wins. With the bump, you get a fresh extract that reflects the new policy.
+- Languages: `call_object_field` added to all 14 language configs.
+
+#### Behavior change on upgrade
+
+A call site like `db.query()` where multiple `query` methods exist used to produce *some* `calls` edge (whichever lost the HashMap last-write race). It now produces no edge unless the receiver is a self-reference or a class-name path. Re-extraction is automatic via the cache bump; if you were relying on those edges, switch to `Type::method()` form or wait for inheritance/local-type-tracking work.
 
 ### Auto-update on commit (registry-gated global git hook)
 

@@ -305,11 +305,14 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 | `trace_call_path` | Path between two functions |
 | `detect_cycles` | Find call cycles |
 
-**Call-graph precision.** `calls` edges are extracted from tree-sitter ASTs and disambiguated by receiver context:
+**Call-graph precision (cross-file).** `calls` edges across files are extracted from tree-sitter ASTs and disambiguated by receiver context:
 
 - `self.method()` / `this.method()` resolves to the method on the caller's containing class.
 - `Type::method()` (Rust) / `Type.method()` (static-style) resolves by matching receiver text to the class label.
-- Variable-receiver bare calls (`db.query()` where multiple classes define `query`) are **dropped** rather than mis-routed when type inference would be needed — a missing edge is more honest than a wrong one. Future work: local type tracking to recover these.
+- Variable-receiver bare calls (`db.query()` where multiple classes define `query`) are **dropped** rather than mis-routed when type inference would be needed — a missing edge is more honest than a wrong one.
+- Inheritance is not traversed: `Sub.self_call()` to an inherited `Base.method` is dropped. Future work: walk `extends` / `implements` edges and add local type tracking for variable receivers.
+
+The same-file resolution path (`generic.rs::walk_calls`) still uses a single-target `label_to_nid` HashMap — same-file collisions are a separate concern (two classes with same method name in one file already collide on node ID).
 
 ## Claude Memory Sync
 

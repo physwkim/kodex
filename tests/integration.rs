@@ -1633,3 +1633,216 @@ fn test_recall_for_diff_boost() {
         results[0].score.reasons
     );
 }
+
+// ---------------------------------------------------------------------------
+// Receiver-aware cross-file call disambiguation
+// ---------------------------------------------------------------------------
+
+#[cfg(all(feature = "extract", feature = "lang-rust"))]
+mod receiver_disambiguation {
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    /// Run kodex extraction on a directory of files and collect `calls`
+    /// edges as `(source_id, target_id)` pairs. Limits noise from same-file
+    /// EXTRACTED edges so each test asserts on the cross-file pathway.
+    fn extract_call_edges(dir: &std::path::Path) -> Vec<(String, String)> {
+        let detection = kodex::detect::detect(dir, false);
+        let code_paths: Vec<PathBuf> =
+            detection.files.code.iter().map(PathBuf::from).collect();
+        let extraction = kodex::extract::extract(&code_paths, Some(dir));
+        extraction
+            .edges
+            .into_iter()
+            .filter(|e| e.relation == "calls")
+            .map(|e| (e.source, e.target))
+            .collect()
+    }
+
+    fn write(dir: &std::path::Path, name: &str, content: &str) {
+        std::fs::write(dir.join(name), content).expect("write fixture");
+    }
+
+    /// Single candidate — `Util::process` exists once, caller's bare `process()`
+    /// resolves to it via the multi-map's single-element fast path.
+    #[test]
+    fn test_resolution_single_candidate() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "util.rs",
+            r#"
+pub struct Util;
+impl Util {
+    pub fn process(&self, s: &str) -> String { s.to_string() }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "caller.rs",
+            r#"
+fn run() {
+    let u = super::Util;
+    let _ = Util::process(&u, "x");
+}
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+        let has_run_to_process = edges
+            .iter()
+            .any(|(s, t)| s == "caller_run" && t == "util_process");
+        assert!(
+            has_run_to_process,
+            "expected caller_run → util_process; got {edges:?}"
+        );
+    }
+
+    /// `self.method()` from inside a class with two same-named candidates
+    /// across files resolves to the caller's containing class.
+    #[test]
+    fn test_resolution_self_picks_caller_class() {
+        let tmp = TempDir::new().unwrap();
+        // Two files, each defines a class with a `query` method.
+        write(
+            tmp.path(),
+            "database.rs",
+            r#"
+pub struct Database;
+impl Database {
+    pub fn query(&self, sql: &str) -> String { sql.to_string() }
+    pub fn run(&self) { let _ = self.query("SELECT 1"); }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "http.rs",
+            r#"
+pub struct HttpClient;
+impl HttpClient {
+    pub fn query(&self, url: &str) -> String { url.to_string() }
+}
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+        // `Database::run` calls `self.query()` — the in-file label_to_nid pass
+        // already resolves this within database.rs, but the assertion is the
+        // same regardless of which path resolved it.
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "database_run" && t == "database_query"),
+            "self.query() should resolve to Database.query; got {edges:?}"
+        );
+        assert!(
+            !edges
+                .iter()
+                .any(|(s, t)| s == "database_run" && t == "http_query"),
+            "self.query() must NOT cross-route to HttpClient.query; got {edges:?}"
+        );
+    }
+
+    /// `Type::method()` from a third file with two same-named candidates
+    /// resolves to the type whose label matches the receiver path.
+    #[test]
+    fn test_resolution_type_path_disambiguates() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "database.rs",
+            r#"
+pub struct Database;
+impl Database {
+    pub fn query(&self, sql: &str) -> String { sql.to_string() }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "http.rs",
+            r#"
+pub struct HttpClient;
+impl HttpClient {
+    pub fn query(&self, url: &str) -> String { url.to_string() }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "main.rs",
+            r#"
+fn run() {
+    let db = super::Database;
+    let _ = Database::query(&db, "SELECT");
+    let h = super::HttpClient;
+    let _ = HttpClient::query(&h, "/api");
+}
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "main_run" && t == "database_query"),
+            "Database::query path should resolve to database_query; got {edges:?}"
+        );
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "main_run" && t == "http_query"),
+            "HttpClient::query path should resolve to http_query; got {edges:?}"
+        );
+    }
+
+    /// Variable receiver with multiple candidates: ambiguous, edge dropped.
+    /// (Old code would last-write-wins one of the candidates.)
+    #[test]
+    fn test_resolution_variable_receiver_drops_when_ambiguous() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "database.rs",
+            r#"
+pub struct Database;
+impl Database {
+    pub fn query(&self, sql: &str) -> String { sql.to_string() }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "http.rs",
+            r#"
+pub struct HttpClient;
+impl HttpClient {
+    pub fn query(&self, url: &str) -> String { url.to_string() }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "main.rs",
+            r#"
+fn ambiguous(db: super::Database, h: super::HttpClient) {
+    let _ = db.query("SELECT");
+    let _ = h.query("/api");
+}
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+        let calls_from_ambiguous: Vec<_> = edges
+            .iter()
+            .filter(|(s, _)| s == "main_ambiguous")
+            .collect();
+        assert!(
+            calls_from_ambiguous.is_empty(),
+            "ambiguous variable receivers should drop both edges (old code \
+             last-write-wins picked one); got {calls_from_ambiguous:?}"
+        );
+    }
+}

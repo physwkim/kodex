@@ -144,6 +144,10 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
             _ => continue,
         };
 
+        // Inheritance edges (extends/implements) are NOT traversed below — a
+        // `self.method()` call on `Sub` where the method lives on `Base` only
+        // will not match and will be dropped. Recovering it requires walking
+        // the inheritance chain; deferred to follow-up work.
         let target_nid: Option<&String> = if candidates.len() == 1 {
             Some(&candidates[0])
         } else if rc.receiver_is_self {

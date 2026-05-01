@@ -2,6 +2,13 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Bumped whenever the on-disk extraction format changes. Mixed into
+/// `file_hash` so old cache entries become unreachable on upgrade and a
+/// `kodex run` re-extracts cleanly. Bump this when adding/renaming fields on
+/// `RawCall`, `Node`, `Edge`, or changing resolution semantics in a way that
+/// alters the produced graph.
+const CACHE_SCHEMA_VERSION: u32 = 2;
+
 /// Strip YAML frontmatter from Markdown content, returning only the body.
 fn body_content(content: &[u8]) -> &[u8] {
     let text = std::str::from_utf8(content).unwrap_or("");
@@ -36,6 +43,9 @@ pub fn file_hash(path: &Path, root: &Path) -> std::io::Result<String> {
     let content = if is_md { body_content(&raw) } else { &raw };
 
     let mut hasher = Sha256::new();
+    hasher.update(b"kodex-cache-v");
+    hasher.update(CACHE_SCHEMA_VERSION.to_le_bytes());
+    hasher.update(b"\x00");
     hasher.update(content);
     hasher.update(b"\x00");
 
