@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.12.0 (2026-05-01)
+
+Receiver-aware call-graph disambiguation + registry-gated auto-update on commit. Two thematically separate features that landed together; both change the day-to-day shape of the graph (more accurate `calls` edges) and the dev loop (commits keep the graph fresh without a per-project hook install).
 
 ### Receiver-aware call disambiguation
 
