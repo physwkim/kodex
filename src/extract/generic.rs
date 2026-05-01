@@ -290,12 +290,12 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
 }
 
 /// Recursively walk AST to extract classes, functions, and imports.
+///
+/// `container_label` is the label of the enclosing class (for scoping method
+/// node IDs): `None` at file scope; `Some(class_name)` inside an `impl` /
+/// `class` body. Two methods sharing a name in the same file but in different
+/// classes get distinct IDs because of the class-name segment.
 #[cfg(feature = "extract")]
-#[allow(clippy::too_many_arguments)]
-// `container_label` is the label of the enclosing class (for scoping method
-// node IDs): `None` at file scope; `Some(class_name)` inside an `impl` /
-// `class` body. Two methods sharing a name in the same file but in different
-// classes get distinct IDs because of the class-name segment.
 #[allow(clippy::too_many_arguments)]
 fn walk(
     node: &Node,

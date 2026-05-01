@@ -1985,8 +1985,17 @@ class Other:
         // receiver is the call expression `super()`. Our `extract_call_target`
         // reads the first non-method named child, which gives "super()" text.
         // `is_super_ref` strips parens via trim/match — adjust if needed.
-        // With class scoping: caller is `sub_sub_run`. Forbidden targets
-        // are own-class `sub_sub_step` and unrelated `other_other_step`.
+        // With class scoping: caller is `sub_sub_run`. Required target is
+        // parent `base_base_step` (positive: guards against silent drops).
+        // Forbidden targets are own-class `sub_sub_step` and unrelated
+        // `other_other_step`.
+        assert!(
+            edges
+                .iter()
+                .any(|(s, t)| s == "sub_sub_run" && t == "base_base_step"),
+            "super().step() must resolve to Base.step via inheritance walk; \
+             got {edges:?}"
+        );
         assert!(
             !edges
                 .iter()
