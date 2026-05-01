@@ -1798,6 +1798,73 @@ fn run() {
         );
     }
 
+    /// `self.method()` across files via Rust's split-impl pattern, with a
+    /// distractor class providing a third candidate. This is the only
+    /// reliable way to force the cross-file `receiver_is_self` branch in
+    /// `mod.rs` — single-file tests get short-circuited by `walk_calls`'s
+    /// in-file `label_to_nid` match, and two-candidate tests with the target
+    /// in another file collapse to the single-candidate fast path.
+    ///
+    /// Setup:
+    /// - `a.rs` → `impl Database { fn run() { self.query(...); } }` (caller)
+    /// - `b.rs` → `impl Database { fn query() { ... } }`             (target)
+    /// - `c.rs` → `impl OtherClass { fn query() { ... } }`           (distractor)
+    ///
+    /// Both `b_query` and `c_query` are candidates for the unresolved
+    /// `query` callee. The resolver must pick `b_query` because its
+    /// containing class label (`database`) matches the caller's containing
+    /// class label.
+    #[test]
+    fn test_resolution_self_cross_file_via_split_impl() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "a.rs",
+            r#"
+pub struct Database;
+impl Database {
+    pub fn run(&self) { let _ = self.query("SELECT"); }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "b.rs",
+            r#"
+use super::a::Database;
+impl Database {
+    pub fn query(&self, sql: &str) -> String { sql.to_string() }
+}
+"#,
+        );
+        write(
+            tmp.path(),
+            "c.rs",
+            r#"
+pub struct OtherClass;
+impl OtherClass {
+    pub fn query(&self, x: &str) -> String { x.to_string() }
+}
+"#,
+        );
+
+        let edges = extract_call_edges(tmp.path());
+
+        // Caller `a_run` calls `self.query()`. b_query has class label
+        // "database" (matches caller); c_query has class label "otherclass"
+        // (doesn't match). Resolver must pick b_query.
+        assert!(
+            edges.iter().any(|(s, t)| s == "a_run" && t == "b_query"),
+            "self.query() should cross-resolve to b_query (same class \
+             label); got {edges:?}"
+        );
+        assert!(
+            !edges.iter().any(|(s, t)| s == "a_run" && t == "c_query"),
+            "self.query() must NOT route to c_query (different class \
+             label); got {edges:?}"
+        );
+    }
+
     /// Variable receiver with multiple candidates: ambiguous, edge dropped.
     /// (Old code would last-write-wins one of the candidates.)
     #[test]
