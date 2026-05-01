@@ -49,7 +49,11 @@ pub fn community_summaries(
                 .filter(|id| !is_file_node(graph, id) && !is_concept_node(graph, id))
                 .filter_map(|id| {
                     let node = graph.get_node(id)?;
-                    Some((graph.degree(id), node.label.as_str(), node.source_file.as_str()))
+                    Some((
+                        graph.degree(id),
+                        node.label.as_str(),
+                        node.source_file.as_str(),
+                    ))
                 })
                 .collect();
             ranked.sort_by(|a, b| b.0.cmp(&a.0));

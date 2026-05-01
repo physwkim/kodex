@@ -1,5 +1,58 @@
 # Changelog
 
+## v0.13.0 (2026-05-02)
+
+Reliability + retrieval polish. Headline shifts: `kodex run` now auto-embeds chunks (no separate `kodex embed` step), `semantic_search` ships in default builds, the AST walker no longer blows the stack on deeply-nested input, and `recall_for_task` scoring rewards reused entries instead of leaving the signal dead.
+
+### Default features expanded
+
+`cargo install --path .` now produces a binary that exercises every documented feature:
+
+```
+default = ["extract", "all-languages", "embeddings", "parallel", "watch"]
+```
+
+- `embeddings` (BGE-small chunk encoding for `semantic_search`).
+- `parallel` (rayon-driven extraction; sequential fallback retained).
+- `watch` (`kodex watch` no longer errors with `Watch feature not enabled`).
+
+**Removed** the `mcp` and `svg` features and their `tokio` / `plotters` dep declarations — both had zero `cfg(feature = ...)` use sites in the source tree, so they pulled deps without controlling any code path. Anyone building with `--features mcp` or `--features svg` must drop those flags.
+
+### `kodex run` auto-embeds chunks
+
+After extract + chunk, `run_pipeline` calls `embed_nodes` + `embed_chunks` with `skip_existing=true`. First invocation downloads BGE-small (~30 MB, cached under `~/.cache/`); re-runs only encode new/changed rows. The same delta-encode runs from `auto_update` so the post-commit hook keeps embeddings in sync.
+
+- New `kodex run --no-embed` for CI flows that only need keyword/graph retrieval.
+- `kodex embed` CLI is still available for explicit re-embeds and `--source-pattern` filtering.
+
+### AST walker stack-safety
+
+`extract::generic::walk`, `walk_calls`, `walk_python_imports`, and `walk_docstrings` were purely recursive; on a single deeply-nested file (machine-generated, deep-template, pathological expression tree) they overflowed the 8 MB process stack and aborted the whole `kodex run`. All four are now iterative DFS over an explicit `Vec<Frame>`, bounded only by heap. New regression test feeds a 5000-level nested Python AST through the pipeline; passes in ~2.6 s where the old recursive form aborted at a few hundred levels.
+
+### `auto_update` sibling-repo guard
+
+When the registered entry's git toplevel differs from the cwd's git toplevel (i.e. you're in a nested repo whose ancestor was registered), `auto_update` now logs and skips instead of cascading a re-extract across every sibling under the umbrella. This was the root cause of a stack-overflow report from the field — `~/codes` accidentally registered → commit in any subdir tried to re-extract every project under it.
+
+### `recall_for_task` scoring fixes
+
+- New **`retrievals`** term (0–10, log-scaled `fetch_count`). Distinct from `observations` (which now means explicit `learn` reinforcement only). Without this, the retrieval signal kodex maintains via `bump_fetch_counters` was dead weight in the scoring formula.
+- **Recency anchored to content**: `last_active` no longer reads `last_fetched`. Previously every recall hit reset an entry's age, so closed-out audit notes / activity logs looked perpetually fresh; now recency tracks validation/edit/birth only and the `retrievals` term carries the reuse signal.
+- **`detect_stale` body-drift now auto-promotes** to `needs_review` when the per-entry staleness exceeds 0.4 (>2/3 of linked node bodies drifted). Below that threshold it stays advisory to avoid noise from cosmetic edits.
+- **`learn` description hard cap** at 2000 chars. Returns an actionable error pointing at `context_uuid` chains and `related_nodes` for splitting. Catches the multi-defect-dump anti-pattern (one entry holding 8 unrelated findings).
+- **`learn` MCP accepts `applies_when`** at create-time. The field had been schema-supported but only writable via a follow-up `update_knowledge` call that nobody made — leaving the 15-point scoring signal universally zero.
+
+### graphify v0.5.7 / v0.6.0 ports
+
+- **YAML/YML now indexed**: `.yaml` and `.yml` added to `DOC_EXTENSIONS`. They flow through the chunker → BGE-small path the same way prose docs do, making Kubernetes / Helm / Kustomize / GitHub Actions / Ansible corpora discoverable via `semantic_search`. SQL extraction was evaluated and skipped — registered projects had no meaningful SQL load.
+- **Shrink-guard on `merge_project`**: refuses a save when the new extraction retains less than 50% of the existing per-project nodes (gate: existing > 50). Catches catastrophic extraction failures (parser crash, partial run, dependency change) that would otherwise silently overwrite a healthy graph. Override via `KODEX_FORCE_SHRINK=1` or by calling the new `merge_project_force(..., force_shrink=true)` entry directly.
+
+### Documentation
+
+- README adds a `## Common Workflows` section (when to use which retrieval/learn tool) and a decision matrix at the top of `## MCP Tools` clarifying that `learn` vs `save_insight` vs `save_note` are not redundant — different storage targets.
+- `## Feature Flags` table updated for the default reshuffle.
+- Quick Start now reflects auto-embed (`kodex run` is one step, model download disclosed).
+- SKILL_CONTENT (`kodex install`) gains a guidance line: always pass `related_nodes` to `learn` so `node_overlap` (the 30-point signal) actually fires, and pass `applies_when` so retrieval can match by intent.
+
 ## v0.12.0 (2026-05-01)
 
 Receiver-aware call-graph disambiguation + registry-gated auto-update on commit. Two thematically separate features that landed together; both change the day-to-day shape of the graph (more accurate `calls` edges) and the dev loop (commits keep the graph fresh without a per-project hook install).

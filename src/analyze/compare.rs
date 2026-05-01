@@ -251,8 +251,7 @@ pub fn compare_repos(graph: &KodexGraph, query: &CompareQuery) -> Vec<CompareGap
         left_by_norm
             .entry(norm.clone())
             .and_modify(|existing| {
-                let prefer_new =
-                    degree > existing.degree || (is_public && !existing.is_public);
+                let prefer_new = degree > existing.degree || (is_public && !existing.is_public);
                 if prefer_new {
                     *existing = CompareGap {
                         label: node.label.clone(),
@@ -518,8 +517,7 @@ mod tests {
             ..Default::default()
         };
         let gaps = compare_repos(&graph, &q);
-        let hurry: Vec<&CompareGap> =
-            gaps.iter().filter(|g| g.norm == "hurryup").collect();
+        let hurry: Vec<&CompareGap> = gaps.iter().filter(|g| g.norm == "hurryup").collect();
         assert_eq!(hurry.len(), 1, "should dedupe by normalized form");
         // 'a' has 2 edges, 'b' has 1 → keep 'a'
         assert_eq!(hurry[0].label, "hurryUp");
@@ -621,11 +619,7 @@ mod tests {
                 mk_node("u2", "user2", "pvxs/src/internal.cpp"),
                 mk_node("u3", "user3", "pvxs/src/internal.cpp"),
             ],
-            edges: vec![
-                mk_edge("i", "u1"),
-                mk_edge("i", "u2"),
-                mk_edge("i", "u3"),
-            ],
+            edges: vec![mk_edge("i", "u1"), mk_edge("i", "u2"), mk_edge("i", "u3")],
             ..Default::default()
         };
         let g = build_from_extraction(&extraction);
@@ -637,7 +631,10 @@ mod tests {
         };
         let r1 = compare_repos(&g, &no_pub);
         let labels1: Vec<&str> = r1.iter().map(|x| x.label.as_str()).collect();
-        assert_eq!(labels1[0], "internalSym()", "no public_pattern → degree wins");
+        assert_eq!(
+            labels1[0], "internalSym()",
+            "no public_pattern → degree wins"
+        );
 
         let with_pub = CompareQuery {
             left_pattern: "pvxs".into(),
@@ -754,8 +751,16 @@ mod tests {
             mk_node("hcm", "hub_callsmany", "left/b.rs"),
         ];
         for i in 0..5 {
-            nodes.push(mk_node(&format!("c{i}"), &format!("caller_{i}"), "left/x.rs"));
-            nodes.push(mk_node(&format!("t{i}"), &format!("target_{i}"), "left/x.rs"));
+            nodes.push(mk_node(
+                &format!("c{i}"),
+                &format!("caller_{i}"),
+                "left/x.rs",
+            ));
+            nodes.push(mk_node(
+                &format!("t{i}"),
+                &format!("target_{i}"),
+                "left/x.rs",
+            ));
         }
         let mut edges: Vec<Edge> = (0..5).map(|i| mk_edge(&format!("c{i}"), "hc")).collect();
         edges.push(mk_edge("hc", "t0")); // hub_called: 1 outgoing

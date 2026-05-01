@@ -111,9 +111,7 @@ pub fn run_actor() {
                 // Exit if the binary on disk was replaced (cargo install).
                 // The next ensure_running() call will spawn a fresh actor.
                 if let (Some(path), Some(mtime)) = (exe_path.as_ref(), start_mtime) {
-                    let current = std::fs::metadata(path)
-                        .ok()
-                        .and_then(|m| m.modified().ok());
+                    let current = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
                     if current != Some(mtime) {
                         break;
                     }
@@ -250,8 +248,7 @@ fn process_request(input: &str) -> String {
                 .collect();
             let scored = crate::serve::score_nodes_filtered(&graph, &terms, &filter);
             let scored_count = scored.len();
-            let mut start: Vec<String> =
-                scored.into_iter().take(3).map(|(_, id)| id).collect();
+            let mut start: Vec<String> = scored.into_iter().take(3).map(|(_, id)| id).collect();
             let mut used_fallback = false;
             // Fallback: vague question + precise filter (e.g. source_pattern) often
             // produces zero fuzzy hits because no labels in the scoped subset
@@ -294,9 +291,7 @@ fn process_request(input: &str) -> String {
             if rendered.trim().is_empty() {
                 let mut reasons: Vec<String> = Vec::new();
                 if terms.is_empty() {
-                    reasons.push(
-                        "question has no usable terms (>2 chars after split)".into(),
-                    );
+                    reasons.push("question has no usable terms (>2 chars after split)".into());
                 } else if scored_count == 0 {
                     reasons.push(format!(
                         "no fuzzy hit for terms={terms:?} within filter (source_pattern={:?}, community={:?})",
@@ -358,11 +353,8 @@ fn process_request(input: &str) -> String {
                 source_pattern,
                 ..Default::default()
             };
-            let matches = crate::serve::score_nodes_filtered(
-                &graph,
-                &[label.to_lowercase()],
-                &filter,
-            );
+            let matches =
+                crate::serve::score_nodes_filtered(&graph, &[label.to_lowercase()], &filter);
             if matches.is_empty() {
                 serde_json::json!({"error": "not found", "candidates": []})
             } else {
@@ -393,8 +385,7 @@ fn process_request(input: &str) -> String {
                     .iter()
                     .filter_map(|(score, nid)| {
                         let node = graph.get_node(nid)?;
-                        let indices =
-                            crate::serve::label_match_indices(&node.label, label);
+                        let indices = crate::serve::label_match_indices(&node.label, label);
                         let highlight = highlight_label(&node.label, &indices);
                         Some(serde_json::json!({
                             "score": score,
@@ -453,7 +444,13 @@ fn process_request(input: &str) -> String {
                 Err(e) => return error_response(&id, &e.to_string()),
             };
             let top_n = params.get("top_n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-            call_direction_handler(&graph, &params, top_n, crate::serve::find_callers, "callers")
+            call_direction_handler(
+                &graph,
+                &params,
+                top_n,
+                crate::serve::find_callers,
+                "callers",
+            )
         }
         "find_callees" => {
             let graph = match crate::serve::load_graph_smart(&db_path) {
@@ -461,7 +458,13 @@ fn process_request(input: &str) -> String {
                 Err(e) => return error_response(&id, &e.to_string()),
             };
             let top_n = params.get("top_n").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-            call_direction_handler(&graph, &params, top_n, crate::serve::find_callees, "callees")
+            call_direction_handler(
+                &graph,
+                &params,
+                top_n,
+                crate::serve::find_callees,
+                "callees",
+            )
         }
         "trace_call_path" => {
             let graph = match crate::serve::load_graph_smart(&db_path) {
@@ -470,27 +473,22 @@ fn process_request(input: &str) -> String {
             };
             let from_label = params.get("from").and_then(|v| v.as_str()).unwrap_or("");
             let to_label = params.get("to").and_then(|v| v.as_str()).unwrap_or("");
-            let max_depth =
-                params.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(8) as usize;
+            let max_depth = params
+                .get("max_depth")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(8) as usize;
 
             let from_ids = resolve_call_seeds(&graph, from_label, 3);
             let to_ids = resolve_call_seeds(&graph, to_label, 3);
 
             if from_ids.is_empty() {
-                return error_response(
-                    &id,
-                    &format!("no match for from label: {from_label}"),
-                );
+                return error_response(&id, &format!("no match for from label: {from_label}"));
             }
             if to_ids.is_empty() {
-                return error_response(
-                    &id,
-                    &format!("no match for to label: {to_label}"),
-                );
+                return error_response(&id, &format!("no match for to label: {to_label}"));
             }
 
-            let raw_paths =
-                crate::serve::trace_call_path(&graph, &from_ids, &to_ids, max_depth);
+            let raw_paths = crate::serve::trace_call_path(&graph, &from_ids, &to_ids, max_depth);
 
             let paths: Vec<serde_json::Value> = raw_paths
                 .iter()
@@ -894,10 +892,8 @@ fn process_request(input: &str) -> String {
                 );
             }
 
-            let (analysis, results) =
-                crate::learn::recall_for_diff(&db_path, diff_text, max_items);
-            let uuids: Vec<String> =
-                results.iter().map(|r| r.knowledge.uuid.clone()).collect();
+            let (analysis, results) = crate::learn::recall_for_diff(&db_path, diff_text, max_items);
+            let uuids: Vec<String> = results.iter().map(|r| r.knowledge.uuid.clone()).collect();
             let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
             let knowledge: Vec<serde_json::Value> = results
                 .iter()
@@ -910,10 +906,9 @@ fn process_request(input: &str) -> String {
                 .collect();
 
             // Per-file co_changes — capped to keep the response bounded.
-            let repo_dir =
-                crate::registry::entry_for_dir(std::path::Path::new(project_dir))
-                    .map(|e| e.path)
-                    .unwrap_or_else(|| std::path::PathBuf::from(project_dir));
+            let repo_dir = crate::registry::entry_for_dir(std::path::Path::new(project_dir))
+                .map(|e| e.path)
+                .unwrap_or_else(|| std::path::PathBuf::from(project_dir));
             let mut co_change_groups: Vec<serde_json::Value> = Vec::new();
             for file in analysis.changed_files.iter().take(cochange_max_files) {
                 let q = crate::analyze::CoChangeQuery {
@@ -989,18 +984,14 @@ fn process_request(input: &str) -> String {
                     .filter(|s| !s.is_empty())
                     .map(str::to_string),
             };
-            let orphans =
-                crate::analyze::detect_renames(&graph, &data.links, &titles, &q);
+            let orphans = crate::analyze::detect_renames(&graph, &data.links, &titles, &q);
             serde_json::json!({
                 "orphans": orphans,
                 "count": orphans.len(),
             })
         }
         "co_changes" => {
-            let file = params
-                .get("file")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let file = params.get("file").and_then(|v| v.as_str()).unwrap_or("");
             if file.is_empty() {
                 return error_response(&id, "co_changes: `file` is required");
             }
@@ -1087,30 +1078,40 @@ fn process_request(input: &str) -> String {
             let tags = extract_string_array(&params, "tags");
             let context_uuid = params.get("context_uuid").and_then(|v| v.as_str());
             let supersedes = params.get("supersedes").and_then(|v| v.as_str());
+            // `applies_when` is a hint like "auth modification" or "DB migration"
+            // that recall_for_task scores against query_tokens. Accepting it at
+            // create-time avoids the previous two-call dance (learn + then
+            // update_knowledge) that nobody actually performed in practice,
+            // leaving the field empty across the entire knowledge base.
+            let applies_when = params
+                .get("applies_when")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty());
             let kt = parse_knowledge_type(kt_str);
             // `supersedes` is only meaningful when creating a new entry.
-            let save_result = if knowledge_uuid.is_none() && supersedes.is_some_and(|s| !s.is_empty()) {
-                crate::learn::learn_supersedes(
-                    &db_path,
-                    kt,
-                    title,
-                    desc,
-                    related.as_deref(),
-                    &tags,
-                    supersedes.unwrap(),
-                )
-            } else {
-                crate::learn::learn_with_uuid(
-                    &db_path,
-                    knowledge_uuid,
-                    kt,
-                    title,
-                    desc,
-                    related.as_deref(),
-                    &tags,
-                    context_uuid,
-                )
-            };
+            let save_result =
+                if knowledge_uuid.is_none() && supersedes.is_some_and(|s| !s.is_empty()) {
+                    crate::learn::learn_supersedes(
+                        &db_path,
+                        kt,
+                        title,
+                        desc,
+                        related.as_deref(),
+                        &tags,
+                        supersedes.unwrap(),
+                    )
+                } else {
+                    crate::learn::learn_with_uuid(
+                        &db_path,
+                        knowledge_uuid,
+                        kt,
+                        title,
+                        desc,
+                        related.as_deref(),
+                        &tags,
+                        context_uuid,
+                    )
+                };
             match save_result {
                 Ok(uuid) => {
                     // Provenance: capture cwd / git HEAD if not already set
@@ -1119,8 +1120,14 @@ fn process_request(input: &str) -> String {
                     {
                         let _ = crate::storage::set_evidence_if_empty(&db_path, &uuid, &prov);
                     }
-                    let merge_candidates =
-                        crate::learn::find_similar_to_uuid(&db_path, &uuid, 0.6);
+                    if let Some(aw) = applies_when {
+                        let updates = crate::learn::KnowledgeUpdates {
+                            applies_when: Some(aw.to_string()),
+                            ..Default::default()
+                        };
+                        let _ = crate::learn::update_knowledge(&db_path, &uuid, &updates);
+                    }
+                    let merge_candidates = crate::learn::find_similar_to_uuid(&db_path, &uuid, 0.6);
                     let mut resp = serde_json::json!({
                         "status": "learned",
                         "uuid": uuid,
@@ -1165,11 +1172,7 @@ fn process_request(input: &str) -> String {
                 .get("inline_top_k")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as usize;
-            serde_json::json!(crate::learn::knowledge_context(
-                &db_path,
-                max,
-                inline_top_k
-            ))
+            serde_json::json!(crate::learn::knowledge_context(&db_path, max, inline_top_k))
         }
         "forget" => {
             let title = params.get("title").and_then(|v| v.as_str());
@@ -1237,8 +1240,7 @@ fn process_request(input: &str) -> String {
                 max,
                 type_filter,
             );
-            let uuids: Vec<String> =
-                results.iter().map(|r| r.knowledge.uuid.clone()).collect();
+            let uuids: Vec<String> = results.iter().map(|r| r.knowledge.uuid.clone()).collect();
             let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
             let items: Vec<serde_json::Value> = results
                 .iter()
@@ -1338,15 +1340,16 @@ fn process_request(input: &str) -> String {
         }
         "mark_obsolete" => {
             // Accept either single `uuid` or array `uuids` for bulk operations.
-            let uuids: Vec<String> = if let Some(arr) = params.get("uuids").and_then(|v| v.as_array()) {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            } else if let Some(u) = params.get("uuid").and_then(|v| v.as_str()) {
-                vec![u.to_string()]
-            } else {
-                return error_response(&id, "uuid or uuids required");
-            };
+            let uuids: Vec<String> =
+                if let Some(arr) = params.get("uuids").and_then(|v| v.as_array()) {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                } else if let Some(u) = params.get("uuid").and_then(|v| v.as_str()) {
+                    vec![u.to_string()]
+                } else {
+                    return error_response(&id, "uuid or uuids required");
+                };
             if uuids.is_empty() {
                 return error_response(&id, "uuid or uuids required");
             }
@@ -1637,8 +1640,7 @@ fn process_request(input: &str) -> String {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or(supplied);
             let (analysis, results) = crate::learn::recall_for_diff(&db_path, diff_text, max);
-            let uuids: Vec<String> =
-                results.iter().map(|r| r.knowledge.uuid.clone()).collect();
+            let uuids: Vec<String> = results.iter().map(|r| r.knowledge.uuid.clone()).collect();
             let _ = crate::storage::bump_fetch_counters(&db_path, &uuids);
             // Synthesize matched_by signals so the caller can tell why each entry surfaced.
             let enriched: Vec<serde_json::Value> = results
@@ -1732,10 +1734,7 @@ fn semantic_search_handler(
     if query.is_empty() {
         return Err("semantic_search requires a non-empty `query`".into());
     }
-    let requested_top_k = params
-        .get("top_k")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(10);
+    let requested_top_k = params.get("top_k").and_then(|v| v.as_u64()).unwrap_or(10);
     let top_k = requested_top_k.clamp(1, 500) as usize;
     let truncated = requested_top_k > 500;
     // Accept both `path_substring` (preferred — accurate name) and the
@@ -1762,8 +1761,7 @@ fn semantic_search_handler(
     // chunk content materialized — and (2) `load_chunks_by_ids` for the
     // top-K survivors. Avoids hundreds of MB of content allocation per
     // query on large repos.
-    let metadata =
-        crate::storage::load_chunk_metadata(db_path).map_err(|e| e.to_string())?;
+    let metadata = crate::storage::load_chunk_metadata(db_path).map_err(|e| e.to_string())?;
     if metadata.is_empty() {
         return Err("no chunks in db — run `kodex run` to populate them first".into());
     }
@@ -1946,8 +1944,7 @@ fn semantic_embedding_pass(
 ) -> Result<Vec<serde_json::Value>, String> {
     use crate::embedding::{bytes_to_vec, cosine, Embedder};
 
-    let stored = crate::storage::load_all_embeddings(db_path)
-        .map_err(|e| e.to_string())?;
+    let stored = crate::storage::load_all_embeddings(db_path).map_err(|e| e.to_string())?;
     if stored.is_empty() {
         return Err("no embeddings stored — run `kodex embed` first".into());
     }
@@ -1993,10 +1990,7 @@ fn semantic_embedding_pass(
             .map(|c| (cosine(&q, &c.vec), c))
             .filter(|(s, _)| *s >= threshold)
             .collect();
-        scored.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_per_gap.max(1));
         if scored.is_empty() {
             continue;
@@ -2008,9 +2002,10 @@ fn semantic_embedding_pass(
             .cloned()
             .unwrap_or_default();
         for (cos, c) in scored {
-            if let Some(item) = existing.iter_mut().find(|v| {
-                v.get("label").and_then(|x| x.as_str()) == Some(c.label.as_str())
-            }) {
+            if let Some(item) = existing
+                .iter_mut()
+                .find(|v| v.get("label").and_then(|x| x.as_str()) == Some(c.label.as_str()))
+            {
                 item["cosine"] = serde_json::json!(cos);
             } else {
                 existing.push(serde_json::json!({
@@ -2023,14 +2018,8 @@ fn semantic_embedding_pass(
         }
         // Re-sort the merged list by cosine desc (then jaccard desc).
         existing.sort_by(|a, b| {
-            let ac = a
-                .get("cosine")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let bc = b
-                .get("cosine")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
+            let ac = a.get("cosine").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let bc = b.get("cosine").and_then(|v| v.as_f64()).unwrap_or(0.0);
             bc.partial_cmp(&ac).unwrap_or(std::cmp::Ordering::Equal)
         });
         gap["candidate_matches"] = serde_json::json!(existing);
@@ -2099,20 +2088,12 @@ fn highlight_label(label: &str, indices: &[u32]) -> String {
 }
 
 /// Fuzzy-match `label` against the graph and return the top-N node IDs.
-fn resolve_call_seeds(
-    graph: &crate::graph::KodexGraph,
-    label: &str,
-    top_n: usize,
-) -> Vec<String> {
-    crate::serve::score_nodes_filtered(
-        graph,
-        &[label.to_lowercase()],
-        &Default::default(),
-    )
-    .into_iter()
-    .take(top_n)
-    .map(|(_, id)| id)
-    .collect()
+fn resolve_call_seeds(graph: &crate::graph::KodexGraph, label: &str, top_n: usize) -> Vec<String> {
+    crate::serve::score_nodes_filtered(graph, &[label.to_lowercase()], &Default::default())
+        .into_iter()
+        .take(top_n)
+        .map(|(_, id)| id)
+        .collect()
 }
 
 /// Shared handler body for find_callers / find_callees.
@@ -2258,13 +2239,12 @@ mod tests {
 
     #[test]
     fn rank_chunks_orders_by_cosine_descending() {
-        let m = vec![
+        let m = [
             meta("c-a", "src/a.rs", Some("rust")),
             meta("c-b", "src/b.rs", Some("rust")),
             meta("c-c", "src/c.rs", Some("rust")),
         ];
-        let map: HashMap<&str, &ChunkMetadata> =
-            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let map: HashMap<&str, &ChunkMetadata> = m.iter().map(|x| (x.id.as_str(), x)).collect();
 
         // c-a aligned with axis 0; c-b axis 1; c-c axis 2.
         let embeddings = vec![emb("c-a", 0), emb("c-b", 1), emb("c-c", 2)];
@@ -2284,8 +2264,7 @@ mod tests {
         let m: Vec<ChunkMetadata> = (0..5)
             .map(|i| meta(&format!("c-{i}"), &format!("src/{i}.rs"), Some("rust")))
             .collect();
-        let map: HashMap<&str, &ChunkMetadata> =
-            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let map: HashMap<&str, &ChunkMetadata> = m.iter().map(|x| (x.id.as_str(), x)).collect();
         let embeddings: Vec<StoredChunkEmbedding> =
             (0..5).map(|i| emb(&format!("c-{i}"), i)).collect();
         let q = axis_vec(0);
@@ -2297,13 +2276,12 @@ mod tests {
 
     #[test]
     fn rank_chunks_path_substring_filters() {
-        let m = vec![
+        let m = [
             meta("c-rs", "src/foo/bar.rs", Some("rust")),
             meta("c-py", "src/foo/baz.py", Some("python")),
             meta("c-other", "tests/bar.rs", Some("rust")),
         ];
-        let map: HashMap<&str, &ChunkMetadata> =
-            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let map: HashMap<&str, &ChunkMetadata> = m.iter().map(|x| (x.id.as_str(), x)).collect();
         let embeddings = vec![emb("c-rs", 0), emb("c-py", 0), emb("c-other", 0)];
         let q = axis_vec(0);
 
@@ -2318,13 +2296,12 @@ mod tests {
 
     #[test]
     fn rank_chunks_language_filters() {
-        let m = vec![
+        let m = [
             meta("c-rs", "x.rs", Some("rust")),
             meta("c-py", "x.py", Some("python")),
             meta("c-none", "x.txt", None),
         ];
-        let map: HashMap<&str, &ChunkMetadata> =
-            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let map: HashMap<&str, &ChunkMetadata> = m.iter().map(|x| (x.id.as_str(), x)).collect();
         let embeddings = vec![emb("c-rs", 0), emb("c-py", 0), emb("c-none", 0)];
         let q = axis_vec(0);
 
@@ -2337,9 +2314,8 @@ mod tests {
     fn rank_chunks_drops_embeddings_with_no_matching_metadata() {
         // Race: an embedding row references a chunk that was just deleted —
         // metadata lookup fails, the embedding is skipped without panic.
-        let m = vec![meta("c-keep", "x.rs", Some("rust"))];
-        let map: HashMap<&str, &ChunkMetadata> =
-            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let m = [meta("c-keep", "x.rs", Some("rust"))];
+        let map: HashMap<&str, &ChunkMetadata> = m.iter().map(|x| (x.id.as_str(), x)).collect();
         let embeddings = vec![emb("c-keep", 0), emb("c-stale", 0)];
         let q = axis_vec(0);
 
@@ -2352,9 +2328,8 @@ mod tests {
     fn rank_chunks_drops_dim_mismatched_vectors() {
         // Mixed-dim DB (e.g. mid-migration to a different model). The
         // mismatched embedding must be skipped, not poison the response.
-        let m = vec![meta("c-good", "x.rs", Some("rust"))];
-        let map: HashMap<&str, &ChunkMetadata> =
-            m.iter().map(|x| (x.id.as_str(), x)).collect();
+        let m = [meta("c-good", "x.rs", Some("rust"))];
+        let map: HashMap<&str, &ChunkMetadata> = m.iter().map(|x| (x.id.as_str(), x)).collect();
         let mut bad = emb("c-good", 0);
         bad.vec.truncate(7); // 7 bytes — not a multiple of 4 → bytes_to_vec
                              // returns empty.

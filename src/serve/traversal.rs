@@ -118,11 +118,7 @@ impl TraversalFilter {
 
 /// Top-N filter-passing nodes by degree. Used as fallback seeds when fuzzy
 /// scoring produces nothing within the filter's scope.
-pub fn top_degree_in_filter(
-    graph: &KodexGraph,
-    filter: &TraversalFilter,
-    n: usize,
-) -> Vec<String> {
+pub fn top_degree_in_filter(graph: &KodexGraph, filter: &TraversalFilter, n: usize) -> Vec<String> {
     let mut ranked: Vec<(usize, String)> = graph
         .node_ids()
         .filter(|id| filter.matches_node(graph, id))
@@ -144,11 +140,7 @@ pub fn label_match_indices(label: &str, query: &str) -> Vec<u32> {
     let mut matcher = Matcher::new(Config::DEFAULT);
     let mut buf: Vec<char> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
-    pattern.indices(
-        Utf32Str::new(label, &mut buf),
-        &mut matcher,
-        &mut indices,
-    );
+    pattern.indices(Utf32Str::new(label, &mut buf), &mut matcher, &mut indices);
     indices.sort_unstable();
     indices.dedup();
     indices
@@ -644,18 +636,42 @@ mod traversal_tests {
                 mk_simple_node("d", "d()", "mod.rs"),
             ],
             edges: vec![
-                Edge { source: "a".into(), target: "b".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "mod.rs".into(),
-                    source_location: Some("L10".into()), confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "b".into(), target: "c".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "mod.rs".into(),
-                    source_location: Some("L20".into()), confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "d".into(), target: "b".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "mod.rs".into(),
-                    source_location: Some("L30".into()), confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge {
+                    source: "a".into(),
+                    target: "b".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "mod.rs".into(),
+                    source_location: Some("L10".into()),
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "b".into(),
+                    target: "c".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "mod.rs".into(),
+                    source_location: Some("L20".into()),
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "d".into(),
+                    target: "b".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "mod.rs".into(),
+                    source_location: Some("L30".into()),
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
             ],
             ..Default::default()
         };
@@ -673,18 +689,42 @@ mod traversal_tests {
                 mk_simple_node("q", "q()", "other.rs"),
             ],
             edges: vec![
-                Edge { source: "x".into(), target: "y".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "cycle.rs".into(),
-                    source_location: Some("L5".into()), confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "y".into(), target: "x".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "cycle.rs".into(),
-                    source_location: Some("L15".into()), confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "p".into(), target: "q".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "other.rs".into(),
-                    source_location: Some("L1".into()), confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge {
+                    source: "x".into(),
+                    target: "y".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "cycle.rs".into(),
+                    source_location: Some("L5".into()),
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "y".into(),
+                    target: "x".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "cycle.rs".into(),
+                    source_location: Some("L15".into()),
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "p".into(),
+                    target: "q".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "other.rs".into(),
+                    source_location: Some("L1".into()),
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
             ],
             ..Default::default()
         };
@@ -697,8 +737,14 @@ mod traversal_tests {
         // b() is called by a() and d()
         let hits = super::find_callers(&g, &["b".to_string()], 1, None);
         let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
-        assert!(labels.contains("a()"), "a() should be a direct caller: {labels:?}");
-        assert!(labels.contains("d()"), "d() should be a direct caller: {labels:?}");
+        assert!(
+            labels.contains("a()"),
+            "a() should be a direct caller: {labels:?}"
+        );
+        assert!(
+            labels.contains("d()"),
+            "d() should be a direct caller: {labels:?}"
+        );
         assert!(!labels.contains("c()"), "c() is NOT a caller: {labels:?}");
     }
 
@@ -721,7 +767,10 @@ mod traversal_tests {
         let hits = super::find_callers(&g, &["c".to_string()], 1, None);
         let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
         assert!(labels.contains("b()"), "b() is direct caller: {labels:?}");
-        assert!(!labels.contains("a()"), "a() is 2 hops away, should not appear: {labels:?}");
+        assert!(
+            !labels.contains("a()"),
+            "a() is 2 hops away, should not appear: {labels:?}"
+        );
     }
 
     #[test]
@@ -731,7 +780,10 @@ mod traversal_tests {
         let hits = super::find_callees(&g, &["a".to_string()], 1, None);
         let labels: HashSet<String> = hits.iter().map(|h| h.label.clone()).collect();
         assert!(labels.contains("b()"), "b() is direct callee: {labels:?}");
-        assert!(!labels.contains("c()"), "c() is indirect, should not appear at depth=1: {labels:?}");
+        assert!(
+            !labels.contains("c()"),
+            "c() is indirect, should not appear at depth=1: {labels:?}"
+        );
     }
 
     #[test]
@@ -798,7 +850,10 @@ mod traversal_tests {
     fn detect_cycles_no_false_positives_for_acyclic_graph() {
         let g = make_call_graph(); // a→b→c, d→b — no cycle
         let cycles = super::detect_cycles_in_graph(&g, &["calls"], None);
-        assert!(cycles.is_empty(), "acyclic graph must have no cycles: {cycles:?}");
+        assert!(
+            cycles.is_empty(),
+            "acyclic graph must have no cycles: {cycles:?}"
+        );
     }
 
     #[test]
@@ -834,10 +889,7 @@ mod traversal_tests {
         assert!(labels.contains("d()"), "d() is in mod.rs: {labels:?}");
 
         let filtered = super::find_callers(&g, &["b".to_string()], 1, Some("other.rs"));
-        assert!(
-            filtered.is_empty(),
-            "no callers in other.rs: {filtered:?}"
-        );
+        assert!(filtered.is_empty(), "no callers in other.rs: {filtered:?}");
     }
 
     #[test]
@@ -850,10 +902,7 @@ mod traversal_tests {
         assert!(labels.contains("c()"), "c() in mod.rs: {labels:?}");
 
         let filtered = super::find_callees(&g, &["a".to_string()], 2, Some("other.rs"));
-        assert!(
-            filtered.is_empty(),
-            "no callees in other.rs: {filtered:?}"
-        );
+        assert!(filtered.is_empty(), "no callees in other.rs: {filtered:?}");
     }
 
     #[test]
@@ -868,22 +917,54 @@ mod traversal_tests {
                 mk_simple_node("d", "d()", "m.rs"),
             ],
             edges: vec![
-                Edge { source: "a".into(), target: "b".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
-                    source_location: None, confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "a".into(), target: "c".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
-                    source_location: None, confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "b".into(), target: "d".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
-                    source_location: None, confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
-                Edge { source: "c".into(), target: "d".into(), relation: "calls".into(),
-                    confidence: Confidence::EXTRACTED, source_file: "m.rs".into(),
-                    source_location: None, confidence_score: Some(1.0),
-                    weight: 1.0, original_src: None, original_tgt: None },
+                Edge {
+                    source: "a".into(),
+                    target: "b".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "m.rs".into(),
+                    source_location: None,
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "a".into(),
+                    target: "c".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "m.rs".into(),
+                    source_location: None,
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "b".into(),
+                    target: "d".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "m.rs".into(),
+                    source_location: None,
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
+                Edge {
+                    source: "c".into(),
+                    target: "d".into(),
+                    relation: "calls".into(),
+                    confidence: Confidence::EXTRACTED,
+                    source_file: "m.rs".into(),
+                    source_location: None,
+                    confidence_score: Some(1.0),
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
+                },
             ],
             ..Default::default()
         };
@@ -897,7 +978,11 @@ mod traversal_tests {
             assert_eq!(p.last().unwrap(), "d");
         }
         // Document: with global visited, only one of the two routes is returned.
-        assert_eq!(paths.len(), 1, "global visited yields one path per destination");
+        assert_eq!(
+            paths.len(),
+            1,
+            "global visited yields one path per destination"
+        );
     }
 
     #[test]
@@ -943,7 +1028,11 @@ mod traversal_tests {
         ];
         let mut edges = Vec::new();
         for i in 0..6 {
-            nodes.push(mk_simple_node(&format!("u{i}"), &format!("user{i}"), "domain.rs"));
+            nodes.push(mk_simple_node(
+                &format!("u{i}"),
+                &format!("user{i}"),
+                "domain.rs",
+            ));
             edges.push(Edge {
                 source: "a".into(),
                 target: format!("u{i}"),
@@ -979,7 +1068,10 @@ mod traversal_tests {
             ..Default::default()
         };
         let top = top_degree_in_filter(&g, &filter, 3);
-        assert!(top.contains(&"a".to_string()), "in-scope hub must seed: {top:?}");
+        assert!(
+            top.contains(&"a".to_string()),
+            "in-scope hub must seed: {top:?}"
+        );
         assert!(
             !top.contains(&"b".to_string()),
             "out-of-scope must not seed: {top:?}"

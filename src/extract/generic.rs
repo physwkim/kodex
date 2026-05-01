@@ -289,7 +289,14 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
     }
 }
 
-/// Recursively walk AST to extract classes, functions, and imports.
+/// Walk AST to extract classes, functions, and imports.
+///
+/// Iterative DFS via an explicit stack. The previous recursive form blew the
+/// 8 MB call stack on deeply-nested ASTs (machine-generated single-line files,
+/// pathologically nested expression trees, large monorepos with deep grammar
+/// rules). Each frame carries its enclosing container so child nodes pushed
+/// inside a class body resolve to that class as their `container_nid` /
+/// `container_label`.
 ///
 /// `container_label` is the label of the enclosing class (for scoping method
 /// node IDs): `None` at file scope; `Some(class_name)` inside an `impl` /
@@ -297,8 +304,8 @@ pub fn extract_generic(path: &Path, config: &LanguageConfig) -> ExtractionResult
 /// classes get distinct IDs because of the class-name segment.
 #[cfg(feature = "extract")]
 #[allow(clippy::too_many_arguments)]
-fn walk(
-    node: &Node,
+fn walk<'tree>(
+    root: &Node<'tree>,
     source: &[u8],
     config: &LanguageConfig,
     stem: &str,
@@ -311,199 +318,204 @@ fn walk(
     seen_ids: &mut HashSet<String>,
     function_body_ranges: &mut Vec<(String, usize, usize)>,
 ) {
-    let node_type = node.kind();
-
-    // Extra walk hook (JS arrow functions, C# namespaces, Swift enums)
-    if let Some(extra_walk) = config.extra_walk {
-        if extra_walk(
-            node,
-            source,
-            stem,
-            file_nid,
-            str_path,
-            nodes,
-            edges,
-            seen_ids,
-            container_nid,
-        ) {
-            return; // Handled by extra_walk
-        }
+    struct Frame<'a> {
+        node: Node<'a>,
+        container_nid: String,
+        container_label: Option<String>,
     }
 
-    // --- Imports ---
-    if config.import_types.contains(&node_type) {
-        if let Some(handler) = config.import_handler {
-            let import_edges = handler(node, source, file_nid, stem, str_path);
-            for ie in import_edges {
+    let mut stack: Vec<Frame<'tree>> = Vec::new();
+    stack.push(Frame {
+        node: *root,
+        container_nid: container_nid.to_string(),
+        container_label: container_label.map(str::to_string),
+    });
+
+    while let Some(frame) = stack.pop() {
+        let node = frame.node;
+        let node_type = node.kind();
+
+        // Extra walk hook (JS arrow functions, C# namespaces, Swift enums)
+        if let Some(extra_walk) = config.extra_walk {
+            if extra_walk(
+                &node,
+                source,
+                stem,
+                file_nid,
+                str_path,
+                nodes,
+                edges,
+                seen_ids,
+                &frame.container_nid,
+            ) {
+                continue; // Handled by extra_walk
+            }
+        }
+
+        // --- Imports ---
+        if config.import_types.contains(&node_type) {
+            if let Some(handler) = config.import_handler {
+                let import_edges = handler(&node, source, file_nid, stem, str_path);
+                for ie in import_edges {
+                    edges.push(Edge {
+                        source: file_nid.to_string(),
+                        target: ie.target_id,
+                        relation: ie.relation,
+                        confidence: Confidence::EXTRACTED,
+                        source_file: str_path.to_string(),
+                        source_location: Some(ie.source_location),
+                        confidence_score: Some(1.0),
+                        weight: 1.0,
+                        original_src: None,
+                        original_tgt: None,
+                    });
+                }
+            }
+            continue; // Don't recurse into import nodes
+        }
+
+        // --- Classes ---
+        if config.class_types.contains(&node_type) {
+            if let Some(class_name) = resolve_name(&node, source, config) {
+                let class_nid = make_id(&[stem, &class_name]);
+                let line = node.start_position().row + 1;
+
+                if seen_ids.insert(class_nid.clone()) {
+                    nodes.push(crate::types::Node {
+                        id: class_nid.clone(),
+                        label: class_name.clone(),
+                        file_type: FileType::Code,
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        confidence: Some(Confidence::EXTRACTED),
+                        confidence_score: Some(1.0),
+                        community: None,
+                        norm_label: None,
+                        degree: None,
+                        uuid: None,
+                        fingerprint: None,
+                        logical_key: None,
+                        body_hash: None,
+                    });
+                }
+
                 edges.push(Edge {
-                    source: file_nid.to_string(),
-                    target: ie.target_id,
-                    relation: ie.relation,
+                    source: frame.container_nid.clone(),
+                    target: class_nid.clone(),
+                    relation: "contains".to_string(),
                     confidence: Confidence::EXTRACTED,
                     source_file: str_path.to_string(),
-                    source_location: Some(ie.source_location),
+                    source_location: Some(format!("L{line}")),
                     confidence_score: Some(1.0),
                     weight: 1.0,
                     original_src: None,
                     original_tgt: None,
                 });
+
+                extract_inheritance(&node, source, stem, &class_nid, str_path, edges);
+
+                if let Some(body) = node.child_by_field_name(config.body_field) {
+                    function_body_ranges.push((
+                        class_nid.clone(),
+                        body.start_byte(),
+                        body.end_byte(),
+                    ));
+                } else {
+                    function_body_ranges.push((
+                        class_nid.clone(),
+                        node.start_byte(),
+                        node.end_byte(),
+                    ));
+                }
+
+                // Push children with class as container. Reverse so the
+                // leftmost child is popped first — matches the original
+                // recursive left-to-right visitation order.
+                let cursor = &mut node.walk();
+                let kids: Vec<Node<'tree>> = node.children(cursor).collect();
+                for child in kids.into_iter().rev() {
+                    stack.push(Frame {
+                        node: child,
+                        container_nid: class_nid.clone(),
+                        container_label: Some(class_name.clone()),
+                    });
+                }
+                continue;
             }
         }
-        return; // Don't recurse into import nodes
-    }
 
-    // --- Classes ---
-    if config.class_types.contains(&node_type) {
-        if let Some(class_name) = resolve_name(node, source, config) {
-            let class_nid = make_id(&[stem, &class_name]);
-            let line = node.start_position().row + 1;
+        // --- Functions ---
+        if config.function_types.contains(&node_type) {
+            if let Some(func_name) = resolve_name(&node, source, config) {
+                // Methods get class-scoped IDs so two same-name methods in
+                // the same file don't collide on `make_id([stem, name])`.
+                // Top-level functions keep the bare `[stem, name]` form.
+                let func_nid = match frame.container_label.as_deref() {
+                    Some(cls) => make_id(&[stem, cls, &func_name]),
+                    None => make_id(&[stem, &func_name]),
+                };
+                let line = node.start_position().row + 1;
+                let label = if config.function_label_parens {
+                    format!("{func_name}()")
+                } else {
+                    func_name.clone()
+                };
 
-            if seen_ids.insert(class_nid.clone()) {
-                nodes.push(crate::types::Node {
-                    id: class_nid.clone(),
-                    label: class_name.clone(),
-                    file_type: FileType::Code,
+                let relation = if frame.container_nid != file_nid {
+                    "method"
+                } else {
+                    "contains"
+                };
+
+                if seen_ids.insert(func_nid.clone()) {
+                    nodes.push(crate::types::Node {
+                        id: func_nid.clone(),
+                        label,
+                        file_type: FileType::Code,
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{line}")),
+                        confidence: Some(Confidence::EXTRACTED),
+                        confidence_score: Some(1.0),
+                        community: None,
+                        norm_label: None,
+                        degree: None,
+                        uuid: None,
+                        fingerprint: None,
+                        logical_key: None,
+                        body_hash: None,
+                    });
+                }
+
+                edges.push(Edge {
+                    source: frame.container_nid.clone(),
+                    target: func_nid.clone(),
+                    relation: relation.to_string(),
+                    confidence: Confidence::EXTRACTED,
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{line}")),
-                    confidence: Some(Confidence::EXTRACTED),
                     confidence_score: Some(1.0),
-                    community: None,
-                    norm_label: None,
-                    degree: None,
-                    uuid: None,
-                    fingerprint: None,
-                    logical_key: None,
-                    body_hash: None,
+                    weight: 1.0,
+                    original_src: None,
+                    original_tgt: None,
                 });
+
+                if let Some(body) = node.child_by_field_name(config.body_field) {
+                    function_body_ranges.push((func_nid, body.start_byte(), body.end_byte()));
+                }
+                continue; // Don't recurse into function body
             }
-
-            edges.push(Edge {
-                source: container_nid.to_string(),
-                target: class_nid.clone(),
-                relation: "contains".to_string(),
-                confidence: Confidence::EXTRACTED,
-                source_file: str_path.to_string(),
-                source_location: Some(format!("L{line}")),
-                confidence_score: Some(1.0),
-                weight: 1.0,
-                original_src: None,
-                original_tgt: None,
-            });
-
-            // Check for inheritance (superclass_types)
-            extract_inheritance(node, source, stem, &class_nid, str_path, edges);
-
-            // Record class body range for body_hash (same as functions)
-            if let Some(body) = node.child_by_field_name(config.body_field) {
-                function_body_ranges.push((class_nid.clone(), body.start_byte(), body.end_byte()));
-            } else {
-                // Fallback: use entire class node range
-                function_body_ranges.push((class_nid.clone(), node.start_byte(), node.end_byte()));
-            }
-
-            // Recurse into class body with class as container
-            let cursor = &mut node.walk();
-            for child in node.children(cursor) {
-                walk(
-                    &child,
-                    source,
-                    config,
-                    stem,
-                    file_nid,
-                    &class_nid,
-                    Some(&class_name),
-                    str_path,
-                    nodes,
-                    edges,
-                    seen_ids,
-                    function_body_ranges,
-                );
-            }
-            return;
         }
-    }
 
-    // --- Functions ---
-    if config.function_types.contains(&node_type) {
-        if let Some(func_name) = resolve_name(node, source, config) {
-            // Methods get class-scoped IDs so two same-name methods in the
-            // same file don't collide on `make_id([stem, name])`. Top-level
-            // functions keep the bare `[stem, name]` form (unchanged ID).
-            let func_nid = match container_label {
-                Some(cls) => make_id(&[stem, cls, &func_name]),
-                None => make_id(&[stem, &func_name]),
-            };
-            let line = node.start_position().row + 1;
-            let label = if config.function_label_parens {
-                format!("{func_name}()")
-            } else {
-                func_name.clone()
-            };
-
-            // Determine relation: method if inside a class, contains otherwise
-            let relation = if container_nid != file_nid {
-                "method"
-            } else {
-                "contains"
-            };
-
-            if seen_ids.insert(func_nid.clone()) {
-                nodes.push(crate::types::Node {
-                    id: func_nid.clone(),
-                    label,
-                    file_type: FileType::Code,
-                    source_file: str_path.to_string(),
-                    source_location: Some(format!("L{line}")),
-                    confidence: Some(Confidence::EXTRACTED),
-                    confidence_score: Some(1.0),
-                    community: None,
-                    norm_label: None,
-                    degree: None,
-                    uuid: None,
-                    fingerprint: None,
-                    logical_key: None,
-                    body_hash: None,
-                });
-            }
-
-            edges.push(Edge {
-                source: container_nid.to_string(),
-                target: func_nid.clone(),
-                relation: relation.to_string(),
-                confidence: Confidence::EXTRACTED,
-                source_file: str_path.to_string(),
-                source_location: Some(format!("L{line}")),
-                confidence_score: Some(1.0),
-                weight: 1.0,
-                original_src: None,
-                original_tgt: None,
+        // Default: push children with same container.
+        let cursor = &mut node.walk();
+        let kids: Vec<Node<'tree>> = node.children(cursor).collect();
+        for child in kids.into_iter().rev() {
+            stack.push(Frame {
+                node: child,
+                container_nid: frame.container_nid.clone(),
+                container_label: frame.container_label.clone(),
             });
-
-            // Save body byte range for call-graph pass
-            if let Some(body) = node.child_by_field_name(config.body_field) {
-                function_body_ranges.push((func_nid, body.start_byte(), body.end_byte()));
-            }
-            return; // Don't recurse into function body here
         }
-    }
-
-    // Recurse into children
-    let cursor = &mut node.walk();
-    for child in node.children(cursor) {
-        walk(
-            &child,
-            source,
-            config,
-            stem,
-            file_nid,
-            container_nid,
-            container_label,
-            str_path,
-            nodes,
-            edges,
-            seen_ids,
-            function_body_ranges,
-        );
     }
 }
 
@@ -566,8 +578,8 @@ fn extract_inheritance(
 /// to `raw_calls` for the cross-file pass.
 #[cfg(feature = "extract")]
 #[allow(clippy::too_many_arguments)]
-fn walk_calls(
-    node: &Node,
+fn walk_calls<'tree>(
+    root: &Node<'tree>,
     source: &[u8],
     config: &LanguageConfig,
     caller_nid: &str,
@@ -578,101 +590,95 @@ fn walk_calls(
     seen_call_pairs: &mut HashSet<(String, String)>,
     str_path: &str,
 ) {
-    // Stop at function boundaries (don't descend into nested functions)
-    if config.function_boundary_types.contains(&node.kind()) {
-        return;
-    }
+    // Iterative DFS — same stack-safety motivation as `walk`. Function bodies
+    // can themselves contain deeply nested expression trees (chained method
+    // calls, generated SQL builders, macro expansions) that recurse far
+    // enough to overflow.
+    let mut stack: Vec<Node<'tree>> = vec![*root];
 
-    if config.call_types.contains(&node.kind()) {
-        if let Some(target) = extract_call_target(node, source, config) {
-            let name_lower = target.callee.to_lowercase();
-            let is_super = target
-                .receiver
-                .as_deref()
-                .map(crate::extract::is_super_ref)
-                .unwrap_or(false);
+    while let Some(node) = stack.pop() {
+        // Stop at function boundaries — don't descend into nested functions.
+        if config.function_boundary_types.contains(&node.kind()) {
+            continue;
+        }
 
-            // Pick an in-file target if we can do so unambiguously.
-            // `super.method()` always falls through to raw_calls (cross-file
-            // resolver walks the inheritance chain).
-            let in_file_hit: Option<&String> = if is_super {
-                None
-            } else if let Some(candidates) = label_to_nids.get(&name_lower) {
-                if candidates.len() == 1 {
-                    Some(&candidates[0])
-                } else if target.receiver_is_self {
-                    method_to_class_local
-                        .get(caller_nid)
-                        .and_then(|caller_class| {
-                            candidates.iter().find(|nid| {
-                                method_to_class_local.get(*nid) == Some(caller_class)
-                            })
-                        })
-                } else if let Some(recv) = target.receiver.as_deref() {
-                    let recv_lower = recv.to_lowercase();
-                    candidates.iter().find(|nid| {
+        if config.call_types.contains(&node.kind()) {
+            if let Some(target) = extract_call_target(&node, source, config) {
+                let name_lower = target.callee.to_lowercase();
+                let is_super = target
+                    .receiver
+                    .as_deref()
+                    .map(crate::extract::is_super_ref)
+                    .unwrap_or(false);
+
+                // Pick an in-file target if we can do so unambiguously.
+                // `super.method()` always falls through to raw_calls
+                // (cross-file resolver walks the inheritance chain).
+                let in_file_hit: Option<&String> = if is_super {
+                    None
+                } else if let Some(candidates) = label_to_nids.get(&name_lower) {
+                    if candidates.len() == 1 {
+                        Some(&candidates[0])
+                    } else if target.receiver_is_self {
                         method_to_class_local
-                            .get(*nid)
-                            .map(|c| c == &recv_lower)
-                            .unwrap_or(false)
-                    })
+                            .get(caller_nid)
+                            .and_then(|caller_class| {
+                                candidates.iter().find(|nid| {
+                                    method_to_class_local.get(*nid) == Some(caller_class)
+                                })
+                            })
+                    } else if let Some(recv) = target.receiver.as_deref() {
+                        let recv_lower = recv.to_lowercase();
+                        candidates.iter().find(|nid| {
+                            method_to_class_local
+                                .get(*nid)
+                                .map(|c| c == &recv_lower)
+                                .unwrap_or(false)
+                        })
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            if let Some(tgt_nid) = in_file_hit {
-                if tgt_nid != caller_nid {
-                    let pair = (caller_nid.to_string(), tgt_nid.clone());
-                    if seen_call_pairs.insert(pair) {
-                        let line = node.start_position().row + 1;
-                        edges.push(Edge {
-                            source: caller_nid.to_string(),
-                            target: tgt_nid.clone(),
-                            relation: "calls".to_string(),
-                            confidence: Confidence::EXTRACTED,
-                            source_file: str_path.to_string(),
-                            source_location: Some(format!("L{line}")),
-                            confidence_score: Some(1.0),
-                            weight: 1.0,
-                            original_src: None,
-                            original_tgt: None,
-                        });
+                if let Some(tgt_nid) = in_file_hit {
+                    if tgt_nid != caller_nid {
+                        let pair = (caller_nid.to_string(), tgt_nid.clone());
+                        if seen_call_pairs.insert(pair) {
+                            let line = node.start_position().row + 1;
+                            edges.push(Edge {
+                                source: caller_nid.to_string(),
+                                target: tgt_nid.clone(),
+                                relation: "calls".to_string(),
+                                confidence: Confidence::EXTRACTED,
+                                source_file: str_path.to_string(),
+                                source_location: Some(format!("L{line}")),
+                                confidence_score: Some(1.0),
+                                weight: 1.0,
+                                original_src: None,
+                                original_tgt: None,
+                            });
+                        }
                     }
+                } else {
+                    raw_calls.push(RawCall {
+                        caller_nid: caller_nid.to_string(),
+                        callee: target.callee,
+                        source_file: str_path.to_string(),
+                        source_location: Some(format!("L{}", node.start_position().row + 1)),
+                        receiver: target.receiver,
+                        receiver_is_self: target.receiver_is_self,
+                    });
                 }
-            } else {
-                // Save for cross-file resolution (or super fallthrough, or
-                // an in-file ambiguity that the cross-file pass might solve
-                // via inheritance traversal across the project).
-                raw_calls.push(RawCall {
-                    caller_nid: caller_nid.to_string(),
-                    callee: target.callee,
-                    source_file: str_path.to_string(),
-                    source_location: Some(format!("L{}", node.start_position().row + 1)),
-                    receiver: target.receiver,
-                    receiver_is_self: target.receiver_is_self,
-                });
             }
         }
-    }
 
-    // Recurse
-    let cursor = &mut node.walk();
-    for child in node.children(cursor) {
-        walk_calls(
-            &child,
-            source,
-            config,
-            caller_nid,
-            label_to_nids,
-            method_to_class_local,
-            edges,
-            raw_calls,
-            seen_call_pairs,
-            str_path,
-        );
+        let cursor = &mut node.walk();
+        let kids: Vec<Node<'tree>> = node.children(cursor).collect();
+        for child in kids.into_iter().rev() {
+            stack.push(child);
+        }
     }
 }
 

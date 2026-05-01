@@ -24,7 +24,11 @@ pub static CODE_EXTENSIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 });
 
 pub static DOC_EXTENSIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    [".md", ".mdx", ".txt", ".rst", ".html"]
+    // YAML included so Kubernetes / Helm / Kustomize / GitHub Actions / Ansible
+    // corpora are discoverable via semantic_search. They aren't AST-extracted
+    // (no class/function/import semantics in YAML), but pass through the
+    // chunker → BGE-small embedding path the same way prose docs do.
+    [".md", ".mdx", ".txt", ".rst", ".html", ".yaml", ".yml"]
         .into_iter()
         .collect()
 });
@@ -110,6 +114,21 @@ mod tests {
         );
         assert_eq!(
             classify_file(&PathBuf::from("notes.txt")),
+            Some(FileCategory::Document)
+        );
+    }
+
+    #[test]
+    fn test_classify_yaml_as_document() {
+        // YAML / YML files (k8s, helm, kustomize, GHA, ansible) flow through
+        // the document path so they're chunked + embedded. Without this they
+        // were silently skipped during detection.
+        assert_eq!(
+            classify_file(&PathBuf::from("deployment.yaml")),
+            Some(FileCategory::Document)
+        );
+        assert_eq!(
+            classify_file(&PathBuf::from(".github/workflows/ci.yml")),
             Some(FileCategory::Document)
         );
     }

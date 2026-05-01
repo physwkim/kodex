@@ -14,14 +14,14 @@ kodex install claude        # register MCP server in Claude Code
 ## Quick Start
 
 ```bash
-kodex run .                             # analyze codebase → ~/.kodex/kodex.db (registers project)
+kodex run .                             # analyze + chunk + embed → ~/.kodex/kodex.db (registers project)
 kodex query "how does auth work"        # search
 kodex explain "AuthService"             # node details
 kodex list                              # registered projects
 kodex forget --below 0.3                # clean low-confidence knowledge
 ```
 
-After `kodex run`, the project is registered and a global git hook (installed by `kodex install claude`) auto-updates the graph + ingests new knowledge on every commit. Unregistered repos see no effect. See [Auto-Ingestion](#auto-ingestion).
+`kodex run` includes BGE-small encoding for `semantic_search` by default (delta-only — only new/changed chunks re-encode). First invocation downloads the ONNX model (~30 MB, cached under `~/.cache/`). Pass `--no-embed` for CI flows that only need keyword/graph retrieval. After `kodex run`, the project is registered and a global git hook (installed by `kodex install claude`) auto-updates graph + chunks + embeddings + knowledge on every commit. Unregistered repos see no effect.
 
 ## Architecture
 
@@ -248,6 +248,29 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 
 ## MCP Tools
 
+### Choosing the right tool
+
+The save / recall / link tool families look redundant at first glance — they aren't. Each has a distinct purpose; pick by intent, not by name:
+
+**Save**
+- `learn` → SQLite knowledge table, indexed for `recall_for_task` ranking. **Default for any pattern/bug/decision.** Pass `related_nodes` so `node_overlap` scoring fires.
+- `save_insight` → Obsidian vault `.md` only (named pattern across nodes). Use when documenting a *cross-cutting* concept for human browsing, not retrieval.
+- `save_note` → Obsidian vault `.md` only (free-text memo). Use for prose that doesn't fit the typed knowledge schema.
+
+**Recall**
+- `recall` → keyword query, no ranking signals. Use for ad-hoc lookup ("what do I have on X").
+- `recall_for_task` → question + touched_files + node_uuids → 10-signal ranked retrieval. **Default at task start.**
+- `recall_for_diff` → git diff text → entries linked to changed code (+20pt boost). Use mid-edit to surface drift risks.
+
+**Link**
+- `link_knowledge` → knowledge ↔ knowledge (chain-of-thought, supersedes, supports/contradicts).
+- `link_knowledge_to_nodes` → knowledge → graph node UUIDs. Required for `node_overlap` scoring to fire on retrieval.
+
+**Review queue (CRUD on pending items)**
+- `refresh_review_queue` → rebuild from staleness/conflict/duplicate signals.
+- `get_review_queue` → read pending items.
+- `complete_review` → mark one item done.
+
 ### Knowledge lifecycle
 | Tool | Description |
 |------|-------------|
@@ -313,6 +336,18 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 - Variable-receiver bare calls (`db.query()` where multiple classes define `query`) are **dropped** rather than mis-routed when type inference would be needed — a missing edge is more honest than a wrong one. Future work: local type tracking.
 
 Method node IDs include the containing class label (`stem_class_method`), so two same-name methods in the same file produce distinct nodes.
+
+## Common Workflows
+
+Patterns that pull weight in day-to-day use:
+
+1. **`recall_for_task`** — before starting a task, surface known pitfalls (e.g. starting PVA monitor work auto-recommends the field-order bug).
+2. **`recall_for_diff`** — match the current diff against past defects and decisions in the same area.
+3. **`find_callers` / `find_callees` / `trace_call_path`** — navigate the call graph (server dispatch → handler trace, etc.).
+4. **`co_changes`** — files that historically change together (editing `tcp.rs` flags `decode.rs` as a likely co-target).
+5. **`detect_stale` / `detect_renames` / `detect_cycles`** — post-refactor sanity checks.
+6. **`learn`** — auto-record bug fixes / decisions (already wired via the CLAUDE.md auto-call directive).
+7. **`semantic_search` / `query_graph`** — identifier-keyed search over code chunks and the graph.
 
 ## Claude Memory Sync
 
@@ -605,11 +640,12 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Scala, PHP, Sw
 |---------|-------------|
 | `extract` | AST extraction (default) |
 | `lang-*` | Per-language parsers |
-| `all-languages` | All 14 languages |
-| `fetch` | URL fetching |
-| `watch` | File monitoring |
-| `video` | Audio transcription (whisper.cpp) |
-| `parallel` | Parallel extraction (rayon) |
+| `all-languages` | All 14 languages (default) |
+| `embeddings` | BGE-small chunk embeddings + `semantic_search` (default) |
+| `parallel` | Parallel extraction via rayon (default) |
+| `watch` | `kodex watch` file monitoring (default) |
+| `fetch` | `kodex add <url>` URL fetching (opt-in — pulls reqwest) |
+| `video` | Audio/video transcription via whisper.cpp (opt-in — heavy) |
 | `all` | Everything except `video` |
 
 SQLite via [rusqlite](https://crates.io/crates/rusqlite) always included (bundled).

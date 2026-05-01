@@ -141,9 +141,11 @@ const CHUNK_MODEL_ID: &str = "BGE-small-en-v1.5/chunk-v1";
 
 /// Embed all chunks in the global db whose stored embedding is missing or
 /// stale (different model id / dim). Returns the number of new embeddings
-/// written. Pre-filter: chunks are loaded together with their content_hash
-/// + existing embedding model so unchanged chunks are skipped without
-/// re-reading the BLOB.
+/// written.
+///
+/// Pre-filter: chunks are loaded together with their content_hash + existing
+/// embedding model so unchanged chunks are skipped without re-reading the
+/// BLOB.
 pub fn embed_chunks(db_path: &Path, skip_existing: bool) -> kodex::error::Result<usize> {
     let chunks = storage::load_all_chunks(db_path)?;
     if chunks.is_empty() {

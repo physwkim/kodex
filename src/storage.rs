@@ -48,11 +48,7 @@ pub fn save(path: &Path, data: &KodexData) -> crate::error::Result<()> {
 
 /// Set `evidence` for a knowledge entry, but only if currently empty. Used by `learn`
 /// to record provenance without overwriting evidence the caller passed explicitly.
-pub fn set_evidence_if_empty(
-    path: &Path,
-    uuid: &str,
-    evidence: &str,
-) -> crate::error::Result<()> {
+pub fn set_evidence_if_empty(path: &Path, uuid: &str, evidence: &str) -> crate::error::Result<()> {
     if !path.exists() || evidence.is_empty() {
         return Ok(());
     }
@@ -473,12 +469,50 @@ pub fn forget_knowledge(
 
 // Project operations
 
+/// Minimum existing-node count for the shrink guard to fire. Below this, a
+/// project is considered "early-growth" and may shrink freely (typical for
+/// scaffolding / first commits). Heuristic — tune if false positives appear.
+const SHRINK_GUARD_MIN_OLD_NODES: usize = 50;
+
+/// Refuse a merge when retained < this fraction of the old project node count.
+/// 0.5 = "must keep at least half". Heuristic — chosen to catch catastrophic
+/// extraction failures (parser crash, partial run) without flagging routine
+/// refactors. Tune via `merge_project_force` if real-world signal differs.
+const SHRINK_GUARD_MIN_RETAINED_RATIO: f64 = 0.5;
+
 pub fn merge_project(
     db_path: &Path,
     project_name: &str,
     new_extraction: &ExtractionResult,
 ) -> crate::error::Result<()> {
-    cache_remove(db_path);
+    // Public entry: read `KODEX_FORCE_SHRINK` from env for the runtime
+    // override, then delegate. Tests use `merge_project_force` directly so
+    // they don't have to touch the global env.
+    let force = std::env::var("KODEX_FORCE_SHRINK")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    merge_project_force(db_path, project_name, new_extraction, force)
+}
+
+/// Same as [`merge_project`] but with an explicit `force_shrink` flag instead
+/// of the `KODEX_FORCE_SHRINK` env var. Use from tests and from any callsite
+/// that already knows the user opted into shrinkage (e.g. a future CLI flag
+/// `--force-shrink`).
+pub fn merge_project_force(
+    db_path: &Path,
+    project_name: &str,
+    new_extraction: &ExtractionResult,
+    force_shrink: bool,
+) -> crate::error::Result<()> {
+    // No early `cache_remove` here. Two reasons:
+    // (a) on success, the trailing `save(...)` calls `cache_put` which fully
+    //     overwrites whatever was in the cache — pre-clearing is redundant.
+    // (b) on early-return paths (shrink-guard rejection below), pre-clearing
+    //     evicts a still-valid cache entry, forcing the next reader to take
+    //     a disk hit for state that didn't actually change.
+    // Cache invalidation belongs in functions that mutate via raw SQL without
+    // going through `load → mutate → save` (e.g. `bump_fetch_counters`,
+    // `set_evidence_if_empty`), not here.
     let mut data = if db_path.exists() {
         load(db_path)?
     } else {
@@ -491,6 +525,30 @@ pub fn merge_project(
         .filter(|n| n.source_file.starts_with(project_name))
         .cloned()
         .collect();
+
+    // Shrink guard (mirrors graphify's pre-write check): if the new extraction
+    // retains less than `SHRINK_GUARD_MIN_RETAINED_RATIO` of the previously-
+    // stored nodes for this project, refuse the save. Massive drops almost
+    // always signal an extraction failure (parser crash, dep change, partial
+    // run) rather than a real codebase shrink — better surfaced than silently
+    // overwriting a healthy graph. Pass `force_shrink=true` (or set
+    // `KODEX_FORCE_SHRINK=1` for the env-driven entry) for legitimate cases:
+    // mass file deletion, project rename, intentional pruning.
+    let old_n = old_project_nodes.len();
+    let new_n = new_extraction.nodes.len();
+    if !force_shrink && old_n > SHRINK_GUARD_MIN_OLD_NODES {
+        let retained = new_n as f64 / old_n.max(1) as f64;
+        if retained < SHRINK_GUARD_MIN_RETAINED_RATIO {
+            let max_loss_pct = ((1.0 - SHRINK_GUARD_MIN_RETAINED_RATIO) * 100.0) as u32;
+            return Err(crate::error::KodexError::Other(format!(
+                "shrink guard: project '{project_name}' would drop from {old_n} → {new_n} \
+                 nodes (>{max_loss_pct}% loss). Refusing to overwrite. Re-run with \
+                 KODEX_FORCE_SHRINK=1 if this is intentional (e.g. you deleted source files); \
+                 otherwise investigate extraction errors before saving."
+            )));
+        }
+    }
+
     data.extraction
         .nodes
         .retain(|n| !n.source_file.starts_with(project_name));
@@ -581,10 +639,7 @@ pub fn store_embedding(
 }
 
 /// Bulk upsert. Wraps everything in a single transaction for speed.
-pub fn store_embeddings_bulk(
-    db_path: &Path,
-    rows: &[StoredEmbedding],
-) -> crate::error::Result<()> {
+pub fn store_embeddings_bulk(db_path: &Path, rows: &[StoredEmbedding]) -> crate::error::Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -622,9 +677,7 @@ pub fn store_embeddings_bulk(
 
 /// Load all embeddings as `(node_id, vec_bytes)`. Caller decodes via
 /// `embedding::bytes_to_vec` if the `embeddings` feature is enabled.
-pub fn load_all_embeddings(
-    db_path: &Path,
-) -> crate::error::Result<Vec<StoredEmbedding>> {
+pub fn load_all_embeddings(db_path: &Path) -> crate::error::Result<Vec<StoredEmbedding>> {
     let conn = open_db(db_path)?;
     let mut stmt = conn
         .prepare("SELECT node_id, model, dim, vec FROM node_embeddings")
@@ -676,10 +729,7 @@ pub struct StoredChunk {
 }
 
 /// Bulk upsert chunks. Wraps in a single transaction.
-pub fn store_chunks_bulk(
-    db_path: &Path,
-    rows: &[StoredChunk],
-) -> crate::error::Result<()> {
+pub fn store_chunks_bulk(db_path: &Path, rows: &[StoredChunk]) -> crate::error::Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -745,9 +795,7 @@ pub struct ChunkMetadata {
 pub fn load_chunk_metadata(db_path: &Path) -> crate::error::Result<Vec<ChunkMetadata>> {
     let conn = open_db(db_path)?;
     let mut stmt = conn
-        .prepare(
-            "SELECT id, node_id, file_path, start_line, end_line, language FROM chunks",
-        )
+        .prepare("SELECT id, node_id, file_path, start_line, end_line, language FROM chunks")
         .map_err(|e| crate::error::KodexError::Other(format!("prep: {e}")))?;
     let rows = stmt
         .query_map([], |row| {
@@ -923,13 +971,15 @@ pub fn knowledge_for_node_ids(
         if k.status.eq_ignore_ascii_case("obsolete") {
             continue;
         }
-        out.entry(node_id.clone()).or_default().push(KnowledgeAttachment {
-            uuid: k.uuid.clone(),
-            title: k.title.clone(),
-            knowledge_type: k.knowledge_type.clone(),
-            confidence: k.confidence,
-            relation: link.relation.clone(),
-        });
+        out.entry(node_id.clone())
+            .or_default()
+            .push(KnowledgeAttachment {
+                uuid: k.uuid.clone(),
+                title: k.title.clone(),
+                knowledge_type: k.knowledge_type.clone(),
+                confidence: k.confidence,
+                relation: link.relation.clone(),
+            });
     }
     Ok(out)
 }
@@ -964,8 +1014,7 @@ pub fn load_node_uuids_for_ids(
             })
             .map_err(|e| crate::error::KodexError::Other(format!("query: {e}")))?;
         for r in rows {
-            let (id, uuid) =
-                r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?;
+            let (id, uuid) = r.map_err(|e| crate::error::KodexError::Other(format!("row: {e}")))?;
             if !uuid.is_empty() {
                 out.insert(id, uuid);
             }
@@ -1316,9 +1365,8 @@ fn run_migrations(conn: &Connection) -> crate::error::Result<()> {
                 )));
             }
         }
-        conn.pragma_update(None, "user_version", next).map_err(|e| {
-            crate::error::KodexError::Other(format!("user_version write: {e}"))
-        })?;
+        conn.pragma_update(None, "user_version", next)
+            .map_err(|e| crate::error::KodexError::Other(format!("user_version write: {e}")))?;
     }
     Ok(())
 }
@@ -1334,9 +1382,7 @@ fn migrate_v0_to_v1(conn: &Connection) -> crate::error::Result<()> {
             .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma: {e}")))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|e| {
-                crate::error::KodexError::Other(format!("SQLite pragma rows: {e}"))
-            })?;
+            .map_err(|e| crate::error::KodexError::Other(format!("SQLite pragma rows: {e}")))?;
         rows.filter_map(|r| r.ok()).collect()
     };
     let want = [
@@ -1839,17 +1885,12 @@ fn auto_link_knowledge_to_knowledge(
             scored.push((k.uuid.clone(), score));
         }
     }
-    scored.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut out = Vec::new();
     for (target_uuid, _) in scored.into_iter().take(MAX_AUTO_K_LINKS) {
         let exists = data.links.iter().any(|l| {
-            l.knowledge_uuid == new_uuid
-                && l.node_uuid == target_uuid
-                && l.is_knowledge_link()
+            l.knowledge_uuid == new_uuid && l.node_uuid == target_uuid && l.is_knowledge_link()
         });
         if exists {
             continue;
@@ -2081,7 +2122,10 @@ mod tests {
         let v: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v, SCHEMA_VERSION, "user_version should be bumped to current");
+        assert_eq!(
+            v, SCHEMA_VERSION,
+            "user_version should be bumped to current"
+        );
         let cols: std::collections::HashSet<String> = {
             let mut stmt = conn.prepare("PRAGMA table_info(knowledge)").unwrap();
             stmt.query_map([], |row| row.get::<_, String>(1))
@@ -2090,7 +2134,10 @@ mod tests {
                 .collect()
         };
         assert!(cols.contains("fetch_count"), "fetch_count must be re-added");
-        assert!(cols.contains("last_fetched"), "last_fetched must be re-added");
+        assert!(
+            cols.contains("last_fetched"),
+            "last_fetched must be re-added"
+        );
         // Idempotency: a third open must not error or duplicate columns.
         let _ = open_db(&db).expect("idempotent re-open");
     }
@@ -2183,7 +2230,7 @@ mod tests {
             content: "fn foo() {}".into(),
             content_hash: "deadbeef".into(),
         };
-        store_chunks_bulk(&db, &[row.clone()]).unwrap();
+        store_chunks_bulk(&db, std::slice::from_ref(&row)).unwrap();
         let loaded = load_all_chunks(&db).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, "c-1");
@@ -2267,8 +2314,7 @@ mod tests {
         assert_eq!(pruned, 0, "no foo-prefixed chunk should be deleted");
 
         let after = load_all_chunks(&db).unwrap();
-        let ids: std::collections::HashSet<&str> =
-            after.iter().map(|c| c.id.as_str()).collect();
+        let ids: std::collections::HashSet<&str> = after.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains("c-foo-1"));
         assert!(
             ids.contains("c-fooXbar-1"),
@@ -2281,16 +2327,11 @@ mod tests {
 
         // Now actually GC project `foo_bar` with empty keep — only its
         // chunk goes; the other two stay.
-        let pruned = prune_chunks_for_project(
-            &db,
-            "foo_bar",
-            &std::collections::HashSet::new(),
-        )
-        .unwrap();
+        let pruned =
+            prune_chunks_for_project(&db, "foo_bar", &std::collections::HashSet::new()).unwrap();
         assert_eq!(pruned, 1);
         let after = load_all_chunks(&db).unwrap();
-        let ids: std::collections::HashSet<&str> =
-            after.iter().map(|c| c.id.as_str()).collect();
+        let ids: std::collections::HashSet<&str> = after.iter().map(|c| c.id.as_str()).collect();
         assert!(!ids.contains("c-foo_bar-1"));
         assert!(ids.contains("c-foo-1"));
         assert!(ids.contains("c-fooXbar-1"));
@@ -2343,13 +2384,17 @@ mod tests {
 
         let map = load_node_uuids_for_ids(
             &db,
-            &["id-a".to_string(), "id-b".to_string(), "id-missing".to_string()],
+            &[
+                "id-a".to_string(),
+                "id-b".to_string(),
+                "id-missing".to_string(),
+            ],
         )
         .unwrap();
         assert_eq!(map.len(), 1, "only id-a has a non-empty uuid");
         assert_eq!(map.get("id-a"), Some(&"uuid-a".to_string()));
-        assert!(map.get("id-b").is_none(), "empty uuid must be filtered");
-        assert!(map.get("id-missing").is_none(), "absent id must be absent");
+        assert!(!map.contains_key("id-b"), "empty uuid must be filtered");
+        assert!(!map.contains_key("id-missing"), "absent id must be absent");
     }
 
     #[test]
@@ -2456,7 +2501,11 @@ mod tests {
 
         let map = knowledge_for_node_ids(
             &db,
-            &["id-a".to_string(), "id-b".to_string(), "id-missing".to_string()],
+            &[
+                "id-a".to_string(),
+                "id-b".to_string(),
+                "id-missing".to_string(),
+            ],
         )
         .unwrap();
 
@@ -2464,17 +2513,16 @@ mod tests {
         // k-obsolete dropped; cross-node link ignored.
         let a = map.get("id-a").expect("id-a should have attachments");
         assert_eq!(a.len(), 2, "obsolete link must be filtered");
-        let titles: std::collections::HashSet<&str> =
-            a.iter().map(|x| x.title.as_str()).collect();
+        let titles: std::collections::HashSet<&str> = a.iter().map(|x| x.title.as_str()).collect();
         assert!(titles.contains("Active"));
         assert!(titles.contains("Other"));
         assert!(!titles.contains("Old"), "obsolete must not surface");
 
         // id-b: no links → not present in the map (rather than empty Vec).
-        assert!(map.get("id-b").is_none());
+        assert!(!map.contains_key("id-b"));
 
         // id-missing: not in the nodes table → not present.
-        assert!(map.get("id-missing").is_none());
+        assert!(!map.contains_key("id-missing"));
 
         // Empty input → empty output.
         let empty = knowledge_for_node_ids(&db, &[]).unwrap();

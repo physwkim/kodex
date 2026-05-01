@@ -20,10 +20,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Full pipeline: detect → extract → build → cluster → analyze → export
+    /// Full pipeline: detect → extract → build → cluster → analyze → embed → export
     Run {
         /// Target directory to analyze
         path: PathBuf,
+        /// Skip the embed step (BGE-small encoding for `semantic_search`).
+        /// First-time encoding downloads ~30 MB and takes proportional time;
+        /// subsequent runs only encode new/changed chunks. Use this in CI or
+        /// when you only need keyword/graph retrieval.
+        #[arg(long)]
+        no_embed: bool,
     },
     /// Query the knowledge graph
     Query {
@@ -167,7 +173,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Run { path }) => commands::run::run_pipeline(&path),
+        Some(Commands::Run { path, no_embed }) => commands::run::run_pipeline(&path, no_embed),
         Some(Commands::Query {
             question,
             dfs,
@@ -308,8 +314,7 @@ fn main() {
             #[cfg(feature = "embeddings")]
             {
                 let db = kodex::registry::global_db();
-                match commands::embed::embed_nodes(&db, source_pattern.as_deref(), skip_existing)
-                {
+                match commands::embed::embed_nodes(&db, source_pattern.as_deref(), skip_existing) {
                     Ok(n) => println!("Embedded {n} nodes."),
                     Err(e) => eprintln!("Embed error: {e}"),
                 }
@@ -343,7 +348,7 @@ fn main() {
         }
         None => {
             if let Some(path) = cli.path {
-                commands::run::run_pipeline(&path);
+                commands::run::run_pipeline(&path, false);
             } else {
                 println!("kodex: no path specified. Use --help for usage.");
             }

@@ -1648,8 +1648,7 @@ mod receiver_disambiguation {
     /// EXTRACTED edges so each test asserts on the cross-file pathway.
     fn extract_call_edges(dir: &std::path::Path) -> Vec<(String, String)> {
         let detection = kodex::detect::detect(dir, false);
-        let code_paths: Vec<PathBuf> =
-            detection.files.code.iter().map(PathBuf::from).collect();
+        let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
         let extraction = kodex::extract::extract(&code_paths, Some(dir));
         extraction
             .edges
@@ -2037,8 +2036,7 @@ impl HttpClient {
 
         let extraction = {
             let detection = kodex::detect::detect(tmp.path(), false);
-            let code_paths: Vec<PathBuf> =
-                detection.files.code.iter().map(PathBuf::from).collect();
+            let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
             kodex::extract::extract(&code_paths, Some(tmp.path()))
         };
 
@@ -2145,4 +2143,379 @@ fn ambiguous(db: super::Database, h: super::HttpClient) {
              last-write-wins picked one); got {calls_from_ambiguous:?}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// AST walker stack-safety
+// ---------------------------------------------------------------------------
+
+/// Regression: a deeply-nested AST used to overflow the call stack in
+/// `extract::generic::walk` because the walker was purely recursive. The
+/// iterative rewrite uses an explicit Vec-based stack and handles arbitrary
+/// depth bounded only by heap. Repro from the field: a global `core.hooksPath`
+/// fired `kodex auto-update` on a registered ancestor dir that pulled in a
+/// source file with thousands of nested expressions, aborting with
+/// `fatal runtime error: stack overflow` (see crash report
+/// `kodex-2026-05-02-000932.ips` — bottom of stack was `walk` repeating).
+#[cfg(all(feature = "extract", feature = "lang-python"))]
+#[test]
+fn test_walker_handles_deeply_nested_ast() {
+    use std::path::PathBuf;
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // 5000 nested `if True:` — AST depth ≥ 5000. Recursive `walk` blew the
+    // default 2 MB test-thread stack at a few hundred levels; iterative
+    // variant must handle this without aborting.
+    const DEPTH: usize = 5000;
+    let mut src = String::with_capacity(DEPTH * 16);
+    for i in 0..DEPTH {
+        for _ in 0..i {
+            src.push(' ');
+        }
+        src.push_str("if True:\n");
+    }
+    for _ in 0..DEPTH {
+        src.push(' ');
+    }
+    src.push_str("pass\n");
+
+    std::fs::write(tmp.path().join("nested.py"), &src).unwrap();
+
+    let detection = kodex::detect::detect(tmp.path(), false);
+    let code_paths: Vec<PathBuf> = detection.files.code.iter().map(PathBuf::from).collect();
+    // No assertion on output — completion without abort is the test.
+    let _ = kodex::extract::extract(&code_paths, Some(tmp.path()));
+}
+
+// ---------------------------------------------------------------------------
+// Shrink guard on merge_project
+// ---------------------------------------------------------------------------
+
+/// Helper for the shrink-guard tests: build N synthetic nodes for a project.
+/// Kept inside the integration suite (not exposed elsewhere) since it produces
+/// minimal stub nodes that wouldn't satisfy the rest of the kodex pipeline.
+#[cfg(test)]
+fn shrink_guard_mk_node(i: usize, project: &str) -> kodex::types::Node {
+    use kodex::types::{Confidence, FileType, Node};
+    Node {
+        id: format!("n_{i}"),
+        label: format!("Node{i}"),
+        file_type: FileType::Code,
+        source_file: format!("{project}/file_{i}.rs"),
+        source_location: Some("L1".into()),
+        confidence: Some(Confidence::EXTRACTED),
+        confidence_score: Some(1.0),
+        community: None,
+        norm_label: None,
+        degree: None,
+        uuid: None,
+        fingerprint: None,
+        logical_key: None,
+        body_hash: None,
+    }
+}
+
+#[cfg(test)]
+fn shrink_guard_extraction(n: usize, project: &str) -> kodex::types::ExtractionResult {
+    kodex::types::ExtractionResult {
+        nodes: (0..n).map(|i| shrink_guard_mk_node(i, project)).collect(),
+        ..Default::default()
+    }
+}
+
+/// `merge_project_force` must refuse to overwrite an existing project's
+/// nodes when the new extraction retains less than half the old count —
+/// almost always a sign of an extraction failure (parser crash, missing dep,
+/// partial run) rather than a real change. Caller passes `force_shrink=true`
+/// to override.
+#[test]
+fn test_merge_project_shrink_guard_refuses_drastic_loss() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db = tmp.path().join("kodex.db");
+
+    // Seed with 100 nodes for project "myproj".
+    kodex::storage::merge_project_force(
+        &db,
+        "myproj",
+        &shrink_guard_extraction(100, "myproj"),
+        false,
+    )
+    .expect("seed should save without guard tripping");
+
+    // 100 → 10: 90% loss, must fail without force.
+    let err = kodex::storage::merge_project_force(
+        &db,
+        "myproj",
+        &shrink_guard_extraction(10, "myproj"),
+        false,
+    )
+    .expect_err("shrink guard should refuse 100→10");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("shrink guard") && msg.contains("100") && msg.contains("10"),
+        "expected shrink-guard error citing counts, got: {msg}"
+    );
+
+    // With force_shrink=true, the same merge succeeds.
+    kodex::storage::merge_project_force(
+        &db,
+        "myproj",
+        &shrink_guard_extraction(10, "myproj"),
+        true,
+    )
+    .expect("force_shrink=true should bypass the guard");
+}
+
+/// Below the size threshold (old <= 50 nodes), the guard does NOT fire —
+/// early-growth projects shouldn't be encumbered by spurious shrink warnings.
+#[test]
+fn test_merge_project_shrink_guard_skipped_below_threshold() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db = tmp.path().join("kodex.db");
+
+    // Seed with 20 nodes — below the 50-node threshold.
+    kodex::storage::merge_project_force(
+        &db,
+        "smallproj",
+        &shrink_guard_extraction(20, "smallproj"),
+        false,
+    )
+    .expect("seed save");
+
+    // Drop to 1 node — 95% drop, but guard is gated by old > 50.
+    kodex::storage::merge_project_force(
+        &db,
+        "smallproj",
+        &shrink_guard_extraction(1, "smallproj"),
+        false,
+    )
+    .expect("guard must not fire below the size threshold");
+}
+
+/// When the shrink guard rejects a merge, the on-disk graph and the
+/// in-memory cache must remain at the pre-merge state. Catches a former
+/// defect where `merge_project` cleared the cache before the guard fired —
+/// reject path then forced an unnecessary disk reload, and any future
+/// regression that mutated state before the guard would corrupt the
+/// preserved data.
+#[test]
+fn test_merge_project_shrink_guard_preserves_data_on_reject() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db = tmp.path().join("kodex.db");
+
+    // Seed 100 nodes for project "preserve".
+    kodex::storage::merge_project_force(
+        &db,
+        "preserve",
+        &shrink_guard_extraction(100, "preserve"),
+        false,
+    )
+    .expect("seed");
+
+    // Attempt 100 → 5: rejected.
+    kodex::storage::merge_project_force(
+        &db,
+        "preserve",
+        &shrink_guard_extraction(5, "preserve"),
+        false,
+    )
+    .expect_err("guard must reject");
+
+    // Disk + cache state must still hold the seed's 100 nodes for this project.
+    let after = kodex::storage::load(&db).expect("load after rejected merge");
+    let project_node_count = after
+        .extraction
+        .nodes
+        .iter()
+        .filter(|n| n.source_file.starts_with("preserve"))
+        .count();
+    assert_eq!(
+        project_node_count, 100,
+        "rejected merge must not mutate disk state; \
+         saw {project_node_count} nodes after reject"
+    );
+
+    // And a follow-up valid merge still works (no leftover dirty cache state).
+    kodex::storage::merge_project_force(
+        &db,
+        "preserve",
+        &shrink_guard_extraction(80, "preserve"),
+        false,
+    )
+    .expect("valid follow-up merge after rejected one must succeed");
+    let after2 = kodex::storage::load(&db).expect("load after valid merge");
+    let count2 = after2
+        .extraction
+        .nodes
+        .iter()
+        .filter(|n| n.source_file.starts_with("preserve"))
+        .count();
+    assert_eq!(count2, 80, "valid merge after reject must apply normally");
+}
+
+/// Boundary cases. The guard's predicates are `old_n > 50` (strict) and
+/// `retained < 0.5` (strict). Edges therefore pass:
+///
+/// - `old_n == 50` → guard is skipped entirely (size gate).
+/// - `retained == 0.5` exactly → passes (loss is *up to* 50%, not over).
+///
+/// Just past either edge, the guard fires.
+#[test]
+fn test_merge_project_shrink_guard_boundary_cases() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db = tmp.path().join("kodex.db");
+
+    // Case 1: old_n == 50, drastic shrink → guard skipped (size gate strict).
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_size",
+        &shrink_guard_extraction(50, "edge_size"),
+        false,
+    )
+    .expect("seed at exactly 50");
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_size",
+        &shrink_guard_extraction(0, "edge_size"),
+        false,
+    )
+    .expect("old_n=50 must skip guard — gate is `> 50`, not `>= 50`");
+
+    // Case 2: 100 → 50 exactly (retained == 0.5) → passes.
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_ratio",
+        &shrink_guard_extraction(100, "edge_ratio"),
+        false,
+    )
+    .expect("seed 100");
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_ratio",
+        &shrink_guard_extraction(50, "edge_ratio"),
+        false,
+    )
+    .expect("retained == 0.5 exactly must pass (predicate is strict <)");
+
+    // Case 3: 100 → 49 (retained < 0.5) → fails.
+    // Re-seed because Case 2 left the project at 50.
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_ratio",
+        &shrink_guard_extraction(100, "edge_ratio"),
+        true, // force needed: 50 → 100 isn't shrink, but 50 is at the size gate boundary
+    )
+    .expect("re-seed to 100");
+    let err = kodex::storage::merge_project_force(
+        &db,
+        "edge_ratio",
+        &shrink_guard_extraction(49, "edge_ratio"),
+        false,
+    )
+    .expect_err("retained < 0.5 must fail");
+    let msg = format!("{err}");
+    assert!(msg.contains("100") && msg.contains("49"), "got: {msg}");
+
+    // Case 4: 51 → 25 (retained ≈ 0.49, just past size gate) → fails.
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_just_above",
+        &shrink_guard_extraction(51, "edge_just_above"),
+        false,
+    )
+    .expect("seed 51");
+    kodex::storage::merge_project_force(
+        &db,
+        "edge_just_above",
+        &shrink_guard_extraction(25, "edge_just_above"),
+        false,
+    )
+    .expect_err("51 → 25 must fail (retained ≈ 0.49, just past both gates)");
+}
+
+/// `merge_project` (the env-driven public entry) reads `KODEX_FORCE_SHRINK`.
+/// We isolate the env var manipulation to a single test that does not run in
+/// parallel with the other shrink tests (they all use `merge_project_force`
+/// directly). This test exists only to prove the env path still works after
+/// the refactor — the heavy logic is covered above without env touching.
+#[test]
+fn test_merge_project_env_override_still_works() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db = tmp.path().join("kodex.db");
+
+    kodex::storage::merge_project_force(
+        &db,
+        "envtest",
+        &shrink_guard_extraction(100, "envtest"),
+        false,
+    )
+    .expect("seed");
+
+    // SAFETY: this is the only test in the suite that reads/writes the
+    // KODEX_FORCE_SHRINK env var. Other shrink tests use `_force` so they
+    // don't observe this state.
+    unsafe {
+        std::env::remove_var("KODEX_FORCE_SHRINK");
+    }
+    kodex::storage::merge_project(&db, "envtest", &shrink_guard_extraction(10, "envtest"))
+        .expect_err("env unset → guard fires");
+
+    unsafe {
+        std::env::set_var("KODEX_FORCE_SHRINK", "1");
+    }
+    kodex::storage::merge_project(&db, "envtest", &shrink_guard_extraction(10, "envtest"))
+        .expect("env=1 → guard bypassed");
+
+    unsafe {
+        std::env::remove_var("KODEX_FORCE_SHRINK");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// YAML end-to-end through detect → chunker
+// ---------------------------------------------------------------------------
+
+/// Verifies the full path that makes YAML files searchable: `detect` must
+/// classify them as documents AND `chunker::chunk_file` must produce chunks
+/// tagged with the `yaml` language. The unit test on `classify_file` alone
+/// only catches detect-side regressions; if someone later removed yaml from
+/// `chunker::language_for_path` or unwired `document` files from the
+/// `chunk_targets` chain in `run.rs`, this test catches it.
+#[test]
+fn test_yaml_files_pass_through_detect_and_chunker() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let yaml_path = tmp.path().join("deployment.yaml");
+    // ~50 lines so the chunker emits something (skips windows under 32 bytes).
+    let mut body = String::from(
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web\n  labels:\n    app: web\n",
+    );
+    for i in 0..40 {
+        body.push_str(&format!("    field{i}: value{i}\n"));
+    }
+    std::fs::write(&yaml_path, &body).unwrap();
+
+    // Detect must place this in `document`, not skip it.
+    let detection = kodex::detect::detect(tmp.path(), false);
+    let docs = &detection.files.document;
+    assert!(
+        docs.iter().any(|p| p.ends_with("deployment.yaml")),
+        "yaml file must appear under detection.files.document; got {docs:?}"
+    );
+
+    // Chunker must accept the file and tag chunks `yaml`.
+    let chunks = kodex::extract::chunker::chunk_file(
+        "fixture/deployment.yaml",
+        &yaml_path,
+        kodex::extract::chunker::language_for_path(&yaml_path),
+        &[],
+    );
+    assert!(
+        !chunks.is_empty(),
+        "yaml file should produce at least one chunk; got 0"
+    );
+    assert_eq!(
+        chunks[0].language.as_deref(),
+        Some("yaml"),
+        "chunks must carry the yaml language tag"
+    );
 }

@@ -125,7 +125,11 @@ mod tests {
         ];
         // ok() touches everyone (degree 4), Server::process touches 2.
         for i in 0..6 {
-            nodes.push(mk_node(&format!("u{i}"), &format!("user_{i}"), "lib/util.rs"));
+            nodes.push(mk_node(
+                &format!("u{i}"),
+                &format!("user_{i}"),
+                "lib/util.rs",
+            ));
         }
         let edges = vec![
             mk_edge("ok", "u0"),

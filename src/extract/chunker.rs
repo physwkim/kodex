@@ -118,11 +118,7 @@ fn sha256_hex(s: &str) -> String {
 /// even when files are extracted in parallel via rayon), so two runs over
 /// the same source produce the same chunk-to-node mapping. With overloaded
 /// names sharing a start line, the earliest-extracted node wins.
-fn match_node_in_range(
-    nodes_in_file: &[&Node],
-    start_line: i64,
-    end_line: i64,
-) -> Option<String> {
+fn match_node_in_range(nodes_in_file: &[&Node], start_line: i64, end_line: i64) -> Option<String> {
     for n in nodes_in_file {
         let loc = n.source_location.as_deref()?;
         let line = crate::source_lookup::parse_line_number(loc)? as i64;
@@ -192,7 +188,10 @@ mod tests {
 
     #[test]
     fn chunks_short_file_into_one_window() {
-        let body = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let body = (1..=20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunk_text("p/foo.rs", &body, Some("rust"), &[]);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].start_line, 1);
@@ -203,7 +202,10 @@ mod tests {
 
     #[test]
     fn chunks_long_file_with_overlap() {
-        let body = (1..=120).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let body = (1..=120)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let chunks = chunk_text("p/long.rs", &body, Some("rust"), &[]);
         // Stride = 45, so chunks at [1-50], [46-95], [91-120]
         assert_eq!(chunks.len(), 3);
@@ -220,7 +222,10 @@ mod tests {
 
     #[test]
     fn maps_chunk_to_first_overlapping_node() {
-        let body = (1..=80).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let body = (1..=80)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let n1 = mk_node("nid_1", "p/foo.rs", 10);
         let n2 = mk_node("nid_2", "p/foo.rs", 60);
         let nodes: Vec<&Node> = vec![&n1, &n2];
@@ -240,7 +245,10 @@ mod tests {
 
     #[test]
     fn id_is_stable_for_unchanged_content() {
-        let body = (1..=20).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let body = (1..=20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let a = chunk_text("p/foo.rs", &body, Some("rust"), &[]);
         let b = chunk_text("p/foo.rs", &body, Some("rust"), &[]);
         assert_eq!(a[0].id, b[0].id);

@@ -51,9 +51,8 @@ impl Embedder {
     }
 
     pub fn with_model(model: EmbeddingModel) -> crate::error::Result<Self> {
-        let inner = TextEmbedding::try_new(InitOptions::new(model)).map_err(|e| {
-            crate::error::KodexError::Other(format!("embedder init: {e}"))
-        })?;
+        let inner = TextEmbedding::try_new(InitOptions::new(model))
+            .map_err(|e| crate::error::KodexError::Other(format!("embedder init: {e}")))?;
         // The model dimension is fixed per-model; for BGE-small-en-v1.5 this
         // is 384. We discover it by embedding a probe to keep the wrapper
         // model-agnostic.

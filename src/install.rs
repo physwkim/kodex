@@ -25,6 +25,7 @@ AI knowledge graph with persistent memory.
 At session start, call `knowledge_context` to load knowledge from previous sessions. Use `recall_for_task` for task-relevant knowledge.
 When querying kodex, use specific code identifiers (function/class/module names) not natural language descriptions. Translate user questions into concrete keywords before calling query_graph or recall.
 When you discover a pattern, fix a bug, or make a design decision, automatically call `learn` without asking. Use appropriate types: bug_pattern, convention, decision, architecture, coupling, lesson, tech_debt.
+When calling `learn`, **always pass `related_nodes`** with the node UUIDs that the knowledge applies to (resolve via `get_node`). Without `related_nodes`, the entry is invisible to `recall_for_task`'s 30-point `node_overlap` scoring and shows up only via fuzzy keyword/file matching. Also pass `applies_when` (e.g. "auth modification", "DB migration") so future retrieval can match by intent, not just identifiers.
 
 ## MCP Tools (auto-available via `kodex serve`)
 
@@ -233,9 +234,8 @@ Report to user:
 "#;
 
 /// Claude Code commands installed alongside the main skill.
-const CLAUDE_EXTRA_COMMANDS: &[(&str, &str)] = &[
-    (".claude/commands/archaeology.md", ARCHAEOLOGY_SKILL_CONTENT),
-];
+const CLAUDE_EXTRA_COMMANDS: &[(&str, &str)] =
+    &[(".claude/commands/archaeology.md", ARCHAEOLOGY_SKILL_CONTENT)];
 
 /// Install kodex: skill file + MCP server registration.
 pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
@@ -747,6 +747,9 @@ mod tests {
             "install with stale file should overwrite: {result3}"
         );
         let updated = std::fs::read_to_string(&arch).unwrap();
-        assert_ne!(updated, "stale content", "stale file should have been overwritten");
+        assert_ne!(
+            updated, "stale content",
+            "stale file should have been overwritten"
+        );
     }
 }

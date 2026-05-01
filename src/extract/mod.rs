@@ -113,7 +113,10 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
     for node in &all_nodes {
         let label = node.label.trim_end_matches("()").to_lowercase();
         if !label.is_empty() {
-            label_to_nids.entry(label).or_default().push(node.id.clone());
+            label_to_nids
+                .entry(label)
+                .or_default()
+                .push(node.id.clone());
         }
     }
 
@@ -121,12 +124,7 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
     // Class label is the source of a `method` edge; method nid is the target.
     let nid_to_label_lower: HashMap<String, String> = all_nodes
         .iter()
-        .map(|n| {
-            (
-                n.id.clone(),
-                n.label.trim_end_matches("()").to_lowercase(),
-            )
-        })
+        .map(|n| (n.id.clone(), n.label.trim_end_matches("()").to_lowercase()))
         .collect();
     let mut method_to_class_label: HashMap<String, String> = HashMap::new();
     for edge in &all_edges {
@@ -420,18 +418,32 @@ fn resolve_cross_file_imports(
 }
 
 #[cfg(feature = "lang-python")]
-fn walk_python_imports(
-    node: &tree_sitter::Node,
+fn walk_python_imports<'tree>(
+    root: &tree_sitter::Node<'tree>,
     source: &[u8],
     str_path: &str,
     local_classes: &[String],
     stem_to_entities: &HashMap<String, HashMap<String, String>>,
     new_edges: &mut Vec<crate::types::Edge>,
 ) {
-    if node.kind() == "import_from_statement" {
-        let mut target_stem: Option<String> = None;
+    // Iterative DFS — same stack-safety motivation as the other walkers.
+    // A Python file with deeply nested blocks (machine-generated, etc.)
+    // would overflow the recursive form before the import scan completed.
+    let mut stack: Vec<tree_sitter::Node<'tree>> = vec![*root];
 
-        // Find module name
+    while let Some(node) = stack.pop() {
+        if node.kind() != "import_from_statement" {
+            // Default: descend.
+            let cursor = &mut node.walk();
+            let kids: Vec<tree_sitter::Node<'tree>> = node.children(cursor).collect();
+            for child in kids.into_iter().rev() {
+                stack.push(child);
+            }
+            continue;
+        }
+
+        // import_from_statement: try to resolve target_stem.
+        let mut target_stem: Option<String> = None;
         let cursor = &mut node.walk();
         for child in node.children(cursor) {
             if child.kind() == "relative_import" {
@@ -453,26 +465,22 @@ fn walk_python_imports(
             }
         }
 
-        let target_stem = match target_stem {
+        let resolved_stem = match target_stem {
             Some(s) if stem_to_entities.contains_key(&s) => s,
             _ => {
-                // Recurse into children
+                // Stem not recognized — descend into children to keep
+                // searching for nested import statements (preserves the
+                // recursive fallback).
                 let cursor = &mut node.walk();
-                for child in node.children(cursor) {
-                    walk_python_imports(
-                        &child,
-                        source,
-                        str_path,
-                        local_classes,
-                        stem_to_entities,
-                        new_edges,
-                    );
+                let kids: Vec<tree_sitter::Node<'tree>> = node.children(cursor).collect();
+                for child in kids.into_iter().rev() {
+                    stack.push(child);
                 }
-                return;
+                continue;
             }
         };
 
-        // Collect imported names after 'import' keyword
+        // Collect imported names after 'import' keyword.
         let mut imported_names = Vec::new();
         let mut past_import = false;
         let cursor = &mut node.walk();
@@ -501,7 +509,7 @@ fn walk_python_imports(
         }
 
         let line = node.start_position().row + 1;
-        if let Some(entities) = stem_to_entities.get(&target_stem) {
+        if let Some(entities) = stem_to_entities.get(&resolved_stem) {
             for name in &imported_names {
                 if let Some(tgt_nid) = entities.get(name) {
                     for src_nid in local_classes {
@@ -521,19 +529,8 @@ fn walk_python_imports(
                 }
             }
         }
-        return;
-    }
-
-    let cursor = &mut node.walk();
-    for child in node.children(cursor) {
-        walk_python_imports(
-            &child,
-            source,
-            str_path,
-            local_classes,
-            stem_to_entities,
-            new_edges,
-        );
+        // Resolved import: don't descend further — same as the original
+        // recursive form which returned here.
     }
 }
 
@@ -650,123 +647,134 @@ fn get_docstring(body_node: &tree_sitter::Node, source: &[u8]) -> Option<(String
 }
 
 #[cfg(feature = "lang-python")]
-#[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
-fn walk_docstrings(
-    node: &tree_sitter::Node,
+#[allow(clippy::too_many_arguments)]
+fn walk_docstrings<'tree>(
+    root: &tree_sitter::Node<'tree>,
     source: &[u8],
     stem: &str,
-    parent_nid: &str,
+    _parent_nid: &str,
     nodes: &mut Vec<crate::types::Node>,
     edges: &mut Vec<crate::types::Edge>,
     seen_ids: &mut std::collections::HashSet<String>,
     str_path: &str,
 ) {
-    let kind = node.kind();
-    if kind == "class_definition" {
-        let name_node = node.child_by_field_name("name");
-        let body = node.child_by_field_name("body");
-        if let (Some(nn), Some(b)) = (name_node, body) {
-            let class_name =
-                std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()]).unwrap_or("");
-            let nid = crate::id::make_id(&[stem, class_name]);
-            if let Some((text, line)) = get_docstring(&b, source) {
-                let label: String = text
-                    .chars()
-                    .take(80)
-                    .collect::<String>()
-                    .replace(['\n', '\r'], " ");
-                let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
-                if seen_ids.insert(rid.clone()) {
-                    nodes.push(crate::types::Node {
-                        id: rid.clone(),
-                        label,
-                        file_type: crate::types::FileType::Rationale,
+    // Iterative DFS — original recursion threaded `parent_nid` but never
+    // read it, so the iterative version drops it (kept in the signature for
+    // call-site stability via leading underscore). Class bodies recurse;
+    // function bodies don't (matches original control flow).
+    let mut stack: Vec<tree_sitter::Node<'tree>> = vec![*root];
+
+    while let Some(node) = stack.pop() {
+        let kind = node.kind();
+        if kind == "class_definition" {
+            let name_node = node.child_by_field_name("name");
+            let body = node.child_by_field_name("body");
+            if let (Some(nn), Some(b)) = (name_node, body) {
+                let class_name =
+                    std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()]).unwrap_or("");
+                let nid = crate::id::make_id(&[stem, class_name]);
+                if let Some((text, line)) = get_docstring(&b, source) {
+                    let label: String = text
+                        .chars()
+                        .take(80)
+                        .collect::<String>()
+                        .replace(['\n', '\r'], " ");
+                    let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
+                    if seen_ids.insert(rid.clone()) {
+                        nodes.push(crate::types::Node {
+                            id: rid.clone(),
+                            label,
+                            file_type: crate::types::FileType::Rationale,
+                            source_file: str_path.to_string(),
+                            source_location: Some(format!("L{line}")),
+                            confidence: Some(crate::types::Confidence::EXTRACTED),
+                            confidence_score: Some(1.0),
+                            community: None,
+                            norm_label: None,
+                            degree: None,
+                            uuid: None,
+                            fingerprint: None,
+                            logical_key: None,
+                            body_hash: None,
+                        });
+                    }
+                    edges.push(crate::types::Edge {
+                        source: rid,
+                        target: nid.clone(),
+                        relation: "rationale_for".to_string(),
+                        confidence: crate::types::Confidence::EXTRACTED,
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
-                        confidence: Some(crate::types::Confidence::EXTRACTED),
                         confidence_score: Some(1.0),
-                        community: None,
-                        norm_label: None,
-                        degree: None,
-                        uuid: None,
-                        fingerprint: None,
-                        logical_key: None,
-                        body_hash: None,
+                        weight: 1.0,
+                        original_src: None,
+                        original_tgt: None,
                     });
                 }
-                edges.push(crate::types::Edge {
-                    source: rid,
-                    target: nid.clone(),
-                    relation: "rationale_for".to_string(),
-                    confidence: crate::types::Confidence::EXTRACTED,
-                    source_file: str_path.to_string(),
-                    source_location: Some(format!("L{line}")),
-                    confidence_score: Some(1.0),
-                    weight: 1.0,
-                    original_src: None,
-                    original_tgt: None,
-                });
+                // Recurse into class body to find nested classes/functions.
+                let cursor = &mut b.walk();
+                let kids: Vec<tree_sitter::Node<'tree>> = b.children(cursor).collect();
+                for child in kids.into_iter().rev() {
+                    stack.push(child);
+                }
             }
-            let cursor = &mut b.walk();
-            for child in b.children(cursor) {
-                walk_docstrings(&child, source, stem, &nid, nodes, edges, seen_ids, str_path);
-            }
+            continue;
         }
-        return;
-    }
-    if kind == "function_definition" {
-        let name_node = node.child_by_field_name("name");
-        let body = node.child_by_field_name("body");
-        if let (Some(nn), Some(b)) = (name_node, body) {
-            let func_name =
-                std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()]).unwrap_or("");
-            let nid = crate::id::make_id(&[stem, func_name]);
-            if let Some((text, line)) = get_docstring(&b, source) {
-                let label: String = text
-                    .chars()
-                    .take(80)
-                    .collect::<String>()
-                    .replace(['\n', '\r'], " ");
-                let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
-                if seen_ids.insert(rid.clone()) {
-                    nodes.push(crate::types::Node {
-                        id: rid.clone(),
-                        label,
-                        file_type: crate::types::FileType::Rationale,
+        if kind == "function_definition" {
+            let name_node = node.child_by_field_name("name");
+            let body = node.child_by_field_name("body");
+            if let (Some(nn), Some(b)) = (name_node, body) {
+                let func_name =
+                    std::str::from_utf8(&source[nn.start_byte()..nn.end_byte()]).unwrap_or("");
+                let nid = crate::id::make_id(&[stem, func_name]);
+                if let Some((text, line)) = get_docstring(&b, source) {
+                    let label: String = text
+                        .chars()
+                        .take(80)
+                        .collect::<String>()
+                        .replace(['\n', '\r'], " ");
+                    let rid = crate::id::make_id(&[stem, "rationale", &line.to_string()]);
+                    if seen_ids.insert(rid.clone()) {
+                        nodes.push(crate::types::Node {
+                            id: rid.clone(),
+                            label,
+                            file_type: crate::types::FileType::Rationale,
+                            source_file: str_path.to_string(),
+                            source_location: Some(format!("L{line}")),
+                            confidence: Some(crate::types::Confidence::EXTRACTED),
+                            confidence_score: Some(1.0),
+                            community: None,
+                            norm_label: None,
+                            degree: None,
+                            uuid: None,
+                            fingerprint: None,
+                            logical_key: None,
+                            body_hash: None,
+                        });
+                    }
+                    edges.push(crate::types::Edge {
+                        source: rid,
+                        target: nid,
+                        relation: "rationale_for".to_string(),
+                        confidence: crate::types::Confidence::EXTRACTED,
                         source_file: str_path.to_string(),
                         source_location: Some(format!("L{line}")),
-                        confidence: Some(crate::types::Confidence::EXTRACTED),
                         confidence_score: Some(1.0),
-                        community: None,
-                        norm_label: None,
-                        degree: None,
-                        uuid: None,
-                        fingerprint: None,
-                        logical_key: None,
-                        body_hash: None,
+                        weight: 1.0,
+                        original_src: None,
+                        original_tgt: None,
                     });
                 }
-                edges.push(crate::types::Edge {
-                    source: rid,
-                    target: nid,
-                    relation: "rationale_for".to_string(),
-                    confidence: crate::types::Confidence::EXTRACTED,
-                    source_file: str_path.to_string(),
-                    source_location: Some(format!("L{line}")),
-                    confidence_score: Some(1.0),
-                    weight: 1.0,
-                    original_src: None,
-                    original_tgt: None,
-                });
             }
+            // Function bodies aren't descended (matches original).
+            continue;
         }
-        return;
-    }
-    let cursor = &mut node.walk();
-    for child in node.children(cursor) {
-        walk_docstrings(
-            &child, source, stem, parent_nid, nodes, edges, seen_ids, str_path,
-        );
+        // Default: descend.
+        let cursor = &mut node.walk();
+        let kids: Vec<tree_sitter::Node<'tree>> = node.children(cursor).collect();
+        for child in kids.into_iter().rev() {
+            stack.push(child);
+        }
     }
 }
 

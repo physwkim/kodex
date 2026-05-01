@@ -282,8 +282,7 @@ mod tests {
 
     #[test]
     fn parse_logical_key_extracts_source_and_leaf() {
-        let (src, leaf) =
-            parse_logical_key("src/foo.rs::Server.handle_request");
+        let (src, leaf) = parse_logical_key("src/foo.rs::Server.handle_request");
         assert_eq!(src.as_deref(), Some("src/foo.rs"));
         assert_eq!(leaf, "handle_request");
     }
@@ -313,12 +312,7 @@ mod tests {
             linked_logical_key: "src/server.rs::handle_search".into(),
         }];
 
-        let orphans = detect_renames(
-            &graph,
-            &links,
-            &HashMap::new(),
-            &DetectQuery::default(),
-        );
+        let orphans = detect_renames(&graph, &links, &HashMap::new(), &DetectQuery::default());
         assert_eq!(orphans.len(), 1);
         let orph = &orphans[0];
         assert_eq!(orph.lost_node_uuid, "uuid-old");
@@ -350,20 +344,12 @@ mod tests {
             source: String::new(),
             linked_logical_key: "src/old_home.rs::different_name".into(),
         }];
-        let orphans = detect_renames(
-            &graph,
-            &links,
-            &HashMap::new(),
-            &DetectQuery::default(),
-        );
+        let orphans = detect_renames(&graph, &links, &HashMap::new(), &DetectQuery::default());
         assert_eq!(orphans.len(), 1);
         let c = &orphans[0].candidates[0];
         assert_eq!(c.label, "moved_fn");
         assert!(c.confidence >= 0.9);
-        assert!(c
-            .signals
-            .iter()
-            .any(|s| s.contains("body_hash_match")));
+        assert!(c.signals.iter().any(|s| s.contains("body_hash_match")));
     }
 
     #[test]
@@ -385,12 +371,8 @@ mod tests {
             source: String::new(),
             linked_logical_key: "src/x.rs::alive".into(),
         }];
-        assert!(detect_renames(
-            &graph,
-            &links,
-            &HashMap::new(),
-            &DetectQuery::default()
-        )
-        .is_empty());
+        assert!(
+            detect_renames(&graph, &links, &HashMap::new(), &DetectQuery::default()).is_empty()
+        );
     }
 }

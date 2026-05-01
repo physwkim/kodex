@@ -159,7 +159,11 @@ fn git_config_global_get(key: &str) -> Option<String> {
         return None;
     }
     let v = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 /// Set `git config --global <key> <value>`.
@@ -207,7 +211,9 @@ pub fn install_global() -> String {
     // Conflict check: refuse to overwrite a non-kodex core.hooksPath.
     if let Some(existing) = git_config_global_get("core.hooksPath") {
         let existing_path = expand_tilde(&existing);
-        let kodex_canon = kodex_dir.canonicalize().unwrap_or_else(|_| kodex_dir.clone());
+        let kodex_canon = kodex_dir
+            .canonicalize()
+            .unwrap_or_else(|_| kodex_dir.clone());
         let existing_canon = existing_path
             .canonicalize()
             .unwrap_or_else(|_| existing_path.clone());
@@ -226,9 +232,7 @@ pub fn install_global() -> String {
     }
 
     let mut results = Vec::new();
-    let script = format!(
-        "#!/bin/sh\n{HOOK_MARKER}{HOOK_SCRIPT}{HOOK_MARKER_END}\n"
-    );
+    let script = format!("#!/bin/sh\n{HOOK_MARKER}{HOOK_SCRIPT}{HOOK_MARKER_END}\n");
 
     for hook_name in &["post-commit", "post-checkout"] {
         let hook_path = kodex_dir.join(hook_name);
@@ -276,7 +280,9 @@ pub fn uninstall_global() -> String {
 
     if let Some(existing) = git_config_global_get("core.hooksPath") {
         let existing_path = expand_tilde(&existing);
-        let kodex_canon = kodex_dir.canonicalize().unwrap_or_else(|_| kodex_dir.clone());
+        let kodex_canon = kodex_dir
+            .canonicalize()
+            .unwrap_or_else(|_| kodex_dir.clone());
         let existing_canon = existing_path
             .canonicalize()
             .unwrap_or_else(|_| existing_path.clone());
@@ -315,7 +321,9 @@ pub fn status_global() -> String {
     }
 
     let core_hooks_path = git_config_global_get("core.hooksPath");
-    let kodex_canon = kodex_dir.canonicalize().unwrap_or_else(|_| kodex_dir.clone());
+    let kodex_canon = kodex_dir
+        .canonicalize()
+        .unwrap_or_else(|_| kodex_dir.clone());
     let active = core_hooks_path
         .as_deref()
         .map(|p| {

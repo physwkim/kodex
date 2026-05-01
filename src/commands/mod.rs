@@ -181,6 +181,14 @@ pub fn update(path: &Path) {
 /// registered, so a global `core.hooksPath` can be set without affecting
 /// unrelated repos. Opt-in is implicit — `kodex run <path>` registers the
 /// project, after which commits there auto-update the graph.
+///
+/// Sibling-repo guard: when the registered entry is a directory that *contains*
+/// the current git repo (e.g. `~/codes` registered, commit fired in
+/// `~/codes/graphify/.git/`), the resolved entry is an ancestor of an
+/// unrelated nested project. Updating the entry in that case re-extracts every
+/// sibling under the umbrella, which is rarely intended and can blow the stack
+/// on large monorepos. We detect this by comparing git toplevel paths and
+/// skip when they differ.
 pub fn auto_update() {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
@@ -192,6 +200,27 @@ pub fn auto_update() {
     };
 
     let project_path = entry.path;
+
+    // Skip when cwd's git repo and the registered entry's git repo differ.
+    // Returns None when either path isn't inside a git working tree — in that
+    // case we fall through and update (preserves the rare case of a registered
+    // non-git directory).
+    let cwd_git = git_toplevel(&cwd);
+    let entry_git = git_toplevel(&project_path);
+    if let (Some(c), Some(e)) = (&cwd_git, &entry_git) {
+        if c != e {
+            eprintln!(
+                "kodex auto-update: skipping — cwd's git repo ({}) differs from \
+                 registered entry's git repo ({}). The registered path is an \
+                 ancestor of an unrelated nested repo. Run `kodex run <path>` \
+                 inside the nested repo to register it directly.",
+                c.display(),
+                e.display()
+            );
+            return;
+        }
+    }
+
     update(&project_path);
 
     let db = kodex::registry::global_db();
@@ -201,6 +230,35 @@ pub fn auto_update() {
             Ok(n) => println!("  ingested {n} knowledge entries"),
             Err(e) => eprintln!("  ingest error: {e}"),
         }
+
+        // Delta-encode new/changed chunks so `semantic_search` stays current
+        // after every commit. Skips already-embedded rows via MODEL_ID check.
+        #[cfg(feature = "embeddings")]
+        {
+            let _ = embed::embed_nodes(&db, None, true);
+            let _ = embed::embed_chunks(&db, true);
+        }
+    }
+}
+
+/// Return the git working-tree root containing `p`, or `None` if `p` is not
+/// inside a git repo (or git is unavailable). Used by `auto_update` to detect
+/// the sibling-repo case described above.
+fn git_toplevel(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(p)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(s))
     }
 }
 

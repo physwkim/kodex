@@ -113,11 +113,7 @@ pub fn co_changes(repo_dir: &Path, query: &CoChangeQuery) -> std::io::Result<CoC
         })
         .filter(|c| c.weight >= query.min_weight)
         .collect();
-    co.sort_by(|a, b| {
-        b.commits
-            .cmp(&a.commits)
-            .then_with(|| a.file.cmp(&b.file))
-    });
+    co.sort_by(|a, b| b.commits.cmp(&a.commits).then_with(|| a.file.cmp(&b.file)));
     co.truncate(query.top_n);
 
     Ok(CoChangeResult {
@@ -198,11 +194,7 @@ mod tests {
         if result.target_commits == 0 {
             return; // Nothing to assert in a fresh repo.
         }
-        let files: Vec<&str> = result
-            .co_changes
-            .iter()
-            .map(|c| c.file.as_str())
-            .collect();
+        let files: Vec<&str> = result.co_changes.iter().map(|c| c.file.as_str()).collect();
         assert!(
             files.contains(&"Cargo.lock"),
             "Cargo.lock should co-change with Cargo.toml: {files:?}"

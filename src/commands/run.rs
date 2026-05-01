@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-pub fn run_pipeline(path: &Path) {
+pub fn run_pipeline(path: &Path, no_embed: bool) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let project_name = canonical
         .file_name()
@@ -106,9 +106,7 @@ pub fn run_pipeline(path: &Path) {
     // Chunk files for chunk-level semantic retrieval. Both code and prose
     // (markdown / txt / rst / html) are chunked — code chunks gain a
     // best-effort `node_id` when an extracted node starts inside the chunk's
-    // line range; prose chunks always carry `node_id=NULL`. Embeddings are
-    // computed lazily by `kodex embed` (skipped when the `embeddings`
-    // feature isn't built).
+    // line range; prose chunks always carry `node_id=NULL`.
     {
         let chunk_targets: Vec<PathBuf> = detection
             .files
@@ -118,7 +116,13 @@ pub fn run_pipeline(path: &Path) {
             .map(PathBuf::from)
             .collect();
         if !chunk_targets.is_empty() {
-            match build_and_persist_chunks(&db_path, path, project_name, &chunk_targets, &extraction) {
+            match build_and_persist_chunks(
+                &db_path,
+                path,
+                project_name,
+                &chunk_targets,
+                &extraction,
+            ) {
                 Ok((written, pruned)) => {
                     println!("  chunked {written} segments ({pruned} pruned)");
                 }
@@ -126,6 +130,27 @@ pub fn run_pipeline(path: &Path) {
             }
         }
     }
+
+    // Embed nodes + chunks so `semantic_search` works out of the box. Both
+    // calls are delta-only (skip rows already encoded with the current
+    // MODEL_ID), so re-runs are cheap. First invocation downloads BGE-small
+    // (~30 MB cached under `~/.cache/`). User can opt out with `--no-embed`
+    // for CI/automation flows that only need keyword/graph retrieval.
+    #[cfg(feature = "embeddings")]
+    if !no_embed {
+        match super::embed::embed_nodes(&db_path, None, true) {
+            Ok(0) => {}
+            Ok(n) => println!("  embedded {n} nodes"),
+            Err(e) => eprintln!("  embed (nodes): {e}"),
+        }
+        match super::embed::embed_chunks(&db_path, true) {
+            Ok(0) => {}
+            Ok(n) => println!("  embedded {n} chunks"),
+            Err(e) => eprintln!("  embed (chunks): {e}"),
+        }
+    }
+    #[cfg(not(feature = "embeddings"))]
+    let _ = no_embed;
 
     // Ingest external knowledge (git commits, README)
     match kodex::ingest_knowledge::ingest_project(&db_path, path, 50) {
@@ -209,7 +234,10 @@ fn build_and_persist_chunks(
     // Group nodes by source_file once for O(1) per-file lookup.
     let mut nodes_by_file: HashMap<&str, Vec<&kodex::types::Node>> = HashMap::new();
     for n in &extraction.nodes {
-        nodes_by_file.entry(n.source_file.as_str()).or_default().push(n);
+        nodes_by_file
+            .entry(n.source_file.as_str())
+            .or_default()
+            .push(n);
     }
 
     let mut all_chunks: Vec<kodex::storage::StoredChunk> = Vec::new();
@@ -235,12 +263,8 @@ fn build_and_persist_chunks(
             .get(source_file.as_str())
             .cloned()
             .unwrap_or_default();
-        let chunks = kodex::extract::chunker::chunk_file(
-            &source_file,
-            disk_path,
-            language,
-            &nodes_in_file,
-        );
+        let chunks =
+            kodex::extract::chunker::chunk_file(&source_file, disk_path, language, &nodes_in_file);
         for c in &chunks {
             keep_ids.insert(c.id.clone());
         }

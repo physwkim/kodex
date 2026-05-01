@@ -1,6 +1,6 @@
 [package]
 name = "kodex"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
@@ -51,8 +51,6 @@ tree-sitter-lua = { version = "0.5", optional = true }
 rayon = { version = "1", optional = true }
 reqwest = { version = "0.12", features = ["blocking"], optional = true }
 notify = { version = "7", optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
-plotters = { version = "0.3", optional = true }
 whisper-rs = { version = "0.16", optional = true }
 hound = { version = "3", optional = true }
 
@@ -61,7 +59,7 @@ tempfile = "3"
 insta = "1"
 
 [features]
-default = ["extract", "all-languages"]
+default = ["extract", "all-languages", "embeddings", "parallel", "watch"]
 extract = ["tree-sitter"]
 lang-python = ["extract", "tree-sitter-python"]
 lang-javascript = ["extract", "tree-sitter-javascript"]
@@ -87,9 +85,7 @@ all-languages = [
 ]
 fetch = ["reqwest"]
 watch = ["notify"]
-mcp = ["tokio"]
-svg = ["plotters"]
 parallel = ["rayon"]
 video = ["whisper-rs", "hound"]
 embeddings = ["fastembed"]
-all = ["all-languages", "fetch", "watch", "mcp", "svg", "parallel"]
+all = ["all-languages", "fetch", "watch", "parallel", "embeddings"]

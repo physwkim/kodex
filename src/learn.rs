@@ -158,6 +158,22 @@ pub fn learn_with_uuid(
     tags: &[String],
     context_uuid: Option<&str>,
 ) -> crate::error::Result<String> {
+    // Hard cap on description size: ~500 tokens. Forces 1-fact-per-entry —
+    // multi-defect dumps (e.g. "Round 2 review B2-G1..B2-G8" in one entry)
+    // make recall noisy and staleness imprecise (one fix invalidates eight).
+    // Agents that hit this should split into per-fact entries linked via
+    // `context_uuid` (chain-of-thought) or shared `related_nodes`. Bypass:
+    // direct callers of `storage::append_knowledge` (ingest, import) — those
+    // ingest pre-shaped content and aren't subject to the discipline.
+    const MAX_DESCRIPTION_CHARS: usize = 2000;
+    let desc_len = description.chars().count();
+    if desc_len > MAX_DESCRIPTION_CHARS {
+        return Err(crate::error::KodexError::Other(format!(
+            "description too long ({desc_len} chars > {MAX_DESCRIPTION_CHARS} cap). \
+             Split into 1-fact-per-entry; link related entries via \
+             context_uuid (chain-of-thought) or shared related_nodes."
+        )));
+    }
     let new_uuid = crate::storage::append_knowledge_with_uuid(
         db_path,
         knowledge_uuid,
@@ -655,7 +671,17 @@ pub fn detect_stale_detailed(db_path: &Path) -> crate::error::Result<Vec<StaleIn
                         staleness,
                         action: "validate: linked code has changed, knowledge may be outdated".into(),
                     });
-                    // Don't change status — advisory until agent validates
+                    // Auto-promote when drift is severe (>2/3 of linked bodies
+                    // changed). Below this threshold the change is likely
+                    // cosmetic (rename, comment edit) and stays advisory so
+                    // the agent isn't flooded with false positives. Mirrors
+                    // the auto-promotion already applied to other stale
+                    // signals (all-nodes-gone, partial >50%, never-retrieved).
+                    if staleness > 0.4 {
+                        entry.status = "needs_review".to_string();
+                        entry.confidence *= 0.95;
+                        changed = true;
+                    }
                 }
             }
         }
@@ -674,7 +700,10 @@ pub fn detect_stale_detailed(db_path: &Path) -> crate::error::Result<Vec<StaleIn
                     let reason = if entry.fetch_count == 0 {
                         format!("Never retrieved in {idle_days} days since creation")
                     } else {
-                        format!("Not retrieved in {idle_days} days (last fetch_count={})", entry.fetch_count)
+                        format!(
+                            "Not retrieved in {idle_days} days (last fetch_count={})",
+                            entry.fetch_count
+                        )
                     };
                     stale_entries.push(StaleInfo {
                         uuid: entry.uuid.clone(),
@@ -752,6 +781,9 @@ pub struct ScoreBreakdown {
     pub total: f64,
     pub confidence: f64,
     pub observations: f64,
+    /// Log-scaled `fetch_count` — rewards entries that survived passive
+    /// retrieval. Distinct from `observations` (explicit `learn` reinforcement).
+    pub retrievals: f64,
     pub node_overlap: f64,
     pub file_mention: f64,
     pub scope_match: f64,
@@ -773,6 +805,7 @@ fn relevance_score_detailed(
         total: 0.0,
         confidence: 0.0,
         observations: 0.0,
+        retrievals: 0.0,
         node_overlap: 0.0,
         file_mention: 0.0,
         scope_match: 0.0,
@@ -787,8 +820,19 @@ fn relevance_score_detailed(
     // 1. Confidence (0-20)
     b.confidence = k.confidence * 20.0;
 
-    // 2. Observations (0-10, log scale)
+    // 2. Observations (0-10, log scale): explicit `learn` reinforcement.
     b.observations = (k.observations as f64).ln().min(3.0) * 3.3;
+
+    // 2b. Retrievals (0-10, log scale): passive recall reuse. Uses ln_1p so
+    // never-fetched entries (fetch_count=0) score 0, single-fetch scores ~2.3.
+    // Distinct from observations: an entry can be retrieved without anyone
+    // re-running `learn` on it. Without this term, fetch_count is dead weight
+    // even though storage::bump_fetch_counters maintains it on every recall.
+    b.retrievals = (entry.fetch_count as f64).ln_1p().min(3.0) * 3.3;
+    if entry.fetch_count > 5 {
+        b.reasons
+            .push(format!("retrieved {}× before", entry.fetch_count));
+    }
 
     // 3. Node overlap (0-30)
     if !ctx.node_uuids.is_empty() {
@@ -866,18 +910,18 @@ fn relevance_score_detailed(
         _ => 0.0,
     };
 
-    // 9. Recency (-10..+10) — graduated decay from the most recent activity signal.
-    // Uses the freshest of: validation, retrieval, update, creation. Old knowledge
-    // gets a negative score so closed-out audit notes sink under live entries.
-    let last_active = [
-        entry.last_validated_at,
-        entry.last_fetched,
-        entry.updated_at,
-        entry.created_at,
-    ]
-    .into_iter()
-    .max()
-    .unwrap_or(0);
+    // 9. Recency (-10..+10) — graduated decay from the most recent *content*
+    // signal. Uses the freshest of: validation, update, creation. Excludes
+    // `last_fetched` deliberately: a fetched entry already gets credit via
+    // `b.retrievals`, and folding `last_fetched` into recency makes activity
+    // logs perpetually fresh — every recall hit resets their age. With
+    // `last_fetched` excluded, an entry's recency is anchored to when its
+    // *content* was last touched (validation/edit/birth), not to whether it
+    // was lately surfaced.
+    let last_active = [entry.last_validated_at, entry.updated_at, entry.created_at]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
     if last_active > 0 && ctx.now >= last_active {
         let age_days = (ctx.now - last_active) / 86400;
         b.recency = if age_days < 7 {
@@ -914,6 +958,7 @@ fn relevance_score_detailed(
     // Sum
     b.total = b.confidence
         + b.observations
+        + b.retrievals
         + b.node_overlap
         + b.file_mention
         + b.scope_match
@@ -1076,9 +1121,9 @@ pub fn recall_for_task(
         max_items,
         type_filter,
     )
-        .into_iter()
-        .map(|r| r.knowledge)
-        .collect()
+    .into_iter()
+    .map(|r| r.knowledge)
+    .collect()
 }
 
 /// Structured task context for machine consumption.
@@ -2980,17 +3025,8 @@ mod tests {
     fn test_update_knowledge_rejects_unknown_superseded_by() {
         let dir = TempDir::new().unwrap();
         let db = make_test_db(dir.path());
-        let uuid = learn_with_uuid(
-            &db,
-            None,
-            KnowledgeType::Pattern,
-            "x",
-            "y",
-            None,
-            &[],
-            None,
-        )
-        .unwrap();
+        let uuid =
+            learn_with_uuid(&db, None, KnowledgeType::Pattern, "x", "y", None, &[], None).unwrap();
         let updates = KnowledgeUpdates {
             superseded_by: Some("does-not-exist".to_string()),
             ..Default::default()
