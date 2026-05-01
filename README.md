@@ -14,14 +14,23 @@ kodex install claude        # register MCP server in Claude Code
 ## Quick Start
 
 ```bash
-kodex run .                             # analyze + chunk + embed → ~/.kodex/kodex.db (registers project)
+kodex run .                             # analyze codebase → ~/.kodex/kodex.db (registers project)
 kodex query "how does auth work"        # search
 kodex explain "AuthService"             # node details
 kodex list                              # registered projects
 kodex forget --below 0.3                # clean low-confidence knowledge
 ```
 
-`kodex run` includes BGE-small encoding for `semantic_search` by default (delta-only — only new/changed chunks re-encode). First invocation downloads the ONNX model (~30 MB, cached under `~/.cache/`). Pass `--no-embed` for CI flows that only need keyword/graph retrieval. After `kodex run`, the project is registered and a global git hook (installed by `kodex install claude`) auto-updates graph + chunks + embeddings + knowledge on every commit. Unregistered repos see no effect.
+After `kodex run`, the project is registered and a global git hook (installed by `kodex install claude`) auto-updates graph + chunks + knowledge on every commit. Unregistered repos see no effect.
+
+**Optional: natural-language search.** Build with `--features embeddings` to enable `semantic_search` (BGE-small chunk encoding, ~30 MB ONNX model on first run). Embedding adds CPU + time to every run, so it's opt-in:
+
+```bash
+cargo install --path . --features embeddings
+kodex run .                             # auto-embeds; pass --no-embed to skip
+```
+
+Without the feature, keyword (`recall`, `query_graph`) and graph (`find_callers`, `trace_call_path`) retrieval still work — only `semantic_search` is gated.
 
 ## Architecture
 
@@ -641,9 +650,9 @@ Python, JavaScript, TypeScript, Go, Rust, Java, C, C++, Ruby, C#, Scala, PHP, Sw
 | `extract` | AST extraction (default) |
 | `lang-*` | Per-language parsers |
 | `all-languages` | All 14 languages (default) |
-| `embeddings` | BGE-small chunk embeddings + `semantic_search` (default) |
 | `parallel` | Parallel extraction via rayon (default) |
 | `watch` | `kodex watch` file monitoring (default) |
+| `embeddings` | BGE-small chunk embeddings + `semantic_search` (opt-in — adds ONNX runtime, CPU per run) |
 | `fetch` | `kodex add <url>` URL fetching (opt-in — pulls reqwest) |
 | `video` | Audio/video transcription via whisper.cpp (opt-in — heavy) |
 | `all` | Everything except `video` |

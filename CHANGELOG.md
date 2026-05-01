@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.13.1 (2026-05-02)
+
+`embeddings` removed from `default` features. Reverts the v0.13.0 decision to ship semantic search out-of-the-box: BGE-small encoding ran on every `kodex run` even for small repos, and the CPU + first-run model download (~30 MB) was disproportionate for users whose workflow is keyword/graph navigation.
+
+- `default = ["extract", "all-languages", "parallel", "watch"]` (was `[..., "embeddings"]`).
+- `embeddings` remains opt-in via `cargo install --path . --features embeddings`. The auto-embed step in `kodex run` and `auto_update` is feature-gated, so opted-in builds keep the v0.13.0 behavior unchanged.
+- README Quick Start + Feature Flags table updated to reflect the rollback.
+
+Anyone running natural-language `semantic_search` queries should rebuild with `--features embeddings`. Keyword (`recall`, `query_graph`) and graph (`find_callers`, `trace_call_path`) retrieval are unaffected.
+
 ## v0.13.0 (2026-05-02)
 
 Reliability + retrieval polish. Headline shifts: `kodex run` now auto-embeds chunks (no separate `kodex embed` step), `semantic_search` ships in default builds, the AST walker no longer blows the stack on deeply-nested input, and `recall_for_task` scoring rewards reused entries instead of leaving the signal dead.

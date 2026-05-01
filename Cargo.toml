@@ -1,6 +1,6 @@
 [package]
 name = "kodex"
-version = "0.13.0"
+version = "0.13.1"
 edition = "2021"
 description = "AI knowledge graph with persistent memory across sessions"
 license = "MIT"
@@ -59,7 +59,7 @@ tempfile = "3"
 insta = "1"
 
 [features]
-default = ["extract", "all-languages", "embeddings", "parallel", "watch"]
+default = ["extract", "all-languages", "parallel", "watch"]
 extract = ["tree-sitter"]
 lang-python = ["extract", "tree-sitter-python"]
 lang-javascript = ["extract", "tree-sitter-javascript"]
