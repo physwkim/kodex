@@ -543,10 +543,8 @@ fn walk_calls(
     }
 
     if config.call_types.contains(&node.kind()) {
-        let callee_name = extract_callee_name(node, source, config);
-
-        if let Some(name) = callee_name {
-            let name_lower = name.to_lowercase();
+        if let Some(target) = extract_call_target(node, source, config) {
+            let name_lower = target.callee.to_lowercase();
             if let Some(tgt_nid) = label_to_nid.get(&name_lower) {
                 if tgt_nid != caller_nid {
                     let pair = (caller_nid.to_string(), tgt_nid.clone());
@@ -570,9 +568,11 @@ fn walk_calls(
                 // Save for cross-file resolution
                 raw_calls.push(RawCall {
                     caller_nid: caller_nid.to_string(),
-                    callee: name,
+                    callee: target.callee,
                     source_file: str_path.to_string(),
                     source_location: Some(format!("L{}", node.start_position().row + 1)),
+                    receiver: target.receiver,
+                    receiver_is_self: target.receiver_is_self,
                 });
             }
         }
@@ -595,20 +595,100 @@ fn walk_calls(
     }
 }
 
-/// Extract the callee name from a call expression node.
+/// Result of resolving a call site: callee name + optional receiver.
 #[cfg(feature = "extract")]
-fn extract_callee_name(node: &Node, source: &[u8], config: &LanguageConfig) -> Option<String> {
+pub(crate) struct CallTarget {
+    pub callee: String,
+    pub receiver: Option<String>,
+    pub receiver_is_self: bool,
+}
+
+/// Extract the callee name + receiver from a call expression node.
+///
+/// Three cases handled:
+/// 1. **Call node IS the accessor** (Java `method_invocation`, Ruby `call`,
+///    PHP `member_call_expression`). Receiver lives at `config.call_object_field`
+///    on the call node itself.
+/// 2. **Standard accessor child** (Rust `field_expression`, Go
+///    `selector_expression`, JS `member_expression`, Python `attribute`, …).
+///    The call's `function` field is the accessor; receiver is the first named
+///    child of the accessor that isn't the method name.
+/// 3. **Bare or path-style** (`foo()`, `Type::method()`, `Module::function`).
+///    Plain text is split on the last `::` to recover Rust/Ruby path receivers.
+#[cfg(feature = "extract")]
+fn extract_call_target(node: &Node, source: &[u8], config: &LanguageConfig) -> Option<CallTarget> {
+    // Case 1: call node itself is in accessor types (Java/Ruby/PHP-member).
+    if config.call_accessor_node_types.contains(&node.kind()) {
+        let method_node = node.child_by_field_name(config.call_accessor_field)?;
+        let callee = read_text(&method_node, source).to_string();
+        let receiver = config
+            .call_object_field
+            .and_then(|f| node.child_by_field_name(f))
+            .map(|n| read_text(&n, source).to_string());
+        let receiver_is_self = receiver.as_deref().map(is_self_ref).unwrap_or(false);
+        return Some(CallTarget {
+            callee,
+            receiver,
+            receiver_is_self,
+        });
+    }
+
     let func_node = node.child_by_field_name(config.call_function_field)?;
     let func_type = func_node.kind();
 
-    // Check if it's a member/attribute access (e.g., obj.method())
+    // Case 2: function is an accessor (member/attribute access).
     if config.call_accessor_node_types.contains(&func_type) {
-        // Get the method name from the accessor
-        if let Some(attr_node) = func_node.child_by_field_name(config.call_accessor_field) {
-            return Some(read_text(&attr_node, source).to_string());
+        if let Some(method_node) = func_node.child_by_field_name(config.call_accessor_field) {
+            let callee = read_text(&method_node, source).to_string();
+            let receiver = first_other_named_child(&func_node, &method_node, source);
+            let receiver_is_self = receiver.as_deref().map(is_self_ref).unwrap_or(false);
+            return Some(CallTarget {
+                callee,
+                receiver,
+                receiver_is_self,
+            });
         }
     }
 
-    // Simple function call (e.g., foo())
-    Some(read_text(&func_node, source).to_string())
+    // Case 3: bare call or path-style (Type::method, Module::function).
+    let text = read_text(&func_node, source);
+    if let Some((recv, method)) = text.rsplit_once("::") {
+        let recv = recv.trim();
+        let method = method.trim();
+        if !recv.is_empty() && !method.is_empty() {
+            return Some(CallTarget {
+                callee: method.to_string(),
+                receiver: Some(recv.to_string()),
+                receiver_is_self: is_self_ref(recv),
+            });
+        }
+    }
+
+    Some(CallTarget {
+        callee: text.to_string(),
+        receiver: None,
+        receiver_is_self: false,
+    })
+}
+
+/// Return the first named child of `parent` that isn't `skip` — used to read
+/// the receiver text from a member/selector expression.
+#[cfg(feature = "extract")]
+fn first_other_named_child(parent: &Node, skip: &Node, source: &[u8]) -> Option<String> {
+    let cursor = &mut parent.walk();
+    for child in parent.children(cursor) {
+        if !child.is_named() {
+            continue;
+        }
+        if child.start_byte() == skip.start_byte() && child.end_byte() == skip.end_byte() {
+            continue;
+        }
+        return Some(read_text(&child, source).to_string());
+    }
+    None
+}
+
+#[cfg(feature = "extract")]
+fn is_self_ref(s: &str) -> bool {
+    matches!(s.trim(), "self" | "this" | "Self")
 }

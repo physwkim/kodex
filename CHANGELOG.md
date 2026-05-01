@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Receiver-aware call disambiguation
+
+Cross-file `calls` resolution now uses the call site's receiver expression to pick the right target when multiple nodes share a method name (e.g. `Database.query` and `HttpClient.query`).
+
+- `RawCall` carries `receiver: Option<String>` and `receiver_is_self: bool` extracted from the AST: accessor child (Rust `field_expression.value`, Go `selector_expression.operand`, JS `member_expression.object`, …), the call node's own object field for languages where call IS accessor (Java `method_invocation.object`, Ruby `call.receiver`, PHP `member_call_expression.object`), and `Type::method` text-split for Rust/Ruby path-style calls.
+- Resolution: `label → Vec<nid>` multi-map + `method → containing class label` (built from `method` edges).
+  - `self.method()` → method whose containing class matches the caller's class.
+  - `Type::method()` / `Type.method()` → method whose containing class matches the receiver text.
+  - Variable-receiver bare calls with multiple candidates are **dropped** rather than mis-routed (a wrong `calls` edge silently misleads navigation; missing one is honest).
+- Languages: receiver field added to all 14 language configs. Cache files invalidated automatically — old `RawCall`s deserialize with `receiver: None` (no regression for unresolved cases).
+
 ### Auto-update on commit (registry-gated global git hook)
 
 `kodex install claude` now installs a global git hook (`~/.kodex/git-hooks/`) via `git config --global core.hooksPath`. The hook checks the kodex registry on each commit:

@@ -12,6 +12,7 @@ pub static CPP_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["field_expression", "qualified_identifier"],
     call_accessor_field: "field",
+    call_object_field: None,
     function_boundary_types: &["function_definition", "lambda_expression"],
     function_label_parens: true,
     import_handler: c::C_CONFIG.import_handler,

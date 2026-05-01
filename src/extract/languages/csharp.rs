@@ -50,6 +50,7 @@ pub static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_access_expression"],
     call_accessor_field: "name",
+    call_object_field: None,
     function_boundary_types: &[
         "method_declaration",
         "constructor_declaration",

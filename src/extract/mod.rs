@@ -101,22 +101,78 @@ pub fn extract(paths: &[PathBuf], cache_root: Option<&Path>) -> ExtractionResult
         all_raw_calls.extend(result.raw_calls.clone());
     }
 
-    // Cross-file call resolution
-    let mut global_label_to_nid: HashMap<String, String> = HashMap::new();
+    // Cross-file call resolution.
+    //
+    // Receiver-aware disambiguation: when multiple nodes share a label
+    // (e.g. `Database.query` and `HttpClient.query`), use the RawCall's
+    // `receiver` / `receiver_is_self` to pick the right target. When we
+    // can't disambiguate, the call is dropped rather than mis-routed —
+    // a wrong "calls" edge silently misleads navigation more than a
+    // missing one.
+    let mut label_to_nids: HashMap<String, Vec<String>> = HashMap::new();
     for node in &all_nodes {
         let label = node.label.trim_end_matches("()").to_lowercase();
         if !label.is_empty() {
-            global_label_to_nid.insert(label, node.id.clone());
+            label_to_nids.entry(label).or_default().push(node.id.clone());
+        }
+    }
+
+    // Build {method_nid → containing_class_label_lower} from "method" edges.
+    // Class label is the source of a `method` edge; method nid is the target.
+    let nid_to_label_lower: HashMap<String, String> = all_nodes
+        .iter()
+        .map(|n| {
+            (
+                n.id.clone(),
+                n.label.trim_end_matches("()").to_lowercase(),
+            )
+        })
+        .collect();
+    let mut method_to_class_label: HashMap<String, String> = HashMap::new();
+    for edge in &all_edges {
+        if edge.relation == "method" {
+            if let Some(class_label) = nid_to_label_lower.get(&edge.source) {
+                method_to_class_label.insert(edge.target.clone(), class_label.clone());
+            }
         }
     }
 
     for rc in &all_raw_calls {
         let callee_lower = rc.callee.to_lowercase();
-        if let Some(tgt_nid) = global_label_to_nid.get(&callee_lower) {
-            if *tgt_nid != rc.caller_nid {
+        let candidates = match label_to_nids.get(&callee_lower) {
+            Some(c) if !c.is_empty() => c,
+            _ => continue,
+        };
+
+        let target_nid: Option<&String> = if candidates.len() == 1 {
+            Some(&candidates[0])
+        } else if rc.receiver_is_self {
+            // self.method() → method whose containing class matches caller's
+            method_to_class_label.get(&rc.caller_nid).and_then(|caller_class| {
+                candidates
+                    .iter()
+                    .find(|nid| method_to_class_label.get(*nid) == Some(caller_class))
+            })
+        } else if let Some(recv) = rc.receiver.as_deref() {
+            // Type::method() or Type.method() — match receiver to class label.
+            let recv_lower = recv.to_lowercase();
+            candidates.iter().find(|nid| {
+                method_to_class_label
+                    .get(*nid)
+                    .map(|c| c == &recv_lower)
+                    .unwrap_or(false)
+            })
+        } else {
+            // Bare call with multiple candidates and no receiver hint:
+            // ambiguous, skip rather than guess.
+            None
+        };
+
+        if let Some(tgt) = target_nid {
+            if *tgt != rc.caller_nid {
                 all_edges.push(crate::types::Edge {
                     source: rc.caller_nid.clone(),
-                    target: tgt_nid.clone(),
+                    target: tgt.clone(),
                     relation: "calls".to_string(),
                     confidence: crate::types::Confidence::INFERRED,
                     source_file: rc.source_file.clone(),

@@ -45,6 +45,7 @@ pub static RUBY_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "method",
     call_accessor_node_types: &["call"],
     call_accessor_field: "method",
+    call_object_field: Some("receiver"),
     function_boundary_types: &["method", "singleton_method", "block", "lambda"],
     function_label_parens: true,
     import_handler: Some(import_ruby),

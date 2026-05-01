@@ -44,6 +44,7 @@ pub static SWIFT_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_expression"],
     call_accessor_field: "member",
+    call_object_field: None,
     function_boundary_types: &["function_declaration", "closure_expression"],
     function_label_parens: true,
     import_handler: Some(import_swift),

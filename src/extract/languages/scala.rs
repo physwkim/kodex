@@ -43,6 +43,7 @@ pub static SCALA_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["field_expression"],
     call_accessor_field: "field",
+    call_object_field: None,
     function_boundary_types: &["function_definition", "lambda_expression"],
     function_label_parens: true,
     import_handler: Some(import_scala),

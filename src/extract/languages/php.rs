@@ -49,6 +49,7 @@ pub static PHP_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["member_call_expression"],
     call_accessor_field: "name",
+    call_object_field: Some("object"),
     function_boundary_types: &[
         "function_definition",
         "method_declaration",

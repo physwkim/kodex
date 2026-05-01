@@ -65,6 +65,14 @@ pub struct LanguageConfig {
     /// Field on accessor node for the method/attribute name.
     pub call_accessor_field: &'static str,
 
+    /// Field on the *call node* (not the accessor) that holds the receiver
+    /// expression. Set when a language's call type carries `object` /
+    /// `receiver` directly (e.g. Java `method_invocation.object`,
+    /// Python `call.function` is itself an attribute, etc.). For most
+    /// languages this is `None` — receiver is the first named child of the
+    /// accessor.
+    pub call_object_field: Option<&'static str>,
+
     /// Stop recursion at these node types during call-graph walk.
     pub function_boundary_types: &'static [&'static str],
 

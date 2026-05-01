@@ -51,6 +51,7 @@ pub static JAVA_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "name",
     call_accessor_node_types: &["method_invocation"],
     call_accessor_field: "name",
+    call_object_field: Some("object"),
     function_boundary_types: &[
         "method_declaration",
         "constructor_declaration",

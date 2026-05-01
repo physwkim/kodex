@@ -48,6 +48,7 @@ pub static LUA_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "name",
     call_accessor_node_types: &["method_index_expression"],
     call_accessor_field: "method",
+    call_object_field: None,
     function_boundary_types: &["function_declaration", "function_definition"],
     function_label_parens: true,
     import_handler: Some(import_lua),

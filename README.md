@@ -301,6 +301,15 @@ Obs 1: 0.60 → Obs 2: 0.68 → Obs 3: 0.74 → Obs 5: 0.83 → Obs 10: 0.93
 | `save_insight` | Link nodes with pattern |
 | `save_note` | Free-text memo |
 | `add_edge` | Add relationship |
+| `find_callers` / `find_callees` | Static call-graph lookup |
+| `trace_call_path` | Path between two functions |
+| `detect_cycles` | Find call cycles |
+
+**Call-graph precision.** `calls` edges are extracted from tree-sitter ASTs and disambiguated by receiver context:
+
+- `self.method()` / `this.method()` resolves to the method on the caller's containing class.
+- `Type::method()` (Rust) / `Type.method()` (static-style) resolves by matching receiver text to the class label.
+- Variable-receiver bare calls (`db.query()` where multiple classes define `query`) are **dropped** rather than mis-routed when type inference would be needed — a missing edge is more honest than a wrong one. Future work: local type tracking to recover these.
 
 ## Claude Memory Sync
 

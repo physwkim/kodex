@@ -174,6 +174,14 @@ pub struct RawCall {
     pub source_file: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_location: Option<String>,
+    /// Text of the receiver expression for member-style calls (`obj.foo()`,
+    /// `Type::foo()`). `None` for bare function calls (`foo()`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// True if the receiver is `self` / `this` / `Self` — caller's containing
+    /// class is the resolution target.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub receiver_is_self: bool,
 }
 
 // ---------------------------------------------------------------------------

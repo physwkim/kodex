@@ -59,6 +59,7 @@ pub static GO_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["selector_expression"],
     call_accessor_field: "field",
+    call_object_field: None,
     function_boundary_types: &["function_declaration", "method_declaration", "func_literal"],
     function_label_parens: true,
     import_handler: Some(import_go),

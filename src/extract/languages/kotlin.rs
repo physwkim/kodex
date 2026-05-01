@@ -49,6 +49,7 @@ pub static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["navigation_expression"],
     call_accessor_field: "navigation_suffix",
+    call_object_field: None,
     function_boundary_types: &["function_declaration", "lambda_literal"],
     function_label_parens: true,
     import_handler: Some(import_kotlin),

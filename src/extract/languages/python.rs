@@ -70,6 +70,7 @@ pub static PYTHON_CONFIG: LanguageConfig = LanguageConfig {
     call_function_field: "function",
     call_accessor_node_types: &["attribute"],
     call_accessor_field: "attribute",
+    call_object_field: None,
     function_boundary_types: &["function_definition"],
     function_label_parens: true,
     import_handler: Some(import_python),
