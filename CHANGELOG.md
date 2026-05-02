@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.13.2 (2026-05-02)
+
+`kodex install codex` now registers the MCP server automatically. Previously the codex platform fell through to the generic "MCP: not supported for this platform (manual setup needed)" message — only the skill file and git hooks were wired, and users had to hand-edit `~/.codex/config.toml`.
+
+- New `install_mcp_codex` / `uninstall_mcp_codex` in `src/install.rs`. Appends a `[mcp_servers.kodex]` block to `~/.codex/config.toml`; preserves any existing `[projects."..."]` (or other) sections by treating the file as plain text and writing at EOF.
+- Idempotent: re-running `kodex install codex` reports `already registered` instead of duplicating the section. `kodex uninstall codex` removes only the `[mcp_servers.kodex]` block, leaving unrelated sections intact.
+- No new TOML-parser dependency. Each `[...]` header opens a fresh table context, so an EOF append is always valid TOML regardless of what came before it.
+
 ## v0.13.1 (2026-05-02)
 
 `embeddings` removed from `default` features. Reverts the v0.13.0 decision to ship semantic search out-of-the-box: BGE-small encoding ran on every `kodex run` even for small repos, and the CPU + first-run model download (~30 MB) was disproportionate for users whose workflow is keyword/graph navigation.

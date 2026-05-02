@@ -334,6 +334,7 @@ pub fn install(platform: Option<&str>, target_dir: &Path) -> String {
     let mcp_result = match platform {
         "claude" => install_mcp_claude(target_dir),
         "cursor" => install_mcp_cursor(target_dir),
+        "codex" => install_mcp_codex(target_dir),
         _ => "MCP: not supported for this platform (manual setup needed)".to_string(),
     };
     results.push(mcp_result);
@@ -380,6 +381,7 @@ pub fn uninstall(platform: Option<&str>, target_dir: &Path) -> String {
     let mcp_result = match platform {
         "claude" => uninstall_mcp_claude(target_dir),
         "cursor" => uninstall_mcp_cursor(target_dir),
+        "codex" => uninstall_mcp_codex(target_dir),
         _ => "MCP: manual removal needed".to_string(),
     };
     results.push(mcp_result);
@@ -656,6 +658,101 @@ fn uninstall_mcp_cursor(target_dir: &Path) -> String {
     "MCP: not registered".to_string()
 }
 
+// --- Codex MCP ---
+//
+// Codex CLI reads MCP server config from `~/.codex/config.toml`:
+//
+//     [mcp_servers.kodex]
+//     command = "kodex"
+//     args = ["serve"]
+//
+// We append/remove this section as plain text rather than pulling in a TOML
+// parser — Codex's config is a flat collection of `[section]` blocks, and a
+// `[mcp_servers.kodex]` table appended at EOF is always valid TOML regardless
+// of what came before it.
+
+fn has_mcp_kodex_section(text: &str) -> bool {
+    text.lines().any(|line| {
+        let t = line.trim();
+        t == "[mcp_servers.kodex]" || t == "[mcp_servers.\"kodex\"]"
+    })
+}
+
+fn install_mcp_codex(target_dir: &Path) -> String {
+    let config_path = target_dir.join(".codex/config.toml");
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    if has_mcp_kodex_section(&existing) {
+        return format!("MCP: already registered in {}", config_path.display());
+    }
+
+    let kodex_bin = find_kodex_binary();
+    // TOML basic-string escaping (backslash + double-quote).
+    let bin_escaped = kodex_bin.replace('\\', "\\\\").replace('"', "\\\"");
+
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    if !content.is_empty() {
+        content.push('\n');
+    }
+    content.push_str("[mcp_servers.kodex]\n");
+    content.push_str(&format!("command = \"{bin_escaped}\"\n"));
+    content.push_str("args = [\"serve\"]\n");
+
+    match std::fs::write(&config_path, content) {
+        Ok(()) => format!("MCP: registered in {}", config_path.display()),
+        Err(e) => format!("MCP: failed to write: {e}"),
+    }
+}
+
+fn uninstall_mcp_codex(target_dir: &Path) -> String {
+    let config_path = target_dir.join(".codex/config.toml");
+    if !config_path.exists() {
+        return "MCP: not registered".to_string();
+    }
+    let text = match std::fs::read_to_string(&config_path) {
+        Ok(t) => t,
+        Err(_) => return "MCP: failed to read".to_string(),
+    };
+    if !has_mcp_kodex_section(&text) {
+        return "MCP: not registered".to_string();
+    }
+
+    let mut output = String::new();
+    let mut skipping = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let is_section_header = trimmed.starts_with('[') && trimmed.ends_with(']');
+        if skipping {
+            if is_section_header {
+                skipping = false;
+                output.push_str(line);
+                output.push('\n');
+            }
+            // else: drop line (it belongs to [mcp_servers.kodex])
+        } else if trimmed == "[mcp_servers.kodex]" || trimmed == "[mcp_servers.\"kodex\"]" {
+            skipping = true;
+            // Drop a single trailing blank line that was inserted by install().
+            if output.ends_with("\n\n") {
+                output.pop();
+            }
+        } else {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    match std::fs::write(&config_path, output) {
+        Ok(()) => format!("MCP: removed from {}", config_path.display()),
+        Err(e) => format!("MCP: failed to write: {e}"),
+    }
+}
+
 // --- Helpers ---
 
 fn find_kodex_binary() -> String {
@@ -751,5 +848,66 @@ mod tests {
             updated, "stale content",
             "stale file should have been overwritten"
         );
+    }
+
+    #[test]
+    fn test_install_mcp_codex_writes_section() {
+        let dir = TempDir::new().unwrap();
+        let report = install_mcp_codex(dir.path());
+        assert!(report.contains("registered"), "report: {report}");
+
+        let config = dir.path().join(".codex/config.toml");
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(text.contains("[mcp_servers.kodex]"), "config: {text}");
+        assert!(text.contains("args = [\"serve\"]"), "config: {text}");
+    }
+
+    #[test]
+    fn test_install_mcp_codex_preserves_existing() {
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join(".codex/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let prior = "[projects.\"/foo/bar\"]\ntrust_level = \"trusted\"\n";
+        std::fs::write(&config, prior).unwrap();
+
+        install_mcp_codex(dir.path());
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(text.contains("[projects.\"/foo/bar\"]"), "lost prior section: {text}");
+        assert!(text.contains("[mcp_servers.kodex]"), "missing kodex section: {text}");
+    }
+
+    #[test]
+    fn test_install_mcp_codex_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let _first = install_mcp_codex(dir.path());
+        let second = install_mcp_codex(dir.path());
+        assert!(
+            second.contains("already registered"),
+            "second install should be a no-op: {second}"
+        );
+    }
+
+    #[test]
+    fn test_uninstall_mcp_codex_removes_section_only() {
+        let dir = TempDir::new().unwrap();
+        let config = dir.path().join(".codex/config.toml");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let prior = "[projects.\"/foo/bar\"]\ntrust_level = \"trusted\"\n";
+        std::fs::write(&config, prior).unwrap();
+
+        install_mcp_codex(dir.path());
+        let report = uninstall_mcp_codex(dir.path());
+        assert!(report.contains("removed"), "report: {report}");
+
+        let text = std::fs::read_to_string(&config).unwrap();
+        assert!(!text.contains("[mcp_servers.kodex]"), "kodex left behind: {text}");
+        assert!(text.contains("[projects.\"/foo/bar\"]"), "lost prior section: {text}");
+    }
+
+    #[test]
+    fn test_uninstall_mcp_codex_not_registered() {
+        let dir = TempDir::new().unwrap();
+        let report = uninstall_mcp_codex(dir.path());
+        assert!(report.contains("not registered"), "report: {report}");
     }
 }
